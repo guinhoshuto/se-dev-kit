@@ -1,0 +1,110 @@
+{
+  "cardTitle": {
+    "type": "text",
+    "label": "Card title",
+    "group": "Content",
+    "value": "Studio Chat"
+  },
+  "footerLabel": {
+    "type": "text",
+    "label": "Footer label",
+    "group": "Content",
+    "value": "Synthetic preview data"
+  },
+  "welcomeText": {
+    "type": "text",
+    "label": "Welcome message",
+    "group": "Content",
+    "value": "Preview connected. Send a synthetic event to begin."
+  },
+  "accentColor": {
+    "type": "colorpicker",
+    "label": "Accent color",
+    "group": "Colors",
+    "value": "#72f1b8"
+  },
+  "panelColor": {
+    "type": "colorpicker",
+    "label": "Panel color",
+    "group": "Colors",
+    "value": "#0d1222"
+  },
+  "panelOpacity": {
+    "type": "slider",
+    "label": "Panel opacity",
+    "group": "Colors",
+    "value": 94,
+    "min": 40,
+    "max": 100,
+    "step": 1
+  },
+  "textColor": {
+    "type": "colorpicker",
+    "label": "Text color",
+    "group": "Colors",
+    "value": "#f6f8ff"
+  },
+  "mutedColor": {
+    "type": "colorpicker",
+    "label": "Muted text color",
+    "group": "Colors",
+    "value": "#9ba7bf"
+  },
+  "viewerBubbleColor": {
+    "type": "colorpicker",
+    "label": "Viewer bubble color",
+    "group": "Colors",
+    "value": "#273044"
+  },
+  "creatorBubbleColor": {
+    "type": "colorpicker",
+    "label": "Creator bubble color",
+    "group": "Colors",
+    "value": "#7357ff"
+  },
+  "bubbleStyle": {
+    "type": "dropdown",
+    "label": "Bubble style",
+    "group": "Layout",
+    "value": "tail",
+    "options": {
+      "tail": "Chat tail",
+      "soft": "Soft pill",
+      "square": "Compact square"
+    }
+  },
+  "density": {
+    "type": "dropdown",
+    "label": "Message density",
+    "group": "Layout",
+    "value": "comfortable",
+    "options": {
+      "comfortable": "Comfortable",
+      "compact": "Compact"
+    }
+  },
+  "fontSize": {
+    "type": "slider",
+    "label": "Message font size",
+    "group": "Layout",
+    "value": 15,
+    "min": 11,
+    "max": 24,
+    "step": 1
+  },
+  "showTimestamps": {
+    "type": "checkbox",
+    "label": "Show timestamps",
+    "group": "Layout",
+    "value": true
+  },
+  "maxMessages": {
+    "type": "number",
+    "label": "Maximum messages",
+    "group": "Behavior",
+    "value": 7,
+    "min": 1,
+    "max": 20,
+    "step": 1
+  }
+}

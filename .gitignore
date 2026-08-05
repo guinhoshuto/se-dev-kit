@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.DS_Store
+.se-widget-studio/
+studio-output/
+test-results/
+playwright-report/
+*.log

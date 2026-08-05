@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "widget-lifecycle",
+  "name": "Widget lifecycle",
+  "description": "Checks load, field updates, and a synthetic chat event.",
+  "theme": "midnight",
+  "fixture": "launch-chat",
+  "scene": "hero",
+  "steps": [
+    {
+      "action": "assert",
+      "selector": "#chat-widget[data-loaded=\"true\"]",
+      "exists": true,
+      "visible": true
+    },
+    {
+      "action": "updateFields",
+      "fieldData": {
+        "cardTitle": "Updated in Studio",
+        "density": "compact"
+      }
+    },
+    {
+      "action": "assert",
+      "selector": "#chat-widget",
+      "attribute": {
+        "name": "data-density",
+        "value": "compact"
+      }
+    },
+    {
+      "action": "dispatch",
+      "listener": "message",
+      "event": {
+        "data": {
+          "messageId": "scenario-message",
+          "displayName": "Scenario Bot",
+          "role": "moderator",
+          "timestamp": "test",
+          "text": "Scenario message arrived."
+        }
+      }
+    },
+    {
+      "action": "wait",
+      "ms": 450
+    },
+    {
+      "action": "assert",
+      "selector": "[data-message-id=\"scenario-message\"] .message-bubble",
+      "exists": true,
+      "visible": true,
+      "text": "Scenario message arrived."
+    }
+  ]
+}

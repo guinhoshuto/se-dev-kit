@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "etsy-listing-video",
+  "name": "Etsy listing video",
+  "description": "A five-second silent 2:1 listing video using the dated Etsy marketplace preset.",
+  "marketplacePreset": "etsy-listing-2026-08",
+  "scenes": [
+    "etsy-video-wide"
+  ],
+  "outputs": {
+    "screenshots": false,
+    "video": {
+      "enabled": true,
+      "durationMs": 5000,
+      "fps": 30,
+      "format": "mp4",
+      "codec": "h264",
+      "pixelFormat": "yuv420p",
+      "audio": "none"
+    }
+  },
+  "limit": 2
+}

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+    <meta name="color-scheme" content="dark">
+    <title>SE Widget Studio</title>
+    <link rel="stylesheet" href="/__sws/ui/styles.css">
+  </head>
+  <body>
+    <div class="app-shell" id="app-shell" aria-busy="true">
+      <aside class="sidebar" aria-label="Project navigation">
+        <header class="brand-block">
+          <div class="brand-mark" aria-hidden="true"><span></span></div>
+          <div>
+            <strong>SE Widget Studio</strong>
+            <span id="studio-version">Loading project…</span>
+          </div>
+        </header>
+
+        <nav class="route-switcher" aria-label="Workspace view">
+          <a class="route-link" data-route="studio" href="/">Studio</a>
+          <a class="route-link" data-route="gallery" href="/gallery">Gallery</a>
+        </nav>
+
+        <div class="project-heading">
+          <span class="eyebrow">Project</span>
+          <strong id="widget-name">Resolving widget</strong>
+          <span class="project-path" id="widget-files">HTML · CSS · JavaScript</span>
+        </div>
+
+        <nav class="catalog-nav" aria-label="Widget resources">
+          <button class="catalog-tab is-active" type="button" data-catalog="scenes">
+            <span>Scenes</span><span class="catalog-count" data-count="scenes">0</span>
+          </button>
+          <button class="catalog-tab" type="button" data-catalog="themes">
+            <span>Themes</span><span class="catalog-count" data-count="themes">0</span>
+          </button>
+          <button class="catalog-tab" type="button" data-catalog="fixtures">
+            <span>Fixtures</span><span class="catalog-count" data-count="fixtures">0</span>
+          </button>
+          <button class="catalog-tab" type="button" data-catalog="scenarios">
+            <span>Scenarios</span><span class="catalog-count" data-count="scenarios">0</span>
+          </button>
+        </nav>
+
+        <section class="catalog-panel" aria-labelledby="catalog-title">
+          <div class="catalog-panel-heading">
+            <span class="eyebrow" id="catalog-title">Scenes</span>
+            <button class="quiet-button" id="catalog-action" type="button" hidden>Run</button>
+          </div>
+          <div class="catalog-list" id="catalog-list"></div>
+        </section>
+
+        <footer class="sidebar-footer">
+          <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
+          <span id="connection-label">Connecting to local runtime</span>
+        </footer>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-toolbar">
+          <div class="workspace-title">
+            <span class="eyebrow" id="workspace-kicker">Interactive preview</span>
+            <div>
+              <h1 id="workspace-title">Widget stage</h1>
+              <span class="status-line"><span class="status-dot" id="frame-status-dot"></span><span id="frame-status">Waiting for project</span></span>
+            </div>
+          </div>
+
+          <div class="stage-controls" aria-label="Stage controls">
+            <label class="compact-field viewport-control">
+              <span>Viewport</span>
+              <span class="dimension-inputs">
+                <input id="viewport-width" type="number" min="1" max="16384" step="1" inputmode="numeric" aria-label="Viewport width">
+                <span aria-hidden="true">×</span>
+                <input id="viewport-height" type="number" min="1" max="16384" step="1" inputmode="numeric" aria-label="Viewport height">
+              </span>
+            </label>
+            <label class="compact-field">
+              <span>Background</span>
+              <select id="background-mode" aria-label="Stage background">
+                <option value="checker">Checkerboard</option>
+                <option value="charcoal">Charcoal</option>
+                <option value="white">White</option>
+                <option value="transparent">Transparent</option>
+                <option value="image">Scene image</option>
+                <option value="custom">Custom color</option>
+              </select>
+            </label>
+            <label class="color-chip" id="background-color-wrap" hidden>
+              <span class="sr-only">Custom background color</span>
+              <input id="background-color" type="color" value="#16202a">
+            </label>
+            <label class="compact-field zoom-control">
+              <span>Zoom <output id="zoom-output">100%</output></span>
+              <input id="zoom" type="range" min="5" max="2000" step="5" value="100">
+            </label>
+            <button class="toolbar-button" id="reload-frame" type="button">Reload</button>
+          </div>
+
+          <a class="toolbar-button gallery-studio-link" href="/">Open Studio</a>
+        </header>
+
+        <section class="stage-view" id="stage-view" aria-label="Interactive widget preview">
+          <div class="stage-canvas" id="stage-canvas" data-background="checker">
+            <div class="canvas-metadata">
+              <span id="canvas-size">430 × 640</span>
+              <span id="canvas-background">Checkerboard</span>
+            </div>
+            <div class="stage-frame-shell" id="stage-frame-shell">
+              <iframe
+                id="widget-frame"
+                title="Widget preview"
+                sandbox="allow-scripts allow-same-origin"
+                referrerpolicy="no-referrer"
+              ></iframe>
+              <div class="frame-loading" id="frame-loading" aria-live="polite">
+                <span class="loading-line"></span>
+                <span>Starting isolated runtime</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="gallery-view" id="gallery-view" aria-labelledby="gallery-title" hidden>
+          <div class="gallery-heading">
+            <div>
+              <span class="eyebrow">Production files · isolated frames</span>
+              <h2 id="gallery-title">Preview gallery</h2>
+            </div>
+            <p id="gallery-summary">Preparing variants…</p>
+          </div>
+          <div class="gallery-grid" id="gallery-grid"></div>
+        </section>
+      </main>
+
+      <aside class="inspector-column" aria-label="Widget inspector">
+        <section class="inspector">
+          <header class="panel-heading">
+            <div>
+              <span class="eyebrow">Inspector</span>
+              <h2>Widget fields</h2>
+            </div>
+            <button class="quiet-button" id="reset-fields" type="button">Reset</button>
+          </header>
+          <p class="panel-note" id="inspector-note">Controls are generated from the production FIELDS schema.</p>
+          <form class="field-form" id="field-form"></form>
+        </section>
+
+        <section class="event-panel" aria-labelledby="event-log-title">
+          <header class="event-heading">
+            <div>
+              <span class="eyebrow">Runtime</span>
+              <h2 id="event-log-title">Event log</h2>
+            </div>
+            <button class="quiet-button" id="clear-log" type="button">Clear</button>
+          </header>
+          <div class="event-log" id="event-log" role="log" aria-live="polite" aria-relevant="additions"></div>
+        </section>
+      </aside>
+    </div>
+
+    <div class="fatal-overlay" id="fatal-overlay" role="alert" hidden>
+      <div class="fatal-dialog">
+        <span class="eyebrow">Studio could not start</span>
+        <h2>Project data is unavailable</h2>
+        <p id="fatal-message">The local project endpoint did not respond.</p>
+        <button class="primary-button" id="retry-project" type="button">Try again</button>
+      </div>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <script type="module" src="/__sws/ui/app.js"></script>
+  </body>
+</html>

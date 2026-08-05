@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run validate:example
+      - run: node dist/cli/index.js doctor --json
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Use the runner's preinstalled Chrome
+        run: node dist/cli/index.js test examples/basic-chat --browser-path /usr/bin/google-chrome --json
+      - name: Validate deterministic capture outputs
+        env:
+          SE_WIDGET_STUDIO_BROWSER: /usr/bin/google-chrome
+        run: node --test tests/integration/capture.test.mjs

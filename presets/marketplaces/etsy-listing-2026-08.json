@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "id": "etsy-listing-2026-08",
+  "marketplace": "Etsy",
+  "verifiedAt": "2026-08-05",
+  "sources": [
+    {
+      "url": "https://help.etsy.com/hc/en-us/articles/115015663347-Requirements-and-Best-Practices-for-Images-in-Your-Etsy-Shop",
+      "scope": "Supported image formats, transparency behavior, listing image resolution, orientation, and thumbnail guidance"
+    },
+    {
+      "url": "https://help.etsy.com/hc/en-us/articles/360053206073-How-to-Add-Listing-Videos",
+      "scope": "Listing video formats, duration, size, resolution, aspect ratio, and audio behavior"
+    },
+    {
+      "url": "https://help.etsy.com/hc/en-us/articles/115015628707-How-to-Create-a-Listing?segment=selling",
+      "scope": "Current listing photo and video count guidance"
+    }
+  ],
+  "constraints": {
+    "images": {
+      "supportedFormats": ["jpg", "gif", "png", "svg", "heic"],
+      "transparencySupported": false,
+      "transparentPixelsAppearAs": "black",
+      "recommendedMinimumWidthPx": 2000,
+      "recommendedMinimumHeightPx": 2000,
+      "firstImageMinimumWidthPx": 635,
+      "firstImageMinimumHeightPx": 635,
+      "preferredPrimaryOrientation": ["landscape", "square"],
+      "maximumListingImages": 20,
+      "colorProfile": "sRGB"
+    },
+    "video": {
+      "supportedFormats": ["mp4", "mov", "flv", "aac", "avi", "3gp", "mpeg"],
+      "minimumDurationSeconds": 5,
+      "maximumDurationSeconds": 15,
+      "durationSourceConflict": "The dedicated video guide says 3–15 seconds; the listing guide says 5–15 seconds. This preset uses the safer 5–15 second intersection.",
+      "maximumFileSizeLabel": "100 MB",
+      "maximumBytesInterpretation": 100000000,
+      "maximumListingVideos": 2,
+      "minimumResolutionPx": 500,
+      "idealResolutionPx": 1080,
+      "acceptedAspectRatios": ["2:1", "1:2"],
+      "audioAfterUpload": "removed"
+    }
+  },
+  "validation": {
+    "images": {
+      "maximumCount": 20,
+      "formats": ["jpg", "png"],
+      "minimumWidth": 2000,
+      "minimumHeight": 2000,
+      "requireOpaque": true
+    },
+    "video": {
+      "maximumCount": 2,
+      "formats": ["mp4"],
+      "minimumDurationMs": 5000,
+      "maximumDurationMs": 15000,
+      "minimumWidth": 500,
+      "minimumHeight": 500,
+      "aspectRatios": ["2:1", "1:2"],
+      "audio": "none",
+      "maximumBytes": 100000000
+    }
+  },
+  "recipeDefaults": {
+    "image": {
+      "width": 2000,
+      "height": 2000,
+      "format": "png",
+      "opaqueBackgroundRequired": true
+    },
+    "video": {
+      "width": 2160,
+      "height": 1080,
+      "durationMs": 5000,
+      "fps": 30,
+      "format": "mp4",
+      "codec": "h264",
+      "pixelFormat": "yuv420p",
+      "audio": "none"
+    }
+  }
+}

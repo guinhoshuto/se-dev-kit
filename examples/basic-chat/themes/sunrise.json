@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "sunrise",
+  "name": "Sunrise Pop",
+  "description": "A warm editorial theme with coral and gold accents.",
+  "fieldData": {
+    "cardTitle": "Morning Makers",
+    "accentColor": "#ffd166",
+    "panelColor": "#2a1633",
+    "panelOpacity": 96,
+    "textColor": "#fff8f1",
+    "mutedColor": "#d7b8c9",
+    "viewerBubbleColor": "#4a294d",
+    "creatorBubbleColor": "#ef476f",
+    "bubbleStyle": "soft",
+    "density": "compact"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "launch-chat",
+  "name": "Launch chat",
+  "description": "Synthetic community messages for deterministic demos and captures.",
+  "channel": {
+    "username": "studio_channel"
+  },
+  "recents": {},
+  "fieldData": {
+    "footerLabel": "Local fixture · no live data"
+  },
+  "events": [
+    {
+      "atMs": 180,
+      "listener": "message",
+      "event": {
+        "data": {
+          "messageId": "launch-1",
+          "displayName": "Mira",
+          "role": "subscriber",
+          "timestamp": "10:02",
+          "text": "The new overlay looks incredibly crisp!"
+        }
+      }
+    },
+    {
+      "atMs": 620,
+      "listener": "message",
+      "event": {
+        "data": {
+          "messageId": "launch-2",
+          "displayName": "Studio Channel",
+          "role": "creator",
+          "timestamp": "10:03",
+          "text": "Thank you! Everything here is powered by local fixtures."
+        }
+      }
+    },
+    {
+      "atMs": 1080,
+      "listener": "message",
+      "event": {
+        "data": {
+          "messageId": "launch-3",
+          "displayName": "Nico",
+          "role": "moderator",
+          "timestamp": "10:03",
+          "text": "Themes, scenarios, screenshots—ready to ship. ✦"
+        }
+      }
+    }
+  ]
+}

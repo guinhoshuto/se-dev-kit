@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "hero",
+  "name": "Hero conversation",
+  "description": "A centered product shot after the complete synthetic conversation appears.",
+  "theme": "midnight",
+  "fixture": "launch-chat",
+  "fieldData": {
+    "welcomeText": "Preview connected. Synthetic events are ready."
+  },
+  "background": {
+    "id": "navy-stage",
+    "label": "Navy stage",
+    "color": "#10172b"
+  },
+  "viewport": {
+    "width": 430,
+    "height": 640,
+    "deviceScaleFactor": 1
+  },
+  "output": {
+    "width": 1200,
+    "height": 1200,
+    "format": "png"
+  },
+  "camera": {
+    "id": "hero-camera",
+    "label": "Centered close-up",
+    "scale": 1.55,
+    "x": 0,
+    "y": 0,
+    "origin": "center center"
+  },
+  "captureAtMs": 1600
+}

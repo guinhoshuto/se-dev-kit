@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "listing-media",
+  "name": "Listing media",
+  "description": "Screenshots, thumbnails, a contact sheet, and short silent videos across both themes.",
+  "scenes": [
+    "hero"
+  ],
+  "matrix": {
+    "themes": [
+      "midnight",
+      "sunrise"
+    ],
+    "backgrounds": [
+      {
+        "id": "navy-stage",
+        "label": "Navy stage",
+        "color": "#10172b"
+      },
+      {
+        "id": "warm-stage",
+        "label": "Warm stage",
+        "color": "#3b1f37"
+      }
+    ],
+    "viewports": [
+      {
+        "id": "portrait-widget",
+        "label": "Portrait widget",
+        "width": 430,
+        "height": 640,
+        "deviceScaleFactor": 1
+      }
+    ],
+    "cameras": [
+      {
+        "id": "listing-close-up",
+        "label": "Listing close-up",
+        "scale": 1.55,
+        "x": 0,
+        "y": 0,
+        "origin": "center center"
+      }
+    ]
+  },
+  "outputs": {
+    "screenshots": true,
+    "thumbnails": {
+      "width": 600,
+      "height": 600,
+      "fit": "cover",
+      "format": "jpeg"
+    },
+    "contactSheet": true,
+    "video": {
+      "enabled": true,
+      "durationMs": 2400,
+      "fps": 15,
+      "format": "mp4",
+      "codec": "h264",
+      "pixelFormat": "yuv420p",
+      "audio": "none"
+    }
+  },
+  "limit": 8
+}

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "etsy-video-wide",
+  "name": "Etsy wide listing video",
+  "description": "A silent 2:1 product video canvas aligned with the bundled dated Etsy preset.",
+  "theme": "sunrise",
+  "fixture": "launch-chat",
+  "fieldData": {
+    "welcomeText": "Preview connected. Synthetic events are ready."
+  },
+  "background": {
+    "id": "etsy-plum",
+    "label": "Etsy plum",
+    "color": "#3b1f37"
+  },
+  "viewport": {
+    "width": 430,
+    "height": 640,
+    "deviceScaleFactor": 1
+  },
+  "output": {
+    "width": 2160,
+    "height": 1080,
+    "format": "png"
+  },
+  "camera": {
+    "id": "etsy-wide-camera",
+    "label": "Wide product view",
+    "scale": 1.45,
+    "x": 0,
+    "y": 0,
+    "origin": "center center"
+  },
+  "captureAtMs": 1600
+}

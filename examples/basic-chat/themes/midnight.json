@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "midnight",
+  "name": "Midnight Mint",
+  "description": "A dark glass theme with a fresh mint accent.",
+  "fieldData": {
+    "cardTitle": "Midnight Lounge",
+    "accentColor": "#72f1b8",
+    "panelColor": "#0b1020",
+    "panelOpacity": 96,
+    "textColor": "#f6f8ff",
+    "mutedColor": "#9ba7bf",
+    "viewerBubbleColor": "#273044",
+    "creatorBubbleColor": "#705cff",
+    "bubbleStyle": "tail",
+    "density": "comfortable"
+  }
+}
