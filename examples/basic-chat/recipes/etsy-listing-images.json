@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "etsy-listing-images",
+  "name": "Etsy listing images",
+  "description": "Opaque square product images and thumbnails using the dated Etsy marketplace preset.",
+  "marketplacePreset": "etsy-listing-2026-08",
+  "scenes": [
+    "etsy-image-square"
+  ],
+  "matrix": {
+    "themes": [
+      "midnight",
+      "sunrise"
+    ]
+  },
+  "outputs": {
+    "screenshots": true,
+    "thumbnails": {
+      "width": 635,
+      "height": 635,
+      "fit": "cover",
+      "format": "jpeg"
+    },
+    "contactSheet": true
+  },
+  "limit": 8
+}

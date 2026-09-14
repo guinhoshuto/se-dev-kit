@@ -1,0 +1,56 @@
+{
+  "name": "se-widget-studio",
+  "version": "0.2.0",
+  "description": "A personal web studio for StreamElements widgets, themes, and media.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "packageManager": "npm@10.9.3",
+  "engines": {
+    "node": ">=22.20 <23 || >=24 <25"
+  },
+  "bin": {
+    "se-widget-studio": "dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "examples",
+    "presets",
+    "skills",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "npm run build:engine && next dev --webpack --hostname 127.0.0.1",
+    "build": "npm run build:engine && next build --webpack",
+    "build:engine": "tsc -p tsconfig.engine.json && node scripts/copy-assets.mjs",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.engine.json --noEmit",
+    "test": "npm run build:engine && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs && tsx --test tests/web/*.test.ts",
+    "test:unit": "npm run build && node --test tests/unit/*.test.mjs",
+    "studio": "npm run dev",
+    "validate:example": "npm run build:engine && node dist/cli/index.js validate examples/basic-chat",
+    "smoke:example": "npm run build:engine && node dist/cli/index.js test examples/basic-chat",
+    "test:web": "tsx --test tests/web/*.test.ts"
+  },
+  "dependencies": {
+    "chokidar": "4.0.3",
+    "commander": "14.0.0",
+    "fast-glob": "3.3.3",
+    "playwright-core": "1.54.2",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3"
+  }
+}

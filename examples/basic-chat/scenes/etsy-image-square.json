@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "etsy-image-square",
+  "name": "Etsy square listing image",
+  "description": "An opaque 2000 px square product image aligned with the bundled dated Etsy preset.",
+  "theme": "midnight",
+  "fixture": "launch-chat",
+  "fieldData": {
+    "welcomeText": "Preview connected. Synthetic events are ready."
+  },
+  "background": {
+    "id": "etsy-navy",
+    "label": "Etsy navy",
+    "color": "#10172b"
+  },
+  "viewport": {
+    "width": 430,
+    "height": 640,
+    "deviceScaleFactor": 1
+  },
+  "output": {
+    "width": 2000,
+    "height": 2000,
+    "format": "png"
+  },
+  "camera": {
+    "id": "etsy-square-camera",
+    "label": "Square product view",
+    "scale": 2.45,
+    "x": 0,
+    "y": 0,
+    "origin": "center center"
+  },
+  "captureAtMs": 1600
+}
