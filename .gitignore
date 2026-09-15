@@ -16,3 +16,4 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 public/engine/
 .worker/
+/.swc

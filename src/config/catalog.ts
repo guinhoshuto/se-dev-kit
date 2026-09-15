@@ -13,7 +13,8 @@ import type {
 } from "../types.js";
 import {StudioError} from "../shared/errors.js";
 import {assertSafeId, slugify} from "../shared/ids.js";
-import {isJsonObject, readJsonFile} from "../shared/json.js";
+import {isJsonObject} from "../shared/json.js";
+import {readJsonFile} from "../shared/json-file.js";
 import {isInside, resolveExistingPath} from "../shared/paths.js";
 import {fixtureSchema, recipeSchema, scenarioSchema, sceneSchema, themeSchema} from "./schemas.js";
 

@@ -26,7 +26,7 @@ function normalizedKey(value: string): string {
   return value.replaceAll(/[^a-z\d]/gi, "").toLowerCase();
 }
 
-function inspectSensitive(value: JsonValue, location: string, findings: string[]): void {
+export function inspectSensitive(value: JsonValue, location: string, findings: string[]): void {
   if (Array.isArray(value)) {
     value.forEach((item, index) => inspectSensitive(item, `${location}[${index}]`, findings));
     return;

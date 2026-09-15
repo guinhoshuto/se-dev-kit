@@ -15,3 +15,13 @@ This repository contains SE Widget Studio Web and its shared StreamElements simu
 - Store immutable revisions; full API replacement must use optimistic concurrency. Keep write capabilities out of iframe data, URLs sent to servers, and logs.
 - Use local storage only outside Vercel. Vercel deployments must fail clearly if Blob or Sandbox configuration is missing; never silently fall back to ephemeral disk.
 - Report local simulation separately from real StreamElements/OBS validation.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

@@ -20,9 +20,13 @@ function normalizedReference(reference: string, htmlDirectory: string): string {
 }
 
 function stripConfiguredScript(html: string, htmlDirectory: string, scriptPath: string): string {
-  return html.replace(/<script\b([^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*)>\s*<\/script\s*>/gi, (tag, _attrs, src) =>
-    normalizedReference(String(src), htmlDirectory) === scriptPath ? "" : String(tag)
-  );
+  return html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi, (tag: string, attrs: string, body: string) => {
+    const type = /\btype\s*=\s*["']([^"']+)["']/i.exec(attrs)?.[1]?.toLowerCase();
+    if (type && !["text/javascript", "application/javascript"].includes(type)) return tag;
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(attrs)?.[1];
+    if (src && normalizedReference(src, htmlDirectory) === scriptPath) return "";
+    return `<script type="application/x-sws-classic"${src ? ` data-sws-src="${escapeAttribute(src)}"` : ""}>${body}</script>`;
+  });
 }
 
 function hasConfiguredStylesheet(html: string, htmlDirectory: string, cssPath: string): boolean {

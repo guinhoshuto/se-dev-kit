@@ -19,6 +19,7 @@ interface FrameRuntimeOptions {
   adapterUrl?: string;
   readySelector?: string;
   timeoutMs: number;
+  assetMap?: Record<string, string>;
 }
 
 interface BridgeEnvelope {
@@ -138,7 +139,8 @@ async function waitForLoadedAssets(): Promise<void> {
     await Promise.all(
       Array.from(document.images).map(async (image) => {
         if (image.complete) {
-          if (typeof image.decode === "function") await image.decode().catch(() => undefined);
+          if (image.src && image.naturalWidth === 0) throw new Error("Image failed to decode.");
+          if (image.src && typeof image.decode === "function") await image.decode();
           return;
         }
         await new Promise<void>((resolve, reject) => {
@@ -151,13 +153,27 @@ async function waitForLoadedAssets(): Promise<void> {
     );
     await Promise.all(
       Array.from(document.querySelectorAll("video")).map(async (video) => {
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || !video.currentSrc) return;
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || (!video.currentSrc && !video.src && !video.querySelector("source"))) return;
         await new Promise<void>((resolve, reject) => {
           video.addEventListener("loadeddata", () => resolve(), {once: true});
           video.addEventListener("error", () => reject(new Error(`Video failed to load: ${video.currentSrc}`)), {once: true});
         });
       })
     );
+    const backgrounds = new Set<string>();
+    for (const element of Array.from(document.querySelectorAll("*"))) {
+      for (const pseudo of [null, "::before", "::after"]) {
+        const value = getComputedStyle(element, pseudo).backgroundImage;
+        for (const match of value.matchAll(/url\(["']?([^"')]+)["']?\)/g)) if (match[1]) backgrounds.add(match[1]);
+      }
+    }
+    await Promise.all(Array.from(backgrounds, (url) => new Promise<void>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("CSS background image failed to load."));
+      image.src = url;
+    })));
+    if (document.fonts) for (const face of document.fonts) if (face.status === "error") throw new Error("A font failed to load.");
   })();
 }
 
@@ -208,10 +224,25 @@ function loadClassicScript(source: string): Promise<void> {
   });
 }
 
+function withTimeout<T>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer = 0;
+  return Promise.race([task, new Promise<never>((_resolve, reject) => { timer = window.setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms.`)), timeoutMs); })]).finally(() => window.clearTimeout(timer));
+}
+
 export function installFrameRuntime(options: FrameRuntimeOptions): void {
   let runtimeState: RuntimeState | null = null;
   let adapter: BrowserAdapter = {};
   let initialized = false;
+  const mapAssets = <T>(value: T): T => {
+    if (!options.assetMap) return value;
+    const rewrite = (input: unknown): unknown => {
+      if (typeof input === "string") return options.assetMap?.[input] ?? input;
+      if (Array.isArray(input)) return input.map(rewrite);
+      if (input && typeof input === "object") return Object.fromEntries(Object.entries(input).map(([key, nested]) => [key, rewrite(nested)]));
+      return input;
+    };
+    return rewrite(value) as T;
+  };
   const nativeConsole = {
     log: console.log.bind(console),
     info: console.info.bind(console),
@@ -245,7 +276,7 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
   });
 
   const emit = async (listener: string, event: JsonValue, requestId?: string) => {
-    const transformed = adapter.beforeDispatch ? await adapter.beforeDispatch({listener, event}) : event;
+    const transformed = mapAssets(adapter.beforeDispatch ? await adapter.beforeDispatch({listener, event}) : event);
     window.dispatchEvent(
       new CustomEvent("onEventReceived", {
         detail: {listener, event: structuredClone(transformed)}
@@ -265,7 +296,7 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
     if (initialized) throw new Error("Widget frame is already initialized. Reload it for a clean state.");
     initialized = true;
     Math.random = seededRandom(state.seed);
-    runtimeState = structuredClone(state);
+    runtimeState = mapAssets(structuredClone(state));
     if (options.adapterUrl) {
       const imported = (await import(options.adapterUrl)) as {default?: BrowserAdapter};
       adapter = imported.default ?? {};
@@ -273,7 +304,16 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
     if (adapter.beforeLoad) runtimeState = await adapter.beforeLoad(runtimeState);
     if (!clockManaged) installFixedDate(runtimeState.fixedTime);
     await waitForDocument();
-    await loadClassicScript(options.widgetScriptUrl);
+    for (const script of Array.from(document.querySelectorAll<HTMLScriptElement>('script[type="application/x-sws-classic"]'))) {
+      if (script.dataset.swsSrc) await withTimeout(loadClassicScript(script.dataset.swsSrc), options.timeoutMs, "Dependency script");
+      else {
+        const executable = document.createElement("script");
+        executable.nonce = options.nonce;
+        executable.textContent = script.textContent;
+        document.body.append(executable);
+      }
+    }
+    await withTimeout(loadClassicScript(options.widgetScriptUrl), options.timeoutMs, "Widget script");
     window.dispatchEvent(
       new CustomEvent("onWidgetLoad", {
         detail: {
@@ -285,7 +325,7 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
     );
     send("frame:widget-load-dispatched");
     if (adapter.afterLoad) await adapter.afterLoad({state: runtimeState});
-    await waitForLoadedAssets();
+    await withTimeout(waitForLoadedAssets(), options.timeoutMs, "Asset readiness");
     send("frame:assets-ready");
     if (options.readySelector) await waitForSelector(options.readySelector, options.timeoutMs);
     send("frame:widget-ready");
@@ -312,7 +352,7 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
           case "host:update-fields": {
             if (!runtimeState) throw new Error("Widget frame is not initialized.");
             const payload = envelope.payload as {fieldData: JsonObject; requestId?: string};
-            runtimeState.fieldData = {...runtimeState.fieldData, ...structuredClone(payload.fieldData)};
+            runtimeState.fieldData = {...runtimeState.fieldData, ...mapAssets(structuredClone(payload.fieldData))};
             window.dispatchEvent(
               new CustomEvent("onWidgetUpdate", {detail: {fieldData: structuredClone(runtimeState.fieldData)}})
             );

@@ -4,7 +4,7 @@ import {dirname, relative, resolve, sep} from "node:path";
 import {pathToFileURL} from "node:url";
 import type {ResolvedProject, ResolvedWidgetFiles, StudioConfig, WidgetFilesConfig} from "../types.js";
 import {StudioError, toErrorMessage} from "../shared/errors.js";
-import {readJsonFile} from "../shared/json.js";
+import {readJsonFile} from "../shared/json-file.js";
 import {assertSafeOutputRoot, resolveExistingPath, resolveFileInside} from "../shared/paths.js";
 import {STUDIO_VERSION} from "../version.js";
 import {loadFixtures, loadRecipes, loadScenarios, loadScenes, loadThemes} from "./catalog.js";

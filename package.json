@@ -34,22 +34,33 @@
     "build:engine": "tsc -p tsconfig.engine.json && node scripts/copy-assets.mjs",
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.engine.json --noEmit",
-    "test": "npm run build:engine && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs && tsx --test tests/web/*.test.ts",
-    "test:unit": "npm run build && node --test tests/unit/*.test.mjs",
+    "test": "npm run build:engine && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs && node --import tsx --test tests/web/*.test.ts",
+    "test:unit": "npm run build:engine && node --test tests/unit/*.test.mjs",
     "studio": "npm run dev",
     "validate:example": "npm run build:engine && node dist/cli/index.js validate examples/basic-chat",
     "smoke:example": "npm run build:engine && node dist/cli/index.js test examples/basic-chat",
-    "test:web": "tsx --test tests/web/*.test.ts"
+    "test:web": "node --import tsx --test tests/web/*.test.ts"
   },
   "dependencies": {
+    "@vercel/blob": "2.8.0",
+    "@vercel/sandbox": "3.3.0",
     "chokidar": "4.0.3",
     "commander": "14.0.0",
+    "esbuild": "0.28.2",
     "fast-glob": "3.3.3",
+    "next": "16.3.5",
+    "parse5": "8.0.1",
     "playwright-core": "1.54.2",
+    "postcss": "8.5.28",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "workflow": "4.8.8",
     "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "22.15.30",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "tsx": "4.20.3",
     "typescript": "5.8.3"
   }
