@@ -1,7 +1,7 @@
 import {randomBytes} from 'node:crypto';
 import {getStore} from '@/lib/storage';
 import {expandUploads,getProjectAuthorized,getRevision} from '@/lib/projects';
-import {bearer,endpoint,json,readInput} from '@/lib/http';
+import {bearer,endpoint,json,readInput,requestOrigin} from '@/lib/http';
 import {parseSnapshot} from '@/lib/schema';
 import {prepareSnapshot} from '@/lib/importer';
 import {previewHtml,previewState,previewBackground} from '@/lib/preview';
@@ -24,7 +24,7 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
   const {id}=await params;const store=getStore();const {project}=await getProjectAuthorized(store,id,bearer(request));
   const input=z.object({snapshot:z.unknown().optional(),sceneId:z.string().optional(),themeId:z.string().optional(),fieldData:jsonObjectSchema.optional()}).strict().safeParse(await readInput(request));
   if(!input.success)throw new HttpError(422,'Invalid preview options.');
-  const options={origin:new URL(request.url).origin,sessionId:randomBytes(20).toString('hex'),nonce:randomBytes(24).toString('hex'),sceneId:input.data.sceneId,themeId:input.data.themeId,fieldData:input.data.fieldData as JsonObject|undefined};
+  const options={origin:requestOrigin(request),sessionId:randomBytes(20).toString('hex'),nonce:randomBytes(24).toString('hex'),sceneId:input.data.sceneId,themeId:input.data.themeId,fieldData:input.data.fieldData as JsonObject|undefined};
   try {
     const revision=await getRevision(store,id,project.revisionId);
     const supplied=input.data.snapshot?parseSnapshot(input.data.snapshot):undefined;
