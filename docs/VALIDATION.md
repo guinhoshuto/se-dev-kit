@@ -9,7 +9,7 @@ The workflow is: import synthetic widget source → authorized project API → i
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` | Passed |
-| `npm test` | Passed: 35 shared-engine tests and 36 web tests |
+| `npm test` | Passed: 35 shared-engine tests and 39 web tests |
 | `npm run build` | Passed: production Next.js app and Workflow routes |
 | `node scripts/verify-web.mjs` | Passed: preview, field save, events, three themes, authorization, stale-write conflict, restore, smoke job, media downloads, mobile layout |
 | `node --import tsx scripts/verify-field-precedence.mjs` | Passed: fixture beats theme; saved scene beats fixture; temporary override resets to scene |

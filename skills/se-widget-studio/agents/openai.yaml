@@ -1,0 +1,6 @@
+interface:
+  display_name: "SE Widget Studio"
+  short_description: "Upload, edit, test, and render SE widgets"
+  default_prompt: "Use $se-widget-studio to upload this widget, open its private editor, and generate the requested screenshots or video."
+policy:
+  allow_implicit_invocation: true
