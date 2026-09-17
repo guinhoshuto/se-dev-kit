@@ -187,7 +187,16 @@ export async function pollHostedJob(projectId: string, id: string): Promise<bool
   const {Sandbox} = await import('@vercel/sandbox');
   const sandbox = await Sandbox.get({name: job.sandboxId});
   const command = await sandbox.getCommand(job.commandId);
-  if (command.exitCode === null) return false;
+  // getCommand returns a detached-command handle whose initial exitCode remains null.
+  // wait() asks the provider for current completion and is bounded so each Workflow poll stays short.
+  const signal = AbortSignal.timeout(1000);
+  let finished;
+  try {finished = await command.wait({signal});}
+  catch (error) {if (signal.aborted) return false; throw error;}
+  if (finished.exitCode !== 0) {
+    const errors = await finished.stderr().catch(() => '');
+    throw new Error(`Worker exited with code ${finished.exitCode}. ${errors.slice(-1500)}`);
+  }
   const bytes = await sandbox.readFileToBuffer({path: `${REMOTE_ROOT}/job/result.json`});
   if (!bytes || bytes.length > 1024 * 1024) throw new Error('Worker did not produce a valid bounded result.');
   const result = JSON.parse(bytes.toString('utf8')) as WorkerResult;
