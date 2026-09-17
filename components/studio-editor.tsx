@@ -71,7 +71,8 @@ export function StudioEditor({projectId}: {projectId: string}) {
   const fields = useMemo(() => {try {return normalizeFields(texts ? JSON.parse(texts.FIELDS) as JsonValue : {}).fields;} catch {return []; }}, [texts]);
   const scene = draft?.scenes.find(item => item.id === sceneId);
   const theme = draft?.themes.find(item => item.id === (themeId || scene?.theme));
-  const values = useMemo(() => ({...Object.fromEntries(fields.map(field => [field.id, field.value])), ...theme?.fieldData, ...scene?.fieldData, ...fieldData}), [fields, theme, scene, fieldData]);
+  const fixture = draft?.fixtures.find(item => item.id === scene?.fixture);
+  const values = useMemo(() => ({...Object.fromEntries(fields.map(field => [field.id, field.value])), ...theme?.fieldData, ...fixture?.fieldData, ...scene?.fieldData, ...fieldData}), [fields, theme, fixture, scene, fieldData]);
 
   function buildDraft() {
     if (!draft || !texts) throw new Error('Project is not loaded.');

@@ -1,208 +1,106 @@
-# SE Widget Studio
+# SE Widget Studio Web
 
-SE Widget Studio is a standalone local workbench for developing, testing, and producing media from StreamElements Custom Widgets. It serves the widget's real production HTML, CSS, JavaScript, and FIELDS schema over loopback HTTP, then loads them inside an isolated iframe. It does not copy or rewrite consumer source files.
+A personal, code-accessible workbench for StreamElements Custom Widgets. Submit HTML, CSS, JavaScript, and the real FIELDS schema through the API or web import screen, then use a private editing link to preview themes, run synthetic tests, and generate visual assets.
 
-The Studio provides:
+The Next.js application lives at this repository's root. Consumer widgets remain plain HTML/CSS/JS/FIELDS; they do not need React, a bundler, or changes to their production files. The shared simulation and renderer also remain available as a [local CLI](docs/CLI.md).
 
-- Automatic detection of the two common StreamElements file layouts.
-- An interactive editor generated from the real FIELDS schema.
-- Themes, synthetic fixtures, declarative scenes, smoke scenarios, and capture recipes.
-- Essential `onWidgetLoad`, `onWidgetUpdate`, and `onEventReceived` simulation.
-- Deterministic Playwright screenshots, thumbnails, contact sheets, and PNG video frames.
-- Optional FFmpeg conversion and ffprobe validation when those tools are already installed.
-- Versioned marketplace presets, including an Etsy profile with official sources and a verification date.
-- Stable English CLI output and JSON output for humans, agents, and CI.
+## What it does
 
-## Requirements
+- Imports versioned snapshots without modifying the original files.
+- Runs widgets inside opaque-origin sandboxed iframes with runtime network access blocked.
+- Generates controls from FIELDS, with themes, fixtures, scenes, framing, and a theme gallery.
+- Saves immutable revisions and rejects stale full replacements instead of overwriting another editor's work.
+- Runs deterministic browser scenarios and recipes for screenshots, thumbnails, contact sheets, and short silent videos.
+- Uses the same shared engine for the web application, local CLI, and automated jobs.
 
-- Node.js `>=22.20 <23` or `>=24 <25` (supported LTS lines only).
-- npm, using the committed `package-lock.json`.
-- A locally installed Chromium-family browser for browser commands.
-- Optional FFmpeg and ffprobe for encoded video.
+There are no user accounts and no external database. In production, private Vercel Blob stores projects, revisions, uploads, and final artifacts; Workflows orchestrate jobs; short-lived Sandboxes run the browser/media worker. The editing link is a secret capability, not a public sharing link.
 
-The package depends on `playwright-core`. It never downloads Chromium, FFmpeg, codecs, or fonts. Use `doctor` to see what is already available:
+## Run locally
 
-```bash
-npm run build
-node dist/cli/index.js doctor examples/basic-chat --json
-```
+Requirements: Node.js `>=22.20 <23` or `>=24 <25`, npm `10.9.3`, and the committed lockfile. Browser jobs also require an already-installed Chrome/Chromium. Final video jobs require existing FFmpeg and ffprobe executables.
 
-If no browser is detected, install a system Chrome/Chromium yourself and pass `--browser-path /absolute/path` or set `SE_WIDGET_STUDIO_BROWSER`. Do not use an unpinned remote `npx ...@latest` command.
+From the repository root, after authorizing dependency installation:
 
-## Quick start
-
-From this repository:
-
-```bash
+```sh
 npm ci
+npm run dev
+```
+
+Open `http://127.0.0.1:3000` and choose **Open demo project**, or import a [WidgetSnapshot JSON document](docs/API.md#snapshot-format). No Vercel credentials are needed locally. The default storage directory is `.studio-data`; keep it private and backed up if the projects matter.
+
+Both `npm run dev` and `npm start` bind to `127.0.0.1`. To run the production build locally:
+
+```sh
 npm run build
-node dist/cli/index.js validate examples/basic-chat
-node dist/cli/index.js dev examples/basic-chat --port 4173
+npm start
 ```
 
-From a widget that installs this package as an exact dependency:
+The repository uses `playwright-core`. Normal startup, tests, and rendering never download Chromium, FFmpeg, codecs, or fonts. Install or select these tools deliberately; `SE_WIDGET_STUDIO_BROWSER`, `STUDIO_FFMPEG_PATH`, and `STUDIO_FFPROBE_PATH` can point to existing local executables.
 
-```bash
-npm exec -- se-widget-studio init .
-npm exec -- se-widget-studio validate .
-npm exec -- se-widget-studio dev .
-```
+## Environment modes
 
-This repository is currently a private package. For a reproducible consumer install, build a tarball from a reviewed commit and install that exact file:
+| Setting | Local development | Vercel deployment |
+| --- | --- | --- |
+| `STUDIO_STORAGE` | `local` (default outside Vercel) | `blob` |
+| `STUDIO_EXECUTION` | `local` (default outside Vercel) | `vercel` |
+| `STUDIO_DATA_DIR` | Optional; defaults to `.studio-data` | Not used as a fallback |
+| Blob credentials | Not required | Private Blob integration token, or configured store ID and Vercel OIDC identity |
+| `STUDIO_SANDBOX_SNAPSHOT_ID` | Not required | Required for jobs; trusted browser/media baseline |
+| `STUDIO_CREATE_KEY` | Optional creation gate | Optional creation gate; clients send `X-Studio-Key` |
 
-```bash
-# In se-widget-studio
-npm ci
-npm pack
+`.env.example` documents **local** values. Do not copy its `local` mode settings into Vercel. Hosted deployments reject local storage and local workers rather than silently using ephemeral disk. Configure production resources and variables, then redeploy; see [Vercel setup](docs/VERCEL.md). Installing a plugin or successfully building the app does not provision or validate those resources.
 
-# In the consumer widget
-npm install --save-exact /absolute/path/to/se-widget-studio-0.1.0.tgz
-```
+## API workflow
 
-The package `prepare` script builds `dist` for exact Git/local installs, and published tarballs include the CLI, library exports, presets, documentation, skill, and example. Record the repository commit and tarball SHA-256 in CI or release notes.
+1. `POST /api/v1/projects` with a complete versioned snapshot.
+2. Keep the returned capability secret; open `editorUrl` only in a trusted browser.
+3. Read with `Authorization: Bearer <capability>`.
+4. Replace the complete snapshot with `PUT` and the latest JSON response's `etag` as `If-Match`.
+5. Submit a test or render job, poll its status, and download authorized artifacts.
 
-`dev` binds the control and widget servers to `127.0.0.1` by default. It prints the URL instead of opening a browser unless `--open` is explicit.
+The [API reference](docs/API.md) includes runnable import examples, schemas, uploads, previews, history, limits, and error handling. A `201` response may contain a `blocked` revision: inspect its diagnostics before attempting a preview or job.
 
-## Supported widget layouts
+## Safety and scope
 
-The Studio detects exactly one complete layout:
+Editing capabilities travel in an initial URL fragment and authorized request headers, not query parameters. Keep them out of Git, screenshots, logs, prompts, and widget data. Anyone holding a capability can read and edit that project. There is currently no account recovery, capability rotation, or project deletion API.
 
-```text
-widget.html + widget.css + widget.js + widget.json
-index.html  + style.css  + script.js  + fields.json
-```
+Source is retained as submitted in immutable revisions. A separate derived snapshot captures supported dependencies for offline rendering; uploaded code is never evaluated as Node.js configuration. Public HTTPS dependencies may be fetched during preparation under address, size, and time limits. Runtime fetches, module imports, and dynamic resource discovery are not supported. Use synthetic identities/events only—never real StreamElements tokens, cookies, webhooks, private messages, or channel data.
 
-If both are present, configuration must select explicit files. An explicit `se-widget-studio.config.mjs` always takes precedence:
+FIELDS defaults, theme, fixture, scene, and explicit overrides are separate layers. Presentation settings such as viewport, background, crop, and visual zoom are not injected into `fieldData`. Marketplace rules remain in dated presets under `presets/marketplaces`, with source URLs; they are not baked into the renderer.
 
-```js
-import {defineConfig} from "se-widget-studio";
+This is a partial local simulation, not a guarantee of real StreamElements or OBS compatibility. Keep a final check in the actual target runtime. Hosted credentials, quotas, storage, and Sandbox execution also need separate hosted validation.
 
-export default defineConfig({
-  schemaVersion: 1,
-  widget: {
-    root: ".",
-    files: {
-      html: "widget.html",
-      css: "widget.css",
-      js: "widget.js",
-      fields: "widget.json"
-    },
-    assets: ["assets/**/*", "fonts/**/*", "media/**/*"],
-    viewport: {width: 430, height: 640, deviceScaleFactor: 1},
-    ready: {selector: "#chat", timeoutMs: 10_000},
-    adapter: "adapters/studio.mjs"
-  },
-  channel: {username: "streamer"},
-  themes: {glob: "themes/*.json"},
-  fixtures: {glob: "fixtures/*.json"},
-  scenarios: {glob: "scenarios/*.json"},
-  scenes: {glob: "scenes/*.json"},
-  recipes: {glob: "recipes/*.json"},
-  output: {root: ".se-widget-studio/output"}
-});
-```
+## Verify the repository
 
-All paths are resolved relative to `widget.root` and must remain inside it after `realpath` resolution. `assets` extends the startup allowlist for resources that cannot be discovered from production HTML, CSS, or JavaScript references.
-
-## CLI
-
-Run `se-widget-studio <command> --help` for the installed contract.
-
-| Command | Purpose |
-| --- | --- |
-| `init [root]` | Create configuration and Studio data directories without changing production files. |
-| `doctor [root]` | Detect Node, browser, output, FFmpeg, and ffprobe without installing anything. |
-| `list [root]` | List normalized fields and every configured catalog item. |
-| `presets` | List versioned marketplace presets and official sources. |
-| `validate [root]` | Validate files, schemas, references, safe paths, and synthetic-data rules. |
-| `dev [root]` | Start the interactive workbench (`studio` is an alias). |
-| `test [root]` | Run deterministic browser scenarios in fresh contexts. |
-| `capture [root]` | Capture one scene. |
-| `record [root]` | Record one scene as PNG frames and optionally encode video. |
-| `render [root] --recipe <id>` | Expand and render a recipe matrix. |
-
-Every command supports `--json` at the program level. Matrix rendering should begin with a dry run:
-
-```bash
-se-widget-studio render examples/basic-chat --recipe etsy-listing-images --dry-run --json
-se-widget-studio render examples/basic-chat --recipe etsy-listing-video --dry-run --json
-```
-
-Matrix cardinality is calculated with integer-safe arithmetic before variants are expanded. The default matrix limit is 48 variants; a larger matrix requires `--allow-large-matrix`.
-
-An independent render-workload guard counts video frames and every planned file before frame paths are created. The default limit is 10,000 planned files. A reviewed dry run or render can opt in with `--allow-large-render`; neither large-render flag can bypass the safe-integer boundary.
-
-## Runtime boundary
-
-The runtime deliberately simulates only the essential local contract:
-
-```js
-window.dispatchEvent(new CustomEvent("onWidgetLoad", {
-  detail: {fieldData, channel, recents}
-}));
-
-window.dispatchEvent(new CustomEvent("onWidgetUpdate", {
-  detail: {fieldData}
-}));
-
-window.dispatchEvent(new CustomEvent("onEventReceived", {
-  detail: {listener, event}
-}));
-```
-
-The partial `SE_API` implements the documented `store.get/set`, `counters.get`, and `getOverlayStatus` shapes. Local store writes emit a synthetic `kvstore:update`; isolated counters default to zero. Any other method rejects with `SWS_UNSUPPORTED_API` instead of returning a false success. Payloads in fixtures are opaque pass-through JSON; the Studio does not claim they are complete or official StreamElements payloads.
-
-See [Runtime and integration](docs/RUNTIME.md) for the iframe, bridge, adapter, and readiness contracts.
-
-## Data and precedence
-
-FIELDS defaults, themes, fixtures, scenes, and explicit overrides stay separate. `fieldData` is merged shallowly in this order:
-
-```text
-FIELDS defaults → theme → fixture → scene → explicit override
-```
-
-Stage background, widget viewport, final output, crop, camera transform, and device scale are not inserted into `fieldData`.
-
-Known editor types include text, number, slider, checkbox, dropdown, color/colorpicker, font/Google Font, image, video, and sound inputs. Hidden values remain in `fieldData`. Unknown field definitions remain available through the raw JSON editor.
-
-See [Configuration](docs/CONFIGURATION.md) for catalog schemas.
-
-StreamElements object-form dropdown options use option values as keys and human-readable labels as values, for example `{"compact": "Compact"}`.
-
-## Capture safety and video fallback
-
-The renderer calculates every target before writing. If any exact target exists, it aborts unless `--force` is present. With `--force`, it atomically replaces only those planned regular files. It never recursively clears an output directory, follows an output symlink, or removes unrelated files.
-
-Video starts as deterministic numbered PNG frames plus `frames.json`. When an existing FFmpeg executable is detected, those frames can be encoded. When FFmpeg is missing, the frame sequence remains a documented intermediate and the command exits with code `3` unless `--allow-intermediate` is explicit.
-
-See [Capture and media](docs/CAPTURE.md) for recipes, manifests, FFmpeg behavior, and marketplace profiles.
-
-The example includes separate Etsy image and video recipes because their canvases and output rules differ. Both recipes reference the dated `etsy-listing-2026-08` preset, so its official sources and verification date are copied into each render manifest.
-
-## Security and privacy
-
-- The control UI and widget frame use separate loopback origins.
-- The iframe bridge validates the origin, `event.source`, session id, and a 128-bit nonce.
-- Widget assets come from a precomputed allowlist; URL paths are never translated directly into filesystem paths.
-- Automated contexts are fresh, block service workers, and block non-loopback network requests.
-- Config modules, scenario modules, and adapters are trusted local code with Node or browser privileges appropriate to where they run.
-- Fixtures containing token, cookie, authorization, webhook, secret, password, or live StreamElements API values fail validation.
-- No real messages, identities, cookies, tokens, webhooks, or StreamElements sessions belong in tests or public media.
-
-## Validation boundary
-
-Local Studio validation is not proof of complete StreamElements or OBS parity. For a production widget change, retain a final check in the real StreamElements editor and OBS when available. This repository never promises support for undocumented APIs or payload shapes.
-
-## Repository checks
-
-```bash
+```sh
 npm run typecheck
 npm test
-npm run validate:example
-npm run smoke:example
+npm run build
 ```
 
-Browser and visual checks require an explicitly available browser. FFmpeg checks are optional and always report whether the final video was probed or only an intermediate was produced.
+For the production-browser workflow, keep this server running in one terminal:
 
-See [Agent usage](docs/AGENT_USAGE.md) for the same pinned commands in Codex, Claude Code, and CI.
+```sh
+STUDIO_STORAGE=local STUDIO_EXECUTION=local STUDIO_DATA_DIR=.studio-data/validation-server npm start -- --port 4317
+```
+
+Then run in another terminal, with an existing browser and FFmpeg/ffprobe available:
+
+```sh
+node scripts/verify-web.mjs
+node --import tsx scripts/verify-field-precedence.mjs
+```
+
+The script accepts only loopback targets, creates synthetic projects/jobs, and writes screenshots, generated media, and a JSON report into a new `.studio-data/verification-*` directory. It is not a hosted-deployment check. Repeated runs consume the local store's personal daily budgets; use a new deliberate validation store when needed, without deleting unrelated data.
+
+The field regression script verifies fixture precedence, scene persistence, and temporary overrides. For protected creation, start a separate local server on port 4318 with `STUDIO_CREATE_KEY=test-only-local-creation-key`, then run `node scripts/verify-protected-create.mjs`. This deliberately synthetic key must never be used on a hosted deployment. See the [validation record](docs/VALIDATION.md) for evidence and the remaining hosted checks.
+
+## Guides
+
+- [Web API and snapshot schema](docs/API.md)
+- [Vercel storage and Sandbox setup](docs/VERCEL.md)
+- [Shared local CLI and packaging](docs/CLI.md)
+- [Catalog configuration](docs/CONFIGURATION.md), [runtime](docs/RUNTIME.md), and [media capture](docs/CAPTURE.md)
+- [Agent and CI usage](docs/AGENT_USAGE.md)
+
+The CLI guides describe trusted local configuration and its wider limits. Hosted JSON imports accept only the data schemas and stricter limits in the API reference.

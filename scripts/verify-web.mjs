@@ -42,6 +42,7 @@ try {
     const value=await response.json();return {status:response.status,value};
   };
   const projectPath=`/api/v1/projects/${id}`;const current=await api(projectPath);assert.equal(current.status,200);
+  assert.equal(current.value.revision.snapshot.scenes.find(scene=>scene.id==='portrait').fieldData.title,'Verified preview title');
   assert.equal((await fetch(origin+projectPath)).status,403);
   const stale=await api(projectPath,{method:'PUT',headers:{'If-Match':'"old"'},body:JSON.stringify(current.value.revision.snapshot)});assert.equal(stale.status,409);
   const initialRevision=current.value.revision.id;

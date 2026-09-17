@@ -11,6 +11,10 @@ This app uses Next.js, private Vercel Blob objects, Vercel Workflows and short-l
 
 Missing Blob or Sandbox settings fail explicitly. A Vercel deployment never silently stores data on ephemeral disk or starts a local background renderer. Uploaded source is data, not an executable Node.js configuration.
 
+Linking a Vercel project or installing its editor plugin does not complete storage or renderer setup. Keep the local values in `.env.example` out of hosted environments. A `503` saying `Connect a private Vercel Blob store before using this deployment.` means the running deployment has neither a Blob integration token nor the supported store-ID/OIDC combination. Check the production environment, connect the private store, and redeploy after configuring it. Do not paste credentials into chat, client code, or Git.
+
+If `STUDIO_CREATE_KEY` is enabled, use the optional **Workspace creation key** field on the import screen or send `X-Studio-Key` from your API client. The Studio does not persist this workspace key. It is separate from each project's private editing capability.
+
 ## Explicit browser/media snapshot setup
 
 Normal app startup and render jobs **never** install browsers, fonts or media tools. Snapshot setup is a separate operator action. Obtain Linux x64 static FFmpeg and ffprobe binaries from a trusted source, verify their provenance/checksums, and keep their versions fixed. The script rejects non-Linux binaries; your macOS Homebrew executables cannot run in a Linux Sandbox.
