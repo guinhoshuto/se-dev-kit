@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {LocalStore,mutateJson,readJson,getStore} from '../../lib/storage';
+import {BlobStore,LocalStore,mutateJson,readJson,getStore} from '../../lib/storage';
 test('immutable objects, atomic concurrency and path boundaries',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'studio-store-test-'));const store=new LocalStore(dir);
   const {etag}=await store.put('projects/a.json',Buffer.from('first'));
@@ -21,4 +21,12 @@ test('CAS reservations cannot lose concurrent increments',async()=>{
 });
 test('Vercel never falls back to local disk',()=>{
   const old={...process.env};try{process.env.VERCEL='1';process.env.STUDIO_STORAGE='local';assert.throws(()=>getStore(),/fallback/);}finally{process.env=old;}
+});
+test('Vercel accepts an OIDC-connected Blob store without a runtime token environment variable',()=>{
+  const old={...process.env};
+  try {
+    process.env.VERCEL='1';process.env.STUDIO_STORAGE='blob';process.env.BLOB_STORE_ID='store_test';
+    delete process.env.BLOB_READ_WRITE_TOKEN;delete process.env.VERCEL_OIDC_TOKEN;
+    assert.ok(getStore() instanceof BlobStore);
+  } finally {process.env=old;}
 });

@@ -89,7 +89,10 @@ export class BlobStore implements ObjectStore {
 export function getStore():ObjectStore {
   const mode=process.env.STUDIO_STORAGE??(process.env.VERCEL?'blob':'local');
   if(mode==='blob') {
-    if(!process.env.BLOB_READ_WRITE_TOKEN && !(process.env.BLOB_STORE_ID&&process.env.VERCEL_OIDC_TOKEN))throw new HttpError(503,'Connect a private Vercel Blob store before using this deployment.');
+    // In Vercel Functions the rotating OIDC credential lives in the request context
+    // (`x-vercel-oidc-token`), where @vercel/blob retrieves it. It is not a runtime env var.
+    const hasOidcStore=Boolean(process.env.BLOB_STORE_ID&&(process.env.VERCEL||process.env.VERCEL_OIDC_TOKEN));
+    if(!process.env.BLOB_READ_WRITE_TOKEN&&!hasOidcStore)throw new HttpError(503,'Connect a private Vercel Blob store before using this deployment.');
     return new BlobStore();
   }
   if(mode!=='local'||process.env.VERCEL)throw new HttpError(503,'Vercel requires private Blob storage; local disk fallback is disabled.');
