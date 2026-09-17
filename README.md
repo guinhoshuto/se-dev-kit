@@ -95,6 +95,17 @@ The script accepts only loopback targets, creates synthetic projects/jobs, and w
 
 The field regression script verifies fixture precedence, scene persistence, and temporary overrides. For protected creation, start a separate local server on port 4318 with `STUDIO_CREATE_KEY=test-only-local-creation-key`, then run `node scripts/verify-protected-create.mjs`. This deliberately synthetic key must never be used on a hosted deployment. See the [validation record](docs/VALIDATION.md) for evidence and the remaining hosted checks.
 
+After configuring and deploying the trusted Sandbox snapshot, run the bounded production check explicitly:
+
+```sh
+node scripts/verify-hosted.mjs \
+  --base-url https://your-studio.example/ \
+  --allow-hosted \
+  --ffprobe /absolute/path/to/an/existing/ffprobe
+```
+
+It creates one synthetic project and at most three jobs (smoke, one 320×240 PNG, and one one-second silent MP4), then verifies authorization, optimistic concurrency, iframe policy, artifact hashes, image dimensions, and video streams. Evidence and the private resume capability are written under ignored `.studio-data/`; never publish `access.private.json`. The command neither downloads tools nor deletes remote data. Use `--resume` with that private file after an interrupted run instead of creating another project.
+
 ## Guides
 
 - [Web API and snapshot schema](docs/API.md)

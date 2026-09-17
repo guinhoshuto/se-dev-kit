@@ -14,6 +14,7 @@ const jobKey = (job: Pick<Job, 'projectId' | 'id'>) => `projects/${job.projectId
 const contentTypes: Record<string, string> = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webm': 'video/webm', '.mp4': 'video/mp4', '.json': 'application/json'};
 const terminalStatuses = new Set<Job['status']>(['completed', 'failed', 'cancelled']);
 type JobPatch = Partial<Pick<Job, 'status' | 'progress' | 'artifacts' | 'error' | 'workflowId' | 'sandboxId' | 'commandId'>>;
+export const hostedSandboxName = (jobId: string) => `sws-${jobId}`;
 /** Merge against the latest object with CAS so delayed workflow metadata cannot erase worker results. */
 export async function patchJob(store: ObjectStore, job: Job, patch: JobPatch): Promise<Job> {
   return mutateJson(store, jobKey(job), job, latest => {
@@ -142,8 +143,10 @@ export async function launchHostedJob(projectId: string, id: string): Promise<vo
   if (!revision) throw new Error('Pinned job revision was not found.');
   validateJob(job, revision);
   const {Sandbox} = await import('@vercel/sandbox');
-  const name = `sws-${job.id}`;
-  const sandbox = job.sandboxId ? await Sandbox.get({name: job.sandboxId}) : await Sandbox.create({name, source: {type: 'snapshot', snapshotId: process.env.STUDIO_SANDBOX_SNAPSHOT_ID!}, networkPolicy: 'deny-all', timeout: timeoutMs, persistent: false, resources: {vcpus: 2}});
+  const name = hostedSandboxName(job.id);
+  const sandbox = job.sandboxId
+    ? await Sandbox.get({name: job.sandboxId})
+    : await Sandbox.getOrCreate({name, source: {type: 'snapshot', snapshotId: process.env.STUDIO_SANDBOX_SNAPSHOT_ID!}, networkPolicy: 'deny-all', timeout: timeoutMs, persistent: false, resources: {vcpus: 2}});
   // A retry may have recorded its command while the provider lookup was in flight.
   const latest = await readJson<Job>(store, jobKey(job));
   if (latest?.commandId || (latest && terminalStatuses.has(latest.status))) {
@@ -151,7 +154,8 @@ export async function launchHostedJob(projectId: string, id: string): Promise<vo
     return;
   }
   const current = await patchJob(store, latest ?? job, {status: 'running', progress: 'Running the pinned revision in an offline Sandbox.', sandboxId: name});
-  if (current.commandId || terminalStatuses.has(current.status)) return;
+  if (terminalStatuses.has(current.status)) {await sandbox.stop().catch(() => {}); return;}
+  if (current.commandId) return;
   const directory = await realpath(await mkdtemp(resolve(tmpdir(), 'sws-transfer-')));
   try {
     const local = await materializeSnapshot(revision.prepared!, store, directory);
@@ -166,13 +170,15 @@ export async function launchHostedJob(projectId: string, id: string): Promise<vo
     uploads.push({path: `${remoteJob}/input.json`, content: Buffer.from(JSON.stringify({job, project}))});
     for (let index = 0; index < uploads.length; index += 16) await sandbox.writeFiles(uploads.slice(index, index + 16));
     const ready = await readJson<Job>(store, jobKey(job));
-    if (ready?.commandId || (ready && terminalStatuses.has(ready.status))) return;
+    if (ready && terminalStatuses.has(ready.status)) {await sandbox.stop().catch(() => {}); return;}
+    if (ready?.commandId) return;
     const command = await sandbox.runCommand({cmd: 'node', args: ['scripts/job-worker.mjs', `${remoteJob}/input.json`, `${remoteJob}/result.json`], cwd: REMOTE_ROOT, env: {SE_WIDGET_STUDIO_BROWSER: '/vercel/sandbox/studio/browser/chrome', STUDIO_FFMPEG_PATH: '/vercel/sandbox/studio/tools/ffmpeg', STUDIO_FFPROBE_PATH: '/vercel/sandbox/studio/tools/ffprobe'}, detached: true, timeoutMs: remainingJobTime(current)});
     await patchJob(store, current, {commandId: command.cmdId});
-  } catch (error) {
-    await sandbox.stop().catch(() => {});
-    throw error;
-  } finally {await rm(directory, {recursive: true, force: true});}
+  } finally {
+    // Workflow retries recover this deterministic Sandbox and repeat only idempotent uploads.
+    // Final failure cleanup belongs to failHostedJob so transient provider errors keep the VM alive.
+    await rm(directory, {recursive: true, force: true});
+  }
 }
 export async function pollHostedJob(projectId: string, id: string): Promise<boolean> {
   const {store, job} = await loadJob(projectId, id);
@@ -182,24 +188,24 @@ export async function pollHostedJob(projectId: string, id: string): Promise<bool
   const sandbox = await Sandbox.get({name: job.sandboxId});
   const command = await sandbox.getCommand(job.commandId);
   if (command.exitCode === null) return false;
-  try {
-    const bytes = await sandbox.readFileToBuffer({path: `${REMOTE_ROOT}/job/result.json`});
-    if (!bytes || bytes.length > 1024 * 1024) throw new Error('Worker did not produce a valid bounded result.');
-    const result = JSON.parse(bytes.toString('utf8')) as WorkerResult;
-    await publish(store, job, result, async name => {
-      const body = await sandbox.readFileToBuffer({path: `${REMOTE_ROOT}/job/output/${name}`});
-      if (!body) throw new Error('Worker artifact was not found.');
-      return body;
-    });
-  } finally {await sandbox.stop().catch(() => {});}
+  const bytes = await sandbox.readFileToBuffer({path: `${REMOTE_ROOT}/job/result.json`});
+  if (!bytes || bytes.length > 1024 * 1024) throw new Error('Worker did not produce a valid bounded result.');
+  const result = JSON.parse(bytes.toString('utf8')) as WorkerResult;
+  await publish(store, job, result, async name => {
+    const body = await sandbox.readFileToBuffer({path: `${REMOTE_ROOT}/job/output/${name}`});
+    if (!body) throw new Error('Worker artifact was not found.');
+    return body;
+  });
+  // Keep the filesystem available while a Workflow step retries transient Blob/API failures.
+  // A successful publish is immutable; terminal workflow failure is cleaned up by failHostedJob.
+  await sandbox.stop().catch(() => {});
   return true;
 }
 export async function failHostedJob(projectId: string, id: string, error: string): Promise<void> {
   const {store, job} = await loadJob(projectId, id);
-  if (job.sandboxId) {
-    const {Sandbox} = await import('@vercel/sandbox');
-    const sandbox = await Sandbox.get({name: job.sandboxId}).catch(() => undefined);
-    await sandbox?.stop().catch(() => {});
-  }
+  const {Sandbox} = await import('@vercel/sandbox');
+  // The deterministic name also covers a create/metadata-write failure that left no sandboxId.
+  const sandbox = await Sandbox.get({name: job.sandboxId ?? hostedSandboxName(job.id)}).catch(() => undefined);
+  await sandbox?.stop().catch(() => {});
   await patchJob(store, job, {status: 'failed', progress: 'Job failed.', error: error.slice(0, 2000)});
 }

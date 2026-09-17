@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {LocalStore, readJson, writeJson} from '../../lib/storage';
 import {materializeSnapshot, safeAssetPath, relocateProject} from '../../lib/materialize';
-import {executionMode, patchJob, remainingJobTime, runJob} from '../../lib/jobs';
+import {executionMode, hostedSandboxName, patchJob, remainingJobTime, runJob} from '../../lib/jobs';
 import {buildAssetMap} from '../../src/server/assets';
 import type {WidgetSnapshot, Revision, Job, ObjectStore} from '../../lib/model';
 
@@ -93,6 +93,9 @@ test('execution budgets include queue time and cannot outlive concurrency reserv
   assert.equal(remainingJobTime({createdAt: new Date(now - 60_000).toISOString()}, now), 9 * 60_000);
   assert.throws(() => remainingJobTime({createdAt: new Date(now - 10 * 60_000).toISOString()}, now), /execution budget/);
   assert.throws(() => remainingJobTime({createdAt: 'invalid'}, now), /execution budget/);
+});
+test('hosted workers have a deterministic provider-safe Sandbox name', () => {
+  assert.equal(hostedSandboxName('job_ABC-123'), 'sws-job_ABC-123');
 });
 test('local worker runs the real browser and publishes verified screenshots and test reports', {timeout: 120_000}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-worker-test-'));

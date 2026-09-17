@@ -23,15 +23,31 @@ Normal app startup and render jobs **never** install browsers, fonts or media to
 npm ci
 npm run build:engine
 node scripts/sandbox-prepare.mjs --allow-downloads \
+  --expected-team-id <vercel-team-id> \
+  --expected-project-id <vercel-project-id> \
   --ffmpeg /absolute/path/to/linux-static/ffmpeg \
-  --ffprobe /absolute/path/to/linux-static/ffprobe
+  --ffprobe /absolute/path/to/linux-static/ffprobe \
+  --report .studio-data/sandbox-snapshot.json
 ```
 
-This explicitly creates a Sandbox, installs lockfile-pinned dependencies, the Chromium build selected by `playwright-core@1.54.2`, and Linux browser libraries. It verifies a browser launch and both media binaries, records hashes/versions and creates an immutable snapshot. It consumes your Sandbox quota. Review Vercel's current limits before executing it. It does not upload widget content or credentials into the baseline. FFmpeg libraries must be statically linked or included in your own reviewed image. Review binary licensing for your use.
+The script requires a fresh project-scoped `VERCEL_OIDC_TOKEN` and verifies its team/project claims before creating anything. Pull that identity into an ignored, private environment file; never paste or commit it. The report path must not already exist and is written with mode `0600`.
+
+This explicitly creates a Sandbox, installs lockfile-pinned dependencies, the Chromium build selected by `playwright-core@1.54.2`, and Linux browser libraries. It verifies a browser launch and both media binaries, records hashes/versions and creates a non-expiring immutable snapshot. It consumes your Sandbox quota. Review Vercel's current limits before executing it. It does not upload widget content or credentials into the baseline. FFmpeg libraries must be statically linked or included in your own reviewed image. Review binary licensing for your use. The [FFmpeg download page](https://ffmpeg.org/download.html) links third-party compiled builds; pin an exact release and verify the publisher's checksum instead of downloading an unversioned binary.
 
 The returned JSON includes the snapshot ID. Retain it with your deployment notes. The app clones this baseline for each job, uploads only trusted engine files and the pinned immutable widget snapshot, disables all external network access, and executes the worker without Blob/API credentials. Jobs are terminated after ten minutes. Final assets and reports are copied back to private Blob with verified SHA-256 hashes. Sandboxes and intermediate frame sequences are then discarded. Final project revisions and output objects remain in Blob until explicitly removed by an operator.
 
 Rebuild the baseline deliberately when updating Node, Playwright, FFmpeg or fonts. The script fixes Playwright at 1.54.2; review its guard when upgrading. Browser/system fonts can differ from local Chrome: compare final media using the same snapshot when repeatability matters.
+
+Before assigning the snapshot to Production or Preview, clone and validate it with no downloads and outbound networking denied:
+
+```sh
+node scripts/verify-sandbox-snapshot.mjs --allow-sandbox \
+  --snapshot-id <snapshot-id> \
+  --expected-team-id <vercel-team-id> \
+  --expected-project-id <vercel-project-id>
+```
+
+The command verifies the embedded target metadata, launches Chromium, runs FFmpeg/ffprobe, confirms an external fetch is blocked, and stops the temporary clone. Then set `STUDIO_SANDBOX_SNAPSHOT_ID` for Production and Preview and redeploy.
 
 ## Local mode and intermediate video
 
