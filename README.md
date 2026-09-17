@@ -93,7 +93,7 @@ node --import tsx scripts/verify-field-precedence.mjs
 
 The script accepts only loopback targets, creates synthetic projects/jobs, and writes screenshots, generated media, and a JSON report into a new `.studio-data/verification-*` directory. It is not a hosted-deployment check. Repeated runs consume the local store's personal daily budgets; use a new deliberate validation store when needed, without deleting unrelated data.
 
-The field regression script verifies fixture precedence, scene persistence, and temporary overrides. For protected creation, start a separate local server on port 4318 with `STUDIO_CREATE_KEY=test-only-local-creation-key`, then run `node scripts/verify-protected-create.mjs`. This deliberately synthetic key must never be used on a hosted deployment. See the [validation record](docs/VALIDATION.md) for evidence and the remaining hosted checks.
+The field regression script verifies fixture precedence, scene persistence, and temporary overrides. For protected creation, start a separate local server on port 4318 with `STUDIO_CREATE_KEY=test-only-local-creation-key`, then run `node scripts/verify-protected-create.mjs`. This deliberately synthetic key must never be used on a hosted deployment. See the [validation record](docs/VALIDATION.md) for the latest local and hosted evidence.
 
 After configuring and deploying the trusted Sandbox snapshot, run the bounded production check explicitly:
 
