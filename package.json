@@ -39,6 +39,7 @@
     "studio": "npm run dev",
     "validate:example": "npm run build:engine && node dist/cli/index.js validate examples/basic-chat",
     "smoke:example": "npm run build:engine && node dist/cli/index.js test examples/basic-chat",
+    "skill:install": "node skills/install.mjs",
     "test:web": "node --import tsx --test tests/web/*.test.ts"
   },
   "dependencies": {

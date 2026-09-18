@@ -19,6 +19,15 @@ npm exec -- se-widget-studio test . --json
 
 The reusable instructions live at `skills/se-widget-studio/SKILL.md`, with focused references and `scripts/studio-client.mjs`. Add or link that complete directory—not only `SKILL.md`—to the agent surface's normal personal or project skill location.
 
+For a portable installation on another machine, clone a reviewed repository revision and run:
+
+```bash
+node skills/install.mjs --list
+node skills/install.mjs --skill se-widget-studio
+```
+
+The installer copies into `$CODEX_HOME/skills` or `~/.codex/skills` by default, accepts `--skills-dir /absolute/path/to/skills` for another agent surface, and refuses to replace existing targets. See `skills/INSTALL.md` for the complete install and verification workflow. Use `--link` only for development when the checkout will remain available.
+
 For hosted requests, the client can import either supported production layout, explicitly upload declared local assets, store the editing capability in a private mode-0600 access bundle, open the editor, pull/push complete revisions with optimistic concurrency, run tests/renders, and download hash-verified artifacts. It defaults to `https://se-dev-kit.vercel.app`; use `--origin` for a different reviewed deployment. No package installation is required for the hosted client beyond the supported Node.js runtime.
 
 For local requests, the skill still requires the exact package dependency and lockfile above.

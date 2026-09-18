@@ -108,6 +108,7 @@ It creates one synthetic project and at most three jobs (smoke, one 320×240 PNG
 
 ## Guides
 
+- [Install the bundled agent skill on another machine](skills/INSTALL.md)
 - [Web API and snapshot schema](docs/API.md)
 - [Vercel storage and Sandbox setup](docs/VERCEL.md)
 - [Shared local CLI and packaging](docs/CLI.md)
