@@ -2,6 +2,8 @@
 
 This repository contains the complete `se-widget-studio` skill, including its hosted client, operational references, and agent metadata. Install the whole skill directory; `SKILL.md` alone is not enough.
 
+Use Node.js `>=22.20 <23` or `>=24 <25`, matching the repository's supported runtime. The installer uses only built-in Node.js modules.
+
 ## Install on another machine
 
 Clone the repository and select a reviewed tag or commit before installing:

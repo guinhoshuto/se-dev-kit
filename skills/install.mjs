@@ -217,6 +217,7 @@ async function installSkills({ link, selectedSkills, skillsDir }) {
         canonicalSkillsDir,
         `.se-widget-studio-install-${plan.name}-${randomUUID()}`,
       );
+      staged.push(stagingPath);
 
       if (link) {
         await symlink(plan.source, stagingPath, platform() === "win32" ? "junction" : "dir");
@@ -229,7 +230,6 @@ async function installSkills({ link, selectedSkills, skillsDir }) {
         });
       }
 
-      staged.push(stagingPath);
       await rename(stagingPath, plan.target);
       staged.pop();
       installed.push(plan.target);
