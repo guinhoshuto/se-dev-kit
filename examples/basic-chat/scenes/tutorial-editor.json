@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "tutorial-editor",
+  "name": "Tutorial editor",
+  "description": "A 1080p canvas for configuration tutorials rendered inside the StreamElements overlay editor replica.",
+  "theme": "midnight",
+  "viewport": {
+    "width": 430,
+    "height": 640,
+    "deviceScaleFactor": 1
+  },
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "format": "png"
+  },
+  "captureAtMs": 0
+}

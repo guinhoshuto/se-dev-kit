@@ -8,6 +8,7 @@ import type {ResolvedProject} from "../types.js";
 import {StudioError, toErrorMessage} from "../shared/errors.js";
 import {buildAssetMap, lookupAsset, type AssetEntry} from "./assets.js";
 import {renderCapturePage} from "./capture-page.js";
+import {renderTutorialPage} from "./tutorial-page.js";
 import {renderFrameDocument} from "./html.js";
 import {loadProject} from "../config/load.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
@@ -35,7 +36,8 @@ const uiAssets = new Map([
   ["styles.css", resolve(distributionRoot, "studio-ui/styles.css")],
   ["app.js", resolve(distributionRoot, "studio-ui/app.js")],
   ["bridge.js", resolve(distributionRoot, "studio-ui/bridge.js")],
-  ["capture-host.js", resolve(distributionRoot, "studio-ui/capture-host.js")]
+  ["capture-host.js", resolve(distributionRoot, "studio-ui/capture-host.js")],
+  ["tutorial-host.js", resolve(distributionRoot, "studio-ui/tutorial-host.js")]
 ]);
 
 function commonHeaders(response: ServerResponse): void {
@@ -258,6 +260,10 @@ export async function startStudioServer(
       }
       if (pathname === "/__sws/capture") {
         send(request, response, 200, "text/html; charset=utf-8", renderCapturePage(frameOrigin), controlHeaders);
+        return;
+      }
+      if (pathname === "/__sws/tutorial") {
+        send(request, response, 200, "text/html; charset=utf-8", renderTutorialPage(frameOrigin), controlHeaders);
         return;
       }
       if (pathname.startsWith("/__sws/ui/")) {

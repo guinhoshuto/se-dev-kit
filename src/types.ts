@@ -169,6 +169,60 @@ export interface ThumbnailDefinition {
   format?: "png" | "jpeg";
 }
 
+export type TutorialTarget =
+  | "layer"
+  | "save"
+  | "preview"
+  | "emulate"
+  | "open-editor"
+  | "chat-input"
+  | `group:${string}`
+  | `field:${string}`
+  | {x: number; y: number};
+
+export type TutorialEmulateKind = "follower" | "subscriber" | "tip" | "cheer" | "raid" | "redemption" | "merch";
+
+export type TutorialStep =
+  | {action: "wait"; ms: number}
+  | {action: "caption"; text: string | null}
+  | {action: "move"; target: TutorialTarget; durationMs?: number}
+  | {action: "click"; target: TutorialTarget; durationMs?: number}
+  | {action: "selectLayer"}
+  | {action: "openGroup"; group: string}
+  | {action: "setField"; field: string; value: JsonPrimitive}
+  | {
+      action: "emulate";
+      event: TutorialEmulateKind;
+      option?: string;
+      name?: string;
+      amount?: number;
+      message?: string;
+      listener?: string;
+      payload?: JsonValue;
+    }
+  | {
+      action: "chat";
+      user: string;
+      text: string;
+      color?: string;
+      badges?: string[];
+      typed?: boolean;
+      data?: JsonObject;
+    }
+  | {action: "save"};
+
+export interface TutorialDefinition {
+  overlayName?: string;
+  layerName?: string;
+  overlay?: {width: number; height: number};
+  widget?: {x?: number; y?: number; scale?: number};
+  uiScale?: number;
+  chat?: {enabled?: boolean; title?: string; channel?: string};
+  liveEmulation?: boolean;
+  typingMsPerChar?: number;
+  steps: TutorialStep[];
+}
+
 export interface VideoDefinition {
   enabled: boolean;
   durationMs: number;
@@ -177,6 +231,8 @@ export interface VideoDefinition {
   codec?: "h264" | "vp9";
   pixelFormat?: "yuv420p" | "yuva420p";
   audio?: "none";
+  mode?: "stage" | "tutorial";
+  tutorial?: TutorialDefinition;
 }
 
 export interface RecipeDefinition {

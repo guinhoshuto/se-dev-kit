@@ -18,7 +18,15 @@ import {STUDIO_VERSION} from "../version.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
 import {startStudioServer} from "../server/server.js";
 import {buildAssetMap} from "../server/assets.js";
-import {captureHostDispatch, frameEvents, openScene, sampleFrameAnimations} from "../scenarios/runner.js";
+import {
+  captureHostDispatch,
+  captureHostUpdateFields,
+  frameEvents,
+  openScene,
+  sampleFrameAnimations
+} from "../scenarios/runner.js";
+import {compileVariantTutorial, EMULATE_MENU, tutorialCamera} from "../tutorial/variant.js";
+import type {TutorialTimeline} from "../tutorial/timeline.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
 import {launchStudioBrowser} from "./browser.js";
 import {hashFile, hashJson, sha256} from "./hash.js";
@@ -382,14 +390,45 @@ async function renderVideoFrames(options: {
   outputRoot: string;
   recipeDirectory: string;
 }): Promise<{framesDirectory: string; framesManifest: string}> {
-  const opened = await openScene(options.project, options.server, options.browser, options.variant.scene);
+  const tutorial: TutorialTimeline | undefined = options.video.mode === "tutorial"
+    ? compileVariantTutorial(options.project, options.variant, options.video)
+    : undefined;
+  const opened = await openScene(
+    options.project,
+    options.server,
+    options.browser,
+    options.variant.scene,
+    tutorial
+      ? {host: "tutorial", camera: tutorialCamera(tutorial), background: {id: "tutorial-editor", color: "transparent"}}
+      : {}
+  );
   const framesDirectory = resolve(options.recipeDirectory, options.variant.id, "frames");
   const frameCount = videoFrameCount(options.video);
   const frames: {file: string; timestampMs: number; sha256: string}[] = [];
   let currentTime = 0;
   let eventIndex = 0;
-  const events = [...(options.variant.fixture?.events ?? [])].sort((left, right) => left.atMs - right.atMs);
+  const events: TutorialTimeline["widget"] = [
+    ...(options.variant.fixture?.events ?? []).map((event) => ({
+      atMs: event.atMs,
+      kind: "dispatch" as const,
+      listener: event.listener,
+      event: event.event
+    })),
+    ...(tutorial?.widget ?? [])
+  ].sort((left, right) => left.atMs - right.atMs);
   try {
+    if (tutorial) {
+      const setup: unknown = {
+        timeline: tutorial,
+        menu: EMULATE_MENU,
+        viewport: {width: opened.resolved.viewport.width, height: opened.resolved.viewport.height},
+        output: {width: opened.resolved.output.width, height: opened.resolved.output.height}
+      };
+      await opened.page.evaluate(
+        (value) => (window as unknown as {__SWS_TUTORIAL__: {setup: (options: unknown) => void}}).__SWS_TUTORIAL__.setup(value),
+        setup
+      );
+    }
     for (let index = 0; index < frameCount; index += 1) {
       const timestampMs = Math.round((index * 1000) / options.video.fps);
       while (events[eventIndex] && events[eventIndex]!.atMs <= timestampMs) {
@@ -397,7 +436,11 @@ async function renderVideoFrames(options: {
         const delta = timelineEvent.atMs - currentTime;
         if (delta > 0) await opened.page.clock.fastForward(delta);
         await sampleFrameAnimations(opened.page, timelineEvent.atMs);
-        await captureHostDispatch(opened.page, timelineEvent.listener, timelineEvent.event);
+        if (timelineEvent.kind === "fields") {
+          await captureHostUpdateFields(opened.page, timelineEvent.fieldData);
+        } else {
+          await captureHostDispatch(opened.page, timelineEvent.listener, timelineEvent.event);
+        }
         await sampleFrameAnimations(opened.page, timelineEvent.atMs);
         await opened.page.clock.fastForward(1);
         currentTime = timelineEvent.atMs + 1;
@@ -408,6 +451,12 @@ async function renderVideoFrames(options: {
         currentTime = timestampMs;
       }
       await sampleFrameAnimations(opened.page, timestampMs);
+      if (tutorial) {
+        await opened.page.evaluate(
+          (time) => (window as unknown as {__SWS_TUTORIAL__: {render: (value: number) => void}}).__SWS_TUTORIAL__.render(time),
+          timestampMs
+        );
+      }
       const target = resolve(framesDirectory, `frame-${String(index).padStart(4, "0")}.png`);
       await screenshotScene(opened.page, {...options.variant, output: {...options.variant.output, format: "png"}}, options.outputRoot, target);
       frames.push({file: portable(framesDirectory, target), timestampMs, sha256: await hashFile(target)});
@@ -477,6 +526,9 @@ export async function planRecipe(
     ...matrixOptions
   });
   const video = recipe.outputs?.video?.enabled ? recipe.outputs.video : undefined;
+  if (video?.mode === "tutorial") {
+    for (const variant of variants) compileVariantTutorial(project, variant, video);
+  }
   const pixelFormat = video?.pixelFormat ?? "yuv420p";
   if (video && (pixelFormat === "yuv420p" || pixelFormat === "yuva420p")) {
     for (const variant of variants) {

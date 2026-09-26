@@ -179,6 +179,79 @@ const thumbnailSchema = z
   })
   .strict();
 
+const tutorialTargetSchema = z.union([
+  z.enum(["layer", "save", "preview", "emulate", "open-editor", "chat-input"]),
+  z.string().regex(/^(?:group|field):.+$/, "targets must be a known control, group:<name>, or field:<id>"),
+  z.object({x: z.number().finite(), y: z.number().finite()}).strict()
+]);
+
+const tutorialMoveDurationSchema = z.number().int().min(0).max(10_000).optional();
+
+const tutorialStepSchema = z.discriminatedUnion("action", [
+  z.object({action: z.literal("wait"), ms: z.number().int().min(0).max(120_000)}).strict(),
+  z.object({action: z.literal("caption"), text: z.string().max(240).nullable()}).strict(),
+  z.object({action: z.literal("move"), target: tutorialTargetSchema, durationMs: tutorialMoveDurationSchema}).strict(),
+  z.object({action: z.literal("click"), target: tutorialTargetSchema, durationMs: tutorialMoveDurationSchema}).strict(),
+  z.object({action: z.literal("selectLayer")}).strict(),
+  z.object({action: z.literal("openGroup"), group: z.string().min(1)}).strict(),
+  z.object({action: z.literal("setField"), field: z.string().min(1), value: jsonPrimitiveSchema}).strict(),
+  z
+    .object({
+      action: z.literal("emulate"),
+      event: z.enum(["follower", "subscriber", "tip", "cheer", "raid", "redemption", "merch"]),
+      option: z.string().min(1).optional(),
+      name: z.string().min(1).max(64).optional(),
+      amount: z.number().finite().min(0).optional(),
+      message: z.string().max(500).optional(),
+      listener: z.string().min(1).optional(),
+      payload: jsonValueSchema.optional()
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("chat"),
+      user: z.string().min(1).max(64),
+      text: z.string().min(1).max(500),
+      color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+      badges: z.array(z.enum(["broadcaster", "moderator", "vip", "subscriber"])).max(4).optional(),
+      typed: z.boolean().optional(),
+      data: jsonObjectSchema.optional()
+    })
+    .strict(),
+  z.object({action: z.literal("save")}).strict()
+]);
+
+export const tutorialSchema = z
+  .object({
+    overlayName: z.string().max(120).optional(),
+    layerName: z.string().max(120).optional(),
+    overlay: z
+      .object({width: z.number().int().min(16).max(7680), height: z.number().int().min(16).max(4320)})
+      .strict()
+      .optional(),
+    widget: z
+      .object({
+        x: z.number().finite().optional(),
+        y: z.number().finite().optional(),
+        scale: z.number().min(0.05).max(20).optional()
+      })
+      .strict()
+      .optional(),
+    uiScale: z.number().min(0.5).max(4).optional(),
+    chat: z
+      .object({
+        enabled: z.boolean().optional(),
+        title: z.string().max(60).optional(),
+        channel: z.string().max(60).optional()
+      })
+      .strict()
+      .optional(),
+    liveEmulation: z.boolean().optional(),
+    typingMsPerChar: z.number().int().min(10).max(1_000).optional(),
+    steps: z.array(tutorialStepSchema).min(1).max(500)
+  })
+  .strict();
+
 const videoSchema = z
   .object({
     enabled: z.boolean(),
@@ -187,7 +260,9 @@ const videoSchema = z
     format: z.enum(["mp4", "webm"]).optional(),
     codec: z.enum(["h264", "vp9"]).optional(),
     pixelFormat: z.enum(["yuv420p", "yuva420p"]).optional(),
-    audio: z.literal("none").optional()
+    audio: z.literal("none").optional(),
+    mode: z.enum(["stage", "tutorial"]).optional(),
+    tutorial: tutorialSchema.optional()
   })
   .strict();
 
@@ -239,6 +314,20 @@ export const recipeSchema = z
         code: z.ZodIssueCode.custom,
         path: ["outputs", "video", "codec"],
         message: "MP4 requires h264 and WebM requires vp9"
+      });
+    }
+    if (video.mode === "tutorial" && !video.tutorial) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["outputs", "video", "tutorial"],
+        message: "tutorial mode requires a tutorial script"
+      });
+    }
+    if (video.tutorial && video.mode !== "tutorial") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["outputs", "video", "mode"],
+        message: "a tutorial script requires mode \"tutorial\""
       });
     }
     if (pixelFormat === "yuva420p" && codec !== "vp9") {

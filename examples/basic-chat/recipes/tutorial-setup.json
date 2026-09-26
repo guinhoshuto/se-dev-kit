@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "tutorial-setup",
+  "name": "Setup tutorial",
+  "description": "A how-to-configure video: the widget inside the overlay editor with a scripted cursor, chat, and emulated events.",
+  "scenes": [
+    "tutorial-editor"
+  ],
+  "outputs": {
+    "screenshots": false,
+    "video": {
+      "enabled": true,
+      "mode": "tutorial",
+      "durationMs": 28000,
+      "fps": 30,
+      "format": "mp4",
+      "codec": "h264",
+      "pixelFormat": "yuv420p",
+      "audio": "none",
+      "tutorial": {
+        "overlayName": "Studio Chat overlay",
+        "layerName": "Studio Chat",
+        "widget": {"x": 960, "y": 540, "scale": 1.6},
+        "chat": {"title": "Stream chat"},
+        "steps": [
+          {"action": "caption", "text": "Select the widget layer"},
+          {"action": "wait", "ms": 600},
+          {"action": "selectLayer"},
+          {"action": "caption", "text": "Open a settings group and rename the card"},
+          {"action": "openGroup", "group": "Content"},
+          {"action": "setField", "field": "cardTitle", "value": "Community Chat"},
+          {"action": "caption", "text": "Pick an accent color and tune the opacity"},
+          {"action": "setField", "field": "accentColor", "value": "#ff7ad9"},
+          {"action": "setField", "field": "panelOpacity", "value": 78},
+          {"action": "caption", "text": "Choose a bubble style"},
+          {"action": "setField", "field": "bubbleStyle", "value": "soft"},
+          {"action": "setField", "field": "showTimestamps", "value": false},
+          {"action": "caption", "text": "Messages from chat show up instantly"},
+          {"action": "chat", "user": "Mira", "text": "The new overlay looks incredibly crisp!", "badges": ["subscriber"]},
+          {"action": "wait", "ms": 900},
+          {"action": "chat", "user": "Nico", "text": "Pink accent is a great choice", "badges": ["moderator"]},
+          {"action": "wait", "ms": 700},
+          {"action": "chat", "user": "studio_channel", "text": "Welcome in, everyone!", "typed": true},
+          {"action": "wait", "ms": 800},
+          {"action": "caption", "text": "Use Emulate to test alerts before going live"},
+          {"action": "emulate", "event": "tip", "option": "$10", "name": "Nova"},
+          {"action": "wait", "ms": 900},
+          {"action": "caption", "text": "Save the overlay when you are done"},
+          {"action": "save"},
+          {"action": "wait", "ms": 1500},
+          {"action": "caption", "text": null},
+          {"action": "wait", "ms": 800}
+        ]
+      }
+    }
+  },
+  "limit": 1
+}

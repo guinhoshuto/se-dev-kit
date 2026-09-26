@@ -109,7 +109,7 @@ export async function captureHostDispatch(page: Page, listener: string, event: u
   );
 }
 
-async function captureHostUpdateFields(page: Page, fieldData: Record<string, unknown>): Promise<void> {
+export async function captureHostUpdateFields(page: Page, fieldData: Record<string, unknown>): Promise<void> {
   await page.evaluate((values) => {
     const captureWindow = window as unknown as {
       __SWS_CAPTURE__: {updateFields: (fieldValues: Record<string, unknown>) => Promise<void>};
@@ -145,13 +145,23 @@ export async function sampleFrameAnimations(page: Page, timelineMs: number): Pro
   );
 }
 
+export interface OpenSceneOptions {
+  /** Capture host page; the tutorial host frames the widget inside the editor replica. */
+  host?: "capture" | "tutorial";
+  camera?: ResolvedSceneState["camera"];
+  background?: ResolvedSceneState["background"];
+}
+
 export async function openScene(
   project: ResolvedProject,
   server: StudioServer,
   browser: Browser,
-  scene: SceneDefinition
+  scene: SceneDefinition,
+  options: OpenSceneOptions = {}
 ): Promise<OpenSceneResult> {
   const resolved = resolveSceneState(project, scene);
+  if (options.camera) resolved.camera = options.camera;
+  if (options.background) resolved.background = options.background;
   const context = await createIsolatedContext({
     browser,
     allowedOrigins: [server.origin, server.frameOrigin],
@@ -163,7 +173,7 @@ export async function openScene(
   const captureTime = new Date(resolved.runtimeState.fixedTime);
   const readyTimeoutMs = project.config.widget.ready?.timeoutMs ?? 10_000;
   await page.clock.install({time: captureTime});
-  await page.goto(`${server.origin}/__sws/capture`, {waitUntil: "domcontentloaded"});
+  await page.goto(`${server.origin}/__sws/${options.host ?? "capture"}`, {waitUntil: "domcontentloaded"});
   // Pause before the widget iframe is created. The large control-host-only jump avoids
   // racing the naturally advancing clock without consuming any widget timers.
   await page.clock.pauseAt(new Date(captureTime.getTime() + 86_400_000));

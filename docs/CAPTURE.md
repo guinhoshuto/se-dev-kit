@@ -50,6 +50,8 @@ FFmpeg is discovered through an explicit path or the current `PATH`. It is invok
 
 All 4:2:0 video outputs require even final width and height. This is checked during planning, before any PNG frame is written.
 
+Set `outputs.video.mode` to `"tutorial"` to record the widget inside a StreamElements overlay editor replica, with a scripted cursor, chat, and emulated events; see [Tutorial videos](TUTORIAL.md).
+
 When FFmpeg is absent, no download is attempted. The output status is `intermediate`; pass `--allow-intermediate` only when the PNG sequence is an acceptable deliverable.
 
 ## Marketplace data

@@ -112,7 +112,7 @@ It creates one synthetic project and at most three jobs (smoke, one 320×240 PNG
 - [Web API and snapshot schema](docs/API.md)
 - [Vercel storage and Sandbox setup](docs/VERCEL.md)
 - [Shared local CLI and packaging](docs/CLI.md)
-- [Catalog configuration](docs/CONFIGURATION.md), [runtime](docs/RUNTIME.md), and [media capture](docs/CAPTURE.md)
+- [Catalog configuration](docs/CONFIGURATION.md), [runtime](docs/RUNTIME.md), [media capture](docs/CAPTURE.md), and [tutorial videos](docs/TUTORIAL.md)
 - [Agent and CI usage](docs/AGENT_USAGE.md)
 
 The CLI guides describe trusted local configuration and its wider limits. Hosted JSON imports accept only the data schemas and stricter limits in the API reference.
