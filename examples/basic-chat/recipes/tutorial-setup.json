@@ -11,7 +11,7 @@
     "video": {
       "enabled": true,
       "mode": "tutorial",
-      "durationMs": 28000,
+      "durationMs": 31500,
       "fps": 30,
       "format": "mp4",
       "codec": "h264",

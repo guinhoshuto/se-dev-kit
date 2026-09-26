@@ -31,6 +31,7 @@ function compile(steps, extra = {}) {
 test("tutorial compilation is deterministic and orders widget actions in time", () => {
   const steps = [
     {action: "setField", field: "title", value: "Hi"},
+    {action: "setField", field: "accent", value: "#ff7ad9"},
     {action: "setField", field: "opacity", value: 80},
     {action: "setField", field: "style", value: "b"},
     {action: "setField", field: "stamps", value: false},
@@ -43,7 +44,7 @@ test("tutorial compilation is deterministic and orders widget actions in time", 
   assert.equal(first.fields.some((field) => field.id === "secret"), false);
   assert.deepEqual(
     first.widget.map((action) => action.kind === "fields" ? Object.keys(action.fieldData)[0] : action.listener),
-    ["title", "opacity", "style", "stamps", "message", "tip-latest"]
+    ["title", "accent", "opacity", "style", "stamps", "message", "tip-latest"]
   );
   const times = first.widget.map((action) => action.atMs);
   assert.deepEqual([...times].sort((left, right) => left - right), times);
@@ -52,12 +53,12 @@ test("tutorial compilation is deterministic and orders widget actions in time", 
 });
 
 test("setField opens the layer, the Settings section, and the field group before editing", () => {
-  const timeline = compile([{action: "setField", field: "accent", value: "#ff00aa"}]);
+  const timeline = compile([{action: "setField", field: "title", value: "Hey"}]);
   const targets = timeline.moves.map((move) => move.to);
-  assert.deepEqual(targets, ["layer", "section:settings", "group:Colors", "field:accent"]);
-  const typed = timeline.patches.filter((entry) => entry.patch.fieldValue?.id === "accent").map((entry) => entry.patch.fieldValue.value);
-  assert.equal(typed.at(-1), "#ff00aa");
-  assert.ok(typed.includes("#ff"), "the hex value is typed character by character");
+  assert.deepEqual(targets, ["layer", "section:settings", "group:Content", "field:title"]);
+  const typed = timeline.patches.filter((entry) => entry.patch.fieldValue?.id === "title").map((entry) => entry.patch.fieldValue.value);
+  assert.equal(typed.at(-1), "Hey");
+  assert.ok(typed.includes("He"), "text is typed character by character");
 });
 
 test("slider drags interpolate and finish exactly on the requested value", () => {
@@ -101,6 +102,7 @@ test("invalid tutorial references fail with actionable errors", () => {
   assert.throws(() => compile([{action: "setField", field: "secret", value: "y"}]), /not a visible field/);
   assert.throws(() => compile([{action: "openGroup", group: "Nope"}]), /does not exist/);
   assert.throws(() => compile([{action: "setField", field: "style", value: "z"}]), /has no option/);
+  assert.throws(() => compile([{action: "setField", field: "accent", value: "banana"}]), /expects a color/);
   assert.throws(
     () => compile([{action: "chat", user: "A", text: "b"}], {chat: {enabled: false}}),
     /chat\.enabled is false/

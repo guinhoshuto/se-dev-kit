@@ -24,6 +24,28 @@ interface UiPatch {
   chatAppend?: ChatLine;
   pressed?: string | null;
   toast?: string | null;
+  colorPicker?: ColorPicker | null;
+}
+
+/** Mirrors TutorialColorPicker in src/tutorial/timeline.ts. */
+interface ColorPicker {
+  field: string;
+  h: number;
+  s: number;
+  v: number;
+  a: number;
+  rgb: {r: number; g: number; b: number};
+  text: string;
+  css: string;
+  darkText: boolean;
+  tab: "hex" | "rgb";
+  selected: boolean;
+  drag: "hue" | "spectrum" | "alpha" | null;
+  grab: {s: number; v: number} | null;
+  hoverAtMs: number | null;
+  selectAtMs: number | null;
+  openedAtMs: number;
+  closedAtMs: number | null;
 }
 
 interface PanelField {
@@ -86,6 +108,7 @@ interface UiState {
   chat: ChatLine[];
   pressed: string | null;
   toast: string | null;
+  colorPicker: ColorPicker | null;
 }
 
 declare global {
@@ -137,7 +160,13 @@ const ICONS: Record<string, string> = {
   face: "M9 11.75c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zm6 0c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8 0-.29.02-.58.05-.86 2.36-1.05 4.23-2.98 5.21-5.37C11.07 8.33 14.05 10 17.42 10c.78 0 1.53-.09 2.25-.26.21.71.33 1.47.33 2.26 0 4.41-3.59 8-8 8z",
   attach_money: "M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z",
   charity: "M16 2.5c-1.2 0-2.3.6-3 1.5-.7-.9-1.8-1.5-3-1.5-2.1 0-3.7 1.6-3.7 3.6 0 2.6 2.7 4.8 6.7 8.4 4-3.6 6.7-5.8 6.7-8.4 0-2-1.6-3.6-3.7-3.6zM1 11h4v11H1V11zm15 4.5-7.4 2.3L7 17.2V13h1.8l6.4 2.3c.5.2.8.7.8 1.2zM6.5 21.5v-3.2l2.4.8 8.2-2.6h1.4c1.2 0 2.2.9 2.3 2.1L12.9 22l-6.4-.5z",
-  dots: "M7 13a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm10-2a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM12 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"
+  dots: "M7 13a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm10-2a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM12 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z",
+  /* md-color-picker 0.2.6 tab icons. */
+  gradient: "M11 9h2v2h-2zm-2 2h2v2H9zm4 0h2v2h-2zm2-2h2v2h-2zM7 9h2v2H7zm12-6H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 18H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2zm2-7h-2v2h2v2h-2v-2h-2v2h-2v-2h-2v2H9v-2H7v2H5v-2h2v-2H5V5h14v6z",
+  tune: "M13 21v-2h8v-2h-8v-2h-2v6h2zM3 17v2h6v-2H3zM21 13v-2H11v2h10zM7 9v2H3v2h4v2h2V9H7zM15 9h2V7h4V5h-4V3h-2v6zM3 5v2h10V5H3z",
+  view_module: "M4 11h5V5H4v6zM4 18h5v-6H4v6zM10 18h5v-6h-5v6zM16 18h5v-6h-5v6zM10 11h5V5h-5v6zM16 5v6h5V5h-5z",
+  view_headline: "M4 15h17v-2H4v2zM4 19h17v-2H4v2zM4 11h17V9H4v2zM4 5v2h17V5H4z",
+  history: "M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zM12 8v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"
 };
 
 function icon(name: string, className = ""): string {
@@ -159,6 +188,63 @@ function ease(progress: number): number {
   return progress < 0.5 ? 4 * progress ** 3 : 1 - (-2 * progress + 2) ** 3 / 2;
 }
 
+/** CSS cubic-bezier timing function, solved by bisection so every frame is a pure function of time. */
+function cubicBezier(x1: number, y1: number, x2: number, y2: number): (progress: number) => number {
+  const curve = (p1: number, p2: number, t: number) => 3 * p1 * t * (1 - t) ** 2 + 3 * p2 * t * t * (1 - t) + t ** 3;
+  return (progress) => {
+    if (progress <= 0) return 0;
+    if (progress >= 1) return 1;
+    let low = 0;
+    let high = 1;
+    let t = progress;
+    for (let iteration = 0; iteration < 32; iteration += 1) {
+      const x = curve(x1, x2, t);
+      if (Math.abs(x - progress) < 1e-6) break;
+      if (x < progress) low = t;
+      else high = t;
+      t = (low + high) / 2;
+    }
+    return curve(y1, y2, t);
+  };
+}
+
+/* Angular Material's standard curve and the CSS keywords its dialog and buttons use. */
+const MD_EASE = cubicBezier(0.25, 0.8, 0.25, 1);
+const CSS_EASE = cubicBezier(0.25, 0.1, 0.25, 1);
+const CSS_EASE_OUT = cubicBezier(0, 0, 0.58, 1);
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function px(value: number): string {
+  return `${Number(value.toFixed(3))}px`;
+}
+
+/* md-color-picker dialog metrics (md-dialog 347x445; spectrum, hue, and alpha canvases are 255px tall). */
+const PICKER_WIDTH = 347;
+const PICKER_HEIGHT = 445;
+const PICKER_SIZE = 255;
+const PICKER_MARGIN = 8;
+const PICKER_ANIMATION_MS = 400;
+const PICKER_BACKDROP_IN_MS = 450;
+const PICKER_BACKDROP_OPACITY = 0.48;
+const PICKER_TYPES = [
+  {id: "hex", label: "Hex", left: 0, width: 116.4},
+  {id: "rgb", label: "RGB", left: 116.4, width: 117.3},
+  {id: "hsl", label: "HSL", left: 233.7, width: 115.4}
+] as const;
+const PICKER_PANES = ["gradient", "tune", "view_module", "view_headline", "history"];
+/** Select button box inside the md-dialog (md-actions row at y 397, 6px inset). */
+const SELECT_BUTTON = {x: 181.5, y: 403, width: 157.5, height: 36};
+const CURSOR_HOTSPOTS = {arrow: {x: 5, y: 2.5}, crosshair: {x: 12, y: 12}} as const;
+/** Cursor sizes in editor pixels; the crosshair is smaller, and its open center keeps the 11px spectrum marker visible. */
+const CURSOR_SIZES: Record<keyof typeof CURSOR_HOTSPOTS, number> = {arrow: 28, crosshair: 24};
+/** Space kept between a caption and the open picker dialog, wide enough to stay out of the dialog's shadow. */
+const CAPTION_DIALOG_GAP = 20;
+/** Closest a shifted caption may come to the editor's bottom edge or the toolbar. */
+const CAPTION_EDGE = 8;
+
 class TutorialController {
   readonly stage = document.querySelector<HTMLElement>("#capture-stage")!;
   readonly editor = document.querySelector<HTMLElement>("#se-editor")!;
@@ -173,6 +259,7 @@ class TutorialController {
   readonly toast = document.querySelector<HTMLElement>("#se-toast")!;
   readonly chat = document.querySelector<HTMLElement>("#se-chat")!;
   readonly popupLayer = document.querySelector<HTMLElement>("#se-popup-layer")!;
+  readonly backdropLayer = document.querySelector<HTMLElement>("#se-backdrop-layer")!;
   readonly cursor = document.querySelector<SVGElement>("#se-cursor")!;
   readonly ripple = document.querySelector<HTMLElement>("#se-ripple")!;
   timeline?: Timeline;
@@ -182,8 +269,10 @@ class TutorialController {
   #rendered: Record<string, string> = {};
   #positions = new Map<string, {x: number; y: number}>();
   #cursor = {x: 0, y: 0};
-  #segment = -1;
-  #segmentFrom = {x: 0, y: 0};
+  /** Where the cursor rests before the first scripted move. */
+  #home = {x: 0, y: 0};
+  /** Logical editor size: the browser window the StreamElements dialogs center in. */
+  #editorSize = {width: 0, height: 0};
 
   setup(options: SetupOptions): void {
     this.timeline = options.timeline;
@@ -197,6 +286,7 @@ class TutorialController {
     this.editor.style.height = `${height}px`;
     this.editor.style.transform = `scale(${this.scale})`;
     const chatWidth = chrome.chat.enabled ? 340 : 0;
+    this.#editorSize = {width, height};
     this.chat.style.display = chrome.chat.enabled ? "flex" : "none";
     this.canvas.style.right = `${chatWidth}px`;
     const canvasWidth = width - 320 - chatWidth;
@@ -220,8 +310,8 @@ class TutorialController {
       `<span class="se-btn ghost" data-target="preview">Preview</span>`,
       `<span class="se-btn raised" data-target="save">Save</span>`
     ].join("");
-    this.#cursor = {x: options.output.width * 0.62, y: options.output.height * 0.58};
-    this.#segment = -1;
+    this.#home = {x: options.output.width * 0.62, y: options.output.height * 0.58};
+    this.#cursor = {...this.#home};
     this.#positions.clear();
     this.#rendered = {};
   }
@@ -243,7 +333,8 @@ class TutorialController {
       chatFocus: false,
       chat: [],
       pressed: null,
-      toast: null
+      toast: null,
+      colorPicker: null
     };
     for (const field of timeline.fields) {
       const value = state.values[field.id];
@@ -269,7 +360,8 @@ class TutorialController {
         "chatDraft",
         "chatFocus",
         "pressed",
-        "toast"
+        "toast",
+        "colorPicker"
       ] as const) {
         if (key in patch) (state as unknown as Record<string, unknown>)[key] = patch[key];
       }
@@ -317,7 +409,7 @@ class TutorialController {
       }
       case "colorpicker": {
         const swatch = state.swatches[field.id] ?? "transparent";
-        return `<div class="se-field color${focused ? " focused" : ""}"><div class="swatch-wrap"><div class="swatch" style="background:${attr(swatch)}"></div></div>`
+        return `<div class="se-field color${focused ? " focused" : ""}"><div class="swatch-wrap" data-target="swatch:${attr(field.id)}"><div class="swatch" style="background:${attr(swatch)}"></div></div>`
           + `<div class="col"><div class="flabel">${escapeHtml(field.label)}</div><div class="value" ${target}>${shown}${caret}</div></div></div>`;
       }
       case "image-input":
@@ -419,6 +511,131 @@ class TutorialController {
     return `<div class="se-select-menu" style="left:${left}px;top:${Math.max(60, top)}px">${options.join("")}</div>`;
   }
 
+  /** Open fraction of the md-dialog: grows from the swatch on open and shrinks back on close. */
+  #pickerOpen(picker: ColorPicker, timeMs: number): number {
+    const opening = MD_EASE(clamp((timeMs - picker.openedAtMs) / PICKER_ANIMATION_MS, 0, 1));
+    const closing = picker.closedAtMs === null ? 1 : 1 - MD_EASE(clamp((timeMs - picker.closedAtMs) / PICKER_ANIMATION_MS, 0, 1));
+    return Math.min(opening, closing);
+  }
+
+  /**
+   * The fully open dialog in editor pixels: $mdDialog centers it in the window, scaled down
+   * only when the editor is too small to show it whole.
+   */
+  #pickerFrame(): {fit: number; center: {x: number; y: number}; left: number; top: number; right: number; bottom: number} {
+    const {width, height} = this.#editorSize;
+    const fit = Math.min(1, (width - 2 * PICKER_MARGIN) / PICKER_WIDTH, (height - 2 * PICKER_MARGIN) / PICKER_HEIGHT);
+    const center = {x: width / 2, y: height / 2};
+    const half = {x: (fit * PICKER_WIDTH) / 2, y: (fit * PICKER_HEIGHT) / 2};
+    return {fit, center, left: center.x - half.x, top: center.y - half.y, right: center.x + half.x, bottom: center.y + half.y};
+  }
+
+  /**
+   * Draws the md-color-picker dialog that StreamElements opens from a colorpicker swatch:
+   * centered in the editor window over a #212121 backdrop that dims the whole window
+   * (the toolbar spans the chat panel too), scaled down only when the editor is too small
+   * to show it whole, so every picker target stays on the stage.
+   */
+  #pickerHtml(state: UiState, timeMs: number): {backdrop: string; dialog: string} {
+    const picker = state.colorPicker;
+    if (!picker) return {backdrop: "", dialog: ""};
+    const {width, height} = this.#editorSize;
+    const {fit, center} = this.#pickerFrame();
+    const swatchKey = `picker-origin:${picker.field}`;
+    const swatch = this.#rect(`swatch:${picker.field}`);
+    if (swatch) {
+      const editor = this.editor.getBoundingClientRect();
+      this.#positions.set(swatchKey, {
+        x: (swatch.left + swatch.width / 2 - editor.left) / this.scale,
+        y: (swatch.top + swatch.height / 2 - editor.top) / this.scale
+      });
+    }
+    const origin = this.#positions.get(swatchKey) ?? center;
+    const open = this.#pickerOpen(picker, timeMs);
+    const backdropIn = CSS_EASE(clamp((timeMs - picker.openedAtMs) / PICKER_BACKDROP_IN_MS, 0, 1));
+    const backdropOut = picker.closedAtMs === null ? 1 : 1 - CSS_EASE(clamp((timeMs - picker.closedAtMs) / PICKER_ANIMATION_MS, 0, 1));
+    const backdrop = `<div class="se-cp-backdrop" style="width:${px(width)};height:${px(height)};`
+      + `opacity:${(PICKER_BACKDROP_OPACITY * Math.min(backdropIn, backdropOut)).toFixed(4)}"></div>`;
+    const scaleX = fit * (0.07 + 0.93 * open);
+    const scaleY = fit * (0.05 + 0.95 * open);
+    const transform = open === 1 && fit === 1
+      ? "none"
+      : `translate(${px((origin.x - center.x) * (1 - open))}, ${px((origin.y - center.y) * (1 - open))}) scale(${scaleX.toFixed(5)}, ${scaleY.toFixed(5)})`;
+
+    const valueIn = clamp((timeMs - picker.openedAtMs) / 250, 0, 1);
+    const value = `<div class="se-cp-value" style="top:${px(-15 * (1 - MD_EASE(valueIn)))};opacity:${CSS_EASE_OUT(valueIn).toFixed(4)}">`
+      + `<span class="${picker.selected ? "sel" : ""}">${escapeHtml(picker.text)}</span></div>`;
+    const types = PICKER_TYPES.map((type) =>
+      `<span class="${type.id === picker.tab ? "on" : ""}" style="left:${type.left}px;width:${type.width}px">${type.label}</span>`).join("");
+    const activeType = PICKER_TYPES.find((type) => type.id === picker.tab)!;
+    const head = `<div class="se-cp-head${picker.darkText ? " dark" : ""}"><div class="se-cp-result" style="background:${attr(picker.css)}"></div>`
+      + `${value}<div class="se-cp-types">${types}<i class="ink" style="left:${activeType.left}px;width:${activeType.width}px"></i></div></div>`;
+
+    const hue = Number(picker.h.toFixed(3));
+    const {r, g, b} = picker.rgb;
+    const spectrumMarker = `left:${px(clamp(PICKER_SIZE * picker.s - 5.5, -5, 249.5))};top:${px(clamp(PICKER_SIZE * (1 - picker.v) - 5.5, -5, 249.5))}`;
+    const grab = picker.grab
+      ? `<i class="grab" data-target="picker:grab" style="left:${px(PICKER_SIZE * picker.grab.s - 0.5)};top:${px(PICKER_SIZE * (1 - picker.grab.v) - 0.5)}"></i>`
+      : "";
+    const stripMarker = (fraction: number) => `top:${px(clamp(PICKER_SIZE * (1 - fraction) - 2.5, -2, 251.5))}`;
+    const body = `<div class="se-cp-body">`
+      + `<div class="se-cp-spectrum" data-cursor="crosshair" style="background:linear-gradient(to bottom, rgba(0,0,0,0), #000), linear-gradient(to right, #fff, rgba(255,255,255,0)), hsl(${hue}, 100%, 50%)">`
+      + `<div class="mk" data-target="picker:spectrum" style="${spectrumMarker}"></div>${grab}</div>`
+      + `<div class="se-cp-hue" data-cursor="crosshair"><div class="mk" data-target="picker:hue" style="${stripMarker(picker.h / 360)}"></div></div>`
+      + `<div class="se-cp-alpha" data-cursor="crosshair"><div class="fill" style="background:linear-gradient(to bottom, rgba(${r},${g},${b},1) 1%, rgba(${r},${g},${b},0) 99.9%)"></div>`
+      + `<div class="mk" data-target="picker:alpha" style="${stripMarker(picker.a)}"></div></div></div>`;
+    const panes = `<div class="se-cp-panes">${PICKER_PANES.map((name, index) =>
+      `<span class="${index === 0 ? "on" : ""}" style="left:${px(index * 69.8)}">${icon(name)}<b>…</b></span>`).join("")}<i class="ink"></i></div>`;
+
+    const hover = picker.hoverAtMs === null ? 0 : MD_EASE(clamp((timeMs - picker.hoverAtMs) / 400, 0, 1));
+    let ink = "";
+    if (picker.selectAtMs !== null && timeMs >= picker.selectAtMs) {
+      const since = timeMs - picker.selectAtMs;
+      const grow = CSS_EASE_OUT(clamp(since / 450, 0, 1));
+      const fade = since <= 90 ? 1 : 1 - clamp((since - 90) / 300, 0, 1);
+      ink = `<i class="ink" style="transform:translate(-50%, -50%) scale(${grow.toFixed(4)});opacity:${(0.1 * fade).toFixed(4)}"></i>`;
+    }
+    const actions = `<div class="se-cp-actions"><span class="se-cp-btn" style="left:8px">Cancel</span>`
+      + `<span class="se-cp-btn" style="left:181.5px;background:rgba(158,158,158,${(0.2 * hover).toFixed(4)})">Select${ink}</span></div>`;
+    // The cursor aims at a fixed anchor over the open dialog's Select button, so it stays where it
+    // clicked while the dialog shrinks back into the swatch.
+    const select = {x: SELECT_BUTTON.x - PICKER_WIDTH / 2, y: SELECT_BUTTON.y - PICKER_HEIGHT / 2};
+    const anchor = `<i class="se-cp-anchor" data-target="picker:select" style="left:${px(center.x + fit * select.x)};top:${px(center.y + fit * select.y)};`
+      + `width:${px(fit * SELECT_BUTTON.width)};height:${px(fit * SELECT_BUTTON.height)}"></i>`;
+
+    const dialog = `<div class="se-cp" style="left:${px(center.x - PICKER_WIDTH / 2)};top:${px(center.y - PICKER_HEIGHT / 2)};`
+      + `transform:${transform};opacity:${open.toFixed(4)}">${head}${body}${panes}${actions}</div>${anchor}`;
+    return {backdrop, dialog};
+  }
+
+  /**
+   * Keeps a caption clear of the open color picker. The dialog stays centered as in the real
+   * editor; a caption that would run under it (or into its shadow) slides below it, or above it
+   * when only that fits, in step with the dialog's open and close animation. Layout offsets
+   * ignore transforms, so the shift depends only on the caption text and the time.
+   */
+  #placeCaption(state: UiState, timeMs: number): void {
+    let shift = 0;
+    const picker = state.colorPicker;
+    if (picker && state.caption) {
+      const dialog = this.#pickerFrame();
+      const width = this.caption.offsetWidth;
+      const height = this.caption.offsetHeight;
+      const left = this.canvas.offsetLeft + this.caption.offsetLeft - width / 2;
+      const top = this.canvas.offsetTop + this.caption.offsetTop;
+      const crosses = left < dialog.right && left + width > dialog.left
+        && top < dialog.bottom + CAPTION_DIALOG_GAP && top + height > dialog.top - CAPTION_DIALOG_GAP;
+      if (crosses) {
+        const below = dialog.bottom + CAPTION_DIALOG_GAP;
+        const above = dialog.top - CAPTION_DIALOG_GAP - height;
+        if (below + height <= this.#editorSize.height - CAPTION_EDGE) shift = below - top;
+        else if (above >= this.canvas.offsetTop + CAPTION_EDGE) shift = above - top;
+      }
+      shift *= this.#pickerOpen(picker, timeMs);
+    }
+    this.caption.style.transform = shift === 0 ? "" : `translate(-50%, ${px(shift)})`;
+  }
+
   #chatHtml(state: UiState, timeMs: number): string {
     const chrome = this.timeline!.chrome;
     const lines = state.chat.slice(-40).map((line) => {
@@ -456,7 +673,21 @@ class TutorialController {
     return point;
   }
 
-  #placeCursor(timeMs: number): void {
+  /**
+   * md-color-picker's canvases use a crosshair cursor. Real drags hide the pointer
+   * (cursor: none); the replica keeps a small crosshair with an open center visible so
+   * viewers can follow the drag and still see the marker under it.
+   */
+  #cursorShape(state: UiState, timeMs: number): keyof typeof CURSOR_HOTSPOTS {
+    const picker = state.colorPicker;
+    if (!picker || this.#pickerOpen(picker, timeMs) < 1) return "arrow";
+    if (picker.drag) return "crosshair";
+    const stage = this.stage.getBoundingClientRect();
+    const hit = document.elementFromPoint(stage.left + this.#cursor.x, stage.top + this.#cursor.y);
+    return hit?.closest("[data-cursor='crosshair']") ? "crosshair" : "arrow";
+  }
+
+  #placeCursor(state: UiState, timeMs: number): void {
     const timeline = this.timeline!;
     let index = -1;
     for (let candidate = 0; candidate < timeline.moves.length; candidate += 1) {
@@ -465,28 +696,35 @@ class TutorialController {
     }
     if (index >= 0) {
       const move = timeline.moves[index]!;
-      if (index !== this.#segment) {
-        this.#segment = index;
-        this.#segmentFrom = {...this.#cursor};
-      }
+      // Between moves the cursor rests on the previous target, so a move starts from that target
+      // as laid out at this frame, not from whatever frame was rendered last: a marker that was
+      // mid-drag in the previous frame has already settled. Frames stay a function of time at any fps.
+      const previous = index > 0 ? timeline.moves[index - 1]! : undefined;
+      const from = previous ? this.#resolve(previous.to) ?? this.#cursor : this.#home;
       const destination = this.#resolve(move.to) ?? this.#cursor;
       const span = move.endMs - move.startMs;
       const progress = span <= 0 ? 1 : Math.min(1, Math.max(0, (timeMs - move.startMs) / span));
       const eased = ease(progress);
-      const arc = Math.sin(Math.PI * progress) * Math.min(40, Math.hypot(destination.x - this.#segmentFrom.x, destination.y - this.#segmentFrom.y) * 0.08);
-      this.#cursor = {
-        x: this.#segmentFrom.x + (destination.x - this.#segmentFrom.x) * eased,
-        y: this.#segmentFrom.y + (destination.y - this.#segmentFrom.y) * eased - arc * this.scale
-      };
+      const arc = Math.sin(Math.PI * progress) * Math.min(40, Math.hypot(destination.x - from.x, destination.y - from.y) * 0.08);
+      this.#cursor = progress >= 1
+        ? {...destination}
+        : {x: from.x + (destination.x - from.x) * eased, y: from.y + (destination.y - from.y) * eased - arc * this.scale};
+    } else {
+      this.#cursor = {...this.#home};
     }
     const lastClick = [...timeline.clicks].reverse().find((clickMs) => clickMs <= timeMs);
     const sinceClick = lastClick === undefined ? Infinity : timeMs - lastClick;
     const pressScale = sinceClick < 140 ? 0.86 : 1;
-    const size = 28 * this.scale;
+    const shape = this.#cursorShape(state, timeMs);
+    const size = CURSOR_SIZES[shape] * this.scale;
+    const hotspot = CURSOR_HOTSPOTS[shape];
+    this.cursor.dataset.shape = shape;
     this.cursor.style.width = `${size}px`;
-    this.cursor.style.transformOrigin = `${(5 * size) / 24}px ${(2.5 * size) / 24}px`;
+    this.cursor.style.transformOrigin = `${(hotspot.x * size) / 24}px ${(hotspot.y * size) / 24}px`;
     this.cursor.style.height = `${size}px`;
-    this.cursor.style.transform = `translate(${this.#cursor.x - 5 * this.scale * 28 / 24}px, ${this.#cursor.y - 2.5 * this.scale * 28 / 24}px) scale(${pressScale})`;
+    this.cursor.style.transform = `translate(${this.#cursor.x - (hotspot.x * size) / 24}px, ${this.#cursor.y - (hotspot.y * size) / 24}px) scale(${pressScale})`;
+    // While a picker marker is dragged, the click ripple is drawn as a ring so the marker shows through it.
+    this.ripple.classList.toggle("ring", Boolean(state.colorPicker?.drag));
     if (sinceClick < 420) {
       const progress = sinceClick / 420;
       this.ripple.style.opacity = String(0.9 * (1 - progress));
@@ -503,7 +741,11 @@ class TutorialController {
     this.#update("bottom", this.bottom, this.#bottomHtml(state));
     if (this.timeline.chrome.chat.enabled) this.#update("chat", this.chat, this.#chatHtml(state, timeMs));
     this.#update("menu", this.menuLayer, this.#menuHtml(state));
-    this.#update("select", this.popupLayer, this.#selectHtml(state));
+    const picker = this.#pickerHtml(state, timeMs);
+    this.#update("backdrop", this.backdropLayer, picker.backdrop);
+    this.#update("popup", this.popupLayer, this.#selectHtml(state) + picker.dialog);
+    // Captions annotate the video, so they stay readable above the picker backdrop; #placeCaption keeps them off the dialog.
+    this.caption.classList.toggle("above-modal", state.colorPicker !== null);
     const box = state.selected
       ? `<span class="dims">${this.#dims()}</span>`
       : `<span class="tag">${escapeHtml(this.timeline.chrome.layerName)}</span>`;
@@ -511,13 +753,14 @@ class TutorialController {
     this.widgetBox.classList.toggle("selected", state.selected);
     this.caption.style.display = state.caption ? "block" : "none";
     this.#update("caption", this.caption, state.caption ? escapeHtml(state.caption) : "");
+    this.#placeCaption(state, timeMs);
     this.toast.style.display = state.toast ? "block" : "none";
     this.#update("toast", this.toast, state.toast ? escapeHtml(state.toast) : "");
     for (const target of ["preview", "save"]) {
       const element = this.toolbar.querySelector<HTMLElement>(`[data-target="${target}"]`);
       element?.classList.toggle("pressed", state.pressed === target);
     }
-    this.#placeCursor(timeMs);
+    this.#placeCursor(state, timeMs);
   }
 
   #dims(): string {

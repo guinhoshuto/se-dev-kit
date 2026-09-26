@@ -2,7 +2,9 @@
  * Capture host variant that frames the widget inside a replica of the StreamElements
  * overlay editor. Every visual state is driven by `__SWS_TUTORIAL__.render(timeMs)`;
  * there are no CSS transitions, so each frame is a pure function of the timeline.
- * Colors and metrics were measured from the live editor on 2026-09-25.
+ * Colors and metrics were measured from the live editor on 2026-09-25. The color picker
+ * dialog replicates md-color-picker 0.2.6 as bundled by the editor (Angular Material 1.1.20,
+ * the editor's own CSS), measured in a headless reproduction on 2026-09-26 rather than live.
  */
 export function renderTutorialPage(frameOrigin: string): string {
   const safeFrameOrigin = frameOrigin.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
@@ -33,12 +35,15 @@ export function renderTutorialPage(frameOrigin: string): string {
         <div class="se-toast" id="se-toast"></div>
       </section>
       <aside class="se-chat" id="se-chat"></aside>
+      <div class="se-backdrop-layer" id="se-backdrop-layer"></div>
       <div class="se-popup-layer" id="se-popup-layer"></div>
     </div>
     <div class="se-cursor-layer" id="se-cursor-layer">
       <div class="se-ripple" id="se-ripple"></div>
-      <svg class="se-cursor" id="se-cursor" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M5 2.5v17.2l4.3-4.1 2.8 6.6 3-1.3-2.8-6.5h6z" fill="#000" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/>
+      <svg class="se-cursor" id="se-cursor" viewBox="0 0 24 24" aria-hidden="true" data-shape="arrow">
+        <path class="arrow" d="M5 2.5v17.2l4.3-4.1 2.8 6.6 3-1.3-2.8-6.5h6z" fill="#000" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/>
+        <path class="cross" d="M12 .5v5.3M12 18.2v5.3M.5 12h5.3M18.2 12h5.3" fill="none" stroke="#fff" stroke-width="3.2"/>
+        <path class="cross" d="M12 1.2v4.6M12 18.2v4.6M1.2 12h4.6M18.2 12h4.6" fill="none" stroke="#000" stroke-width="1.3"/>
       </svg>
     </div>
   </main>
@@ -126,8 +131,10 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .se-field.dropdown svg.i { position: absolute; right: 2px; top: 3px; color: var(--se-muted); }
 .se-field.color { padding-left: 16px; display: flex; gap: 4px; align-items: flex-end; }
 .se-field.color .swatch-wrap { width: 24px; height: 24px; border-radius: 50%; margin-bottom: 4px; overflow: hidden; flex: none;
-  background: linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd),linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd);
-  background-size: 8px 8px; background-position: 0 0,4px 4px; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+  border: 2px solid #fff; background-color: #fff;
+  background-image: linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd),linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd);
+  background-size: 8px 8px; background-position: 0 0,4px 4px;
+  box-shadow: 0 3px 1px -2px rgba(0,0,0,.14), 0 2px 2px 0 rgba(0,0,0,.098), 0 1px 5px 0 rgba(0,0,0,.084); }
 .se-field.color .swatch { width: 100%; height: 100%; }
 .se-field.color .col { flex: 1; min-width: 0; }
 .se-field.color .value { width: 252px; }
@@ -238,10 +245,64 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .se-chat .actions { display: flex; justify-content: flex-end; margin-top: 10px; }
 .se-chat .send { height: 30px; padding: 0 10px; border-radius: 4px; background: #9147ff; color: #fff; font-size: 13px; font-weight: 600; line-height: 30px; }
 .se-chat .send.pressed { background: #772ce8; }
-.se-popup-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 8; }
+.se-backdrop-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 8; }
+.se-caption.above-modal { z-index: 9; }
+.se-popup-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 10; }
+.se-cp-backdrop { position: absolute; left: 0; top: 0; background: #212121; }
+.se-cp {
+  position: absolute; width: 347px; height: 445px; background: #fff; color: rgba(0,0,0,.87); border-radius: 4px; overflow: hidden;
+  transform-origin: 50% 50%;
+  box-shadow: 0 7px 8px -4px rgba(0,0,0,.2), 0 13px 19px 2px rgba(0,0,0,.14), 0 5px 24px 4px rgba(0,0,0,.12);
+}
+.se-cp-head, .se-cp-alpha {
+  background-color: #fff;
+  background-image: linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd),linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd);
+  background-size: 8px 8px; background-position: 0 0,4px 4px;
+}
+.se-cp-head { position: absolute; left: 0; top: 0; width: 347px; height: 91px; overflow: hidden; color: #eee; }
+.se-cp-head.dark { color: #333; }
+.se-cp-result { position: absolute; inset: 0; }
+.se-cp-value { position: absolute; left: 0; width: 347px; height: 63px; display: grid; place-items: center; font-size: 18px; font-weight: 400;
+  letter-spacing: 1px; white-space: nowrap; }
+.se-cp-value span { display: inline-block; line-height: 24px; }
+.se-cp-value .sel { background: rgba(128,188,254,.6); }
+.se-cp-types { position: absolute; left: 0; top: 63px; width: 347px; height: 28px; overflow: hidden; }
+.se-cp-types span { position: absolute; top: 0; height: 28px; padding-top: 2px; text-align: center; font-size: 13px; line-height: 24px; font-weight: 500;
+  letter-spacing: 1.3px; text-transform: uppercase; background: rgba(255,255,255,.25); }
+.se-cp-head.dark .se-cp-types span { background: rgba(0,0,0,.25); }
+.se-cp-types span.on, .se-cp-head.dark .se-cp-types span.on { background: transparent; font-weight: 600; }
+.se-cp-types .ink { position: absolute; bottom: 0; height: 2px; background: rgba(255,255,255,.5); }
+.se-cp-head.dark .se-cp-types .ink { background: rgba(0,0,0,.5); }
+.se-cp-body { position: absolute; left: 8px; top: 99px; width: 331px; height: 255px; }
+.se-cp-spectrum, .se-cp-hue, .se-cp-alpha { position: absolute; top: 0; height: 255px; overflow: hidden; }
+.se-cp-spectrum { left: 0; width: 255px; }
+.se-cp-hue { left: 263px; width: 30px;
+  background: linear-gradient(to bottom, #f00 1%, #f0f 16.7%, #00f 33.3%, #0ff 50%, #0f0 66.6%, #ff0 82.8%, #f00 99.9%); }
+.se-cp-alpha { left: 301px; width: 30px; }
+.se-cp-alpha .fill { position: absolute; inset: 0; }
+.se-cp .mk { position: absolute; border: 2px solid #fff; box-shadow: 0 0 2px 0 rgba(0,0,0,.5); }
+.se-cp-spectrum .mk { width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 2px 0 rgba(0,0,0,.5), inset 0 0 2px 0 rgba(0,0,0,.5); }
+.se-cp-hue .mk, .se-cp-alpha .mk { left: 0; width: 100%; height: 5px; border-left: 0; border-right: 0; }
+.se-cp-spectrum .grab { position: absolute; width: 1px; height: 1px; }
+.se-cp-panes { position: absolute; left: 0; top: 361px; width: 347px; height: 36px; overflow: hidden; }
+.se-cp-panes span { position: absolute; top: 0; width: 69.8px; height: 36px; background: rgba(0,0,0,.075); color: rgba(0,0,0,.54); }
+.se-cp-panes span.on { background: #fff; color: var(--se-blue); }
+.se-cp-panes svg.i { position: absolute; left: 24px; top: 7.8px; }
+.se-cp-panes b { position: absolute; left: 56px; top: 7px; font-size: 13px; line-height: 24px; font-weight: 400; letter-spacing: 0; color: rgba(0,0,0,.54); }
+.se-cp-panes span.on b { color: var(--se-blue); }
+.se-cp-panes .ink { position: absolute; left: 0; bottom: 0; width: 70px; height: 2px; background: var(--se-blue); }
+.se-cp-actions { position: absolute; left: 0; top: 397px; width: 347px; height: 48px; }
+.se-cp-btn { position: absolute; top: 6px; width: 157.5px; height: 36px; border-radius: 20px; overflow: hidden; text-align: center;
+  font-size: 12px; line-height: 36px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: rgba(0,0,0,.87); }
+.se-cp-anchor { position: absolute; }
+.se-cp-btn .ink { position: absolute; left: 50%; top: 50%; width: 162px; height: 162px; border-radius: 50%; background: #000; }
 .se-cursor-layer { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
 .se-cursor { position: absolute; left: 0; top: 0; width: 28px; height: 28px; transform-origin: 5px 2.5px;
   filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35)); }
+.se-cursor .cross { display: none; }
+.se-cursor[data-shape="crosshair"] .arrow { display: none; }
+.se-cursor[data-shape="crosshair"] .cross { display: inline; }
 .se-ripple { position: absolute; left: 0; top: 0; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%;
   background: rgba(87,135,220,.35); border: 2px solid rgba(87,135,220,.8); opacity: 0; }
+.se-ripple.ring { background: transparent; }
 `;

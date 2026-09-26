@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import {StudioError} from "../shared/errors.js";
 import {DEFAULT_FIXED_TIME} from "../scenarios/state.js";
+import {cssColor, formatColor, hsvToRgb, needsDarkText, parseColor, rgbToHsv, type Rgba} from "./color.js";
 
 /** Internal cursor targets extend the author-facing ones with transient menu entries. */
 export type TimelineTarget =
@@ -18,7 +19,12 @@ export type TimelineTarget =
   | `section:${string}`
   | `menu:${string}`
   | `menu-option:${string}:${number}`
-  | `option:${string}:${number}`;
+  | `option:${string}:${number}`
+  | `swatch:${string}`
+  | `picker:${TutorialPickerTarget}`;
+
+/** Parts of the md-color-picker dialog the cursor can reach; `grab` is where a spectrum drag starts. */
+export type TutorialPickerTarget = "hue" | "spectrum" | "alpha" | "grab" | "select";
 
 export interface TutorialChatLine {
   id: string;
@@ -43,6 +49,37 @@ export interface TutorialUiPatch {
   chatAppend?: TutorialChatLine;
   pressed?: string | null;
   toast?: string | null;
+  colorPicker?: TutorialColorPicker | null;
+}
+
+/**
+ * Full state of the open md-color-picker dialog at a patch time. The host draws the
+ * dialog from it and derives the open/close animation from `openedAtMs`/`closedAtMs`.
+ */
+export interface TutorialColorPicker {
+  field: string;
+  /** Hue in degrees; 360 is the top of the hue strip. */
+  h: number;
+  s: number;
+  v: number;
+  a: number;
+  rgb: {r: number; g: number; b: number};
+  /** Header value text, in the notation of the requested value. */
+  text: string;
+  /** Header background. */
+  css: string;
+  /** md-color-picker's `dark` class: dark header text on a light color. */
+  darkText: boolean;
+  tab: "hex" | "rgb";
+  /** The header value is focused and selected, as right after opening. */
+  selected: boolean;
+  drag: "hue" | "spectrum" | "alpha" | null;
+  /** Spectrum point (saturation, value) the cursor aims at before pressing. */
+  grab: {s: number; v: number} | null;
+  hoverAtMs: number | null;
+  selectAtMs: number | null;
+  openedAtMs: number;
+  closedAtMs: number | null;
 }
 
 export interface TutorialCursorMove {
@@ -94,6 +131,24 @@ const DEFAULT_TYPING_MS = 70;
 const SLIDER_DRAG_MS = 900;
 const SLIDER_SAMPLE_MS = 33;
 const DEFAULT_VIEWER = "StudioViewer";
+/* md-color-picker timing: $mdDialog opens and closes in 400ms; the rest paces a person. */
+const PICKER_CLICK_MS = 90;
+const PICKER_OPEN_MS = 400;
+/** Pause on the open dialog so viewers can read the current value selected in its header. */
+const PICKER_READ_MS = 500;
+const PICKER_CLOSE_MS = 400;
+const PICKER_MOVE_MS = 450;
+const PICKER_HOLD_MS = 150;
+const PICKER_REVIEW_MS = 300;
+/** The cursor rests on Select, with its hover background fading in, before pressing it. */
+const PICKER_HOVER_MS = 200;
+const PICKER_DRAG_MIN_MS = 350;
+const PICKER_DRAG_MAX_MS = 900;
+const PICKER_DRAG_MS_PER_PX = 3.5;
+/** A spectrum drag starts this far from its target, as a person clicks near the color and fine-tunes. */
+const PICKER_APPROACH_PX = 36;
+/** Canvas size of md-color-picker's spectrum, hue, and alpha strips. */
+const PICKER_SIZE = 255;
 
 export interface EmulateMenuEntry {
   kind: TutorialEmulateKind | "emote" | "charity" | "other";
@@ -122,7 +177,6 @@ const TEXT_TYPES = new Set([
   "textfield",
   "textarea",
   "number",
-  "colorpicker",
   "googleFont",
   "fontpicker",
   "image-input",
@@ -277,7 +331,30 @@ function coerceFieldValue(field: TutorialPanelField, value: JsonPrimitive): Json
     }
     return value;
   }
+  if (field.type === "colorpicker") {
+    if (typeof value !== "string" || !parseColor(value)) {
+      throw new StudioError(
+        "TUTORIAL_FIELD_VALUE_INVALID",
+        `Color picker "${field.id}" expects a color; received ${JSON.stringify(value)}.`,
+        "Use #rgb, #rgba, #rrggbb, #rrggbbaa, rgb(r, g, b), or rgba(r, g, b, a), for example \"#ff7ad9\"."
+      );
+    }
+    return value;
+  }
   return value === null ? "" : String(value);
+}
+
+function easeInOutQuad(progress: number): number {
+  return progress < 0.5 ? 2 * progress * progress : 1 - (-2 * progress + 2) ** 2 / 2;
+}
+
+/** Linear interpolation that lands exactly on `to` at the end, so drags finish on the target parameters. */
+function lerp(from: number, to: number, progress: number): number {
+  return progress >= 1 ? to : from + (to - from) * progress;
+}
+
+function pickerDragMs(distancePx: number): number {
+  return Math.min(PICKER_DRAG_MAX_MS, Math.max(PICKER_DRAG_MIN_MS, Math.round(250 + distancePx * PICKER_DRAG_MS_PER_PX)));
 }
 
 function panelFields(fields: NormalizedField[]): TutorialPanelField[] {
@@ -381,6 +458,127 @@ export function compileTutorial(options: {
       patch(t, apply(text.slice(0, index)));
     }
   };
+  /**
+   * Edits a colorpicker the way a person does in md-color-picker: click the swatch,
+   * drag the hue strip, drag in the saturation/brightness square (and the alpha strip
+   * when opacity changes), then press Select. Positions come from HSV parameters and the
+   * last drag sample is the exact target, so the committed value is the requested string.
+   */
+  const pickColor = (field: TutorialPanelField, value: string) => {
+    const current = values[field.id];
+    const start: Rgba = (typeof current === "string" ? parseColor(current) : undefined) ?? {r: 255, g: 255, b: 255, a: 1};
+    const goal = parseColor(value)!;
+    const from = rgbToHsv(start);
+    const to = rgbToHsv(goal);
+    let state: TutorialColorPicker = {
+      field: field.id,
+      h: from.h,
+      s: from.s,
+      v: from.v,
+      a: start.a,
+      rgb: {r: start.r, g: start.g, b: start.b},
+      text: formatColor(start, value),
+      css: cssColor(start),
+      darkText: needsDarkText(start),
+      tab: value.startsWith("#") ? "hex" : "rgb",
+      selected: true,
+      drag: null,
+      grab: null,
+      hoverAtMs: null,
+      selectAtMs: null,
+      openedAtMs: 0,
+      closedAtMs: null
+    };
+    const emit = (atMs: number, changes: Partial<TutorialColorPicker>) => {
+      state = {...state, ...changes};
+      if ("h" in changes || "s" in changes || "v" in changes || "a" in changes) {
+        const color: Rgba = {...hsvToRgb(state), a: state.a};
+        state = {
+          ...state,
+          rgb: {r: color.r, g: color.g, b: color.b},
+          text: formatColor(color, value),
+          css: cssColor(color),
+          darkText: needsDarkText(color)
+        };
+      }
+      patch(atMs, {colorPicker: state});
+    };
+    const drag = (distancePx: number, at: (progress: number) => Partial<TutorialColorPicker>) => {
+      const durationMs = pickerDragMs(distancePx);
+      const samples = Math.max(1, Math.round(durationMs / SLIDER_SAMPLE_MS));
+      for (let index = 1; index <= samples; index += 1) {
+        const progress = index / samples;
+        emit(t + Math.round(progress * durationMs), at(index === samples ? 1 : easeInOutQuad(progress)));
+      }
+      t += durationMs;
+      emit(t, {drag: null});
+      t += PICKER_HOLD_MS;
+    };
+
+    const swatch = `swatch:${field.id}` as const;
+    move(swatch);
+    press(swatch);
+    t += PICKER_CLICK_MS;
+    emit(t, {openedAtMs: t});
+    t += PICKER_OPEN_MS + PICKER_READ_MS;
+
+    // Hue first: the spectrum keeps its marker and repaints under the new hue.
+    let goalHue = to.s > 0 && to.v > 0 ? to.h : from.h;
+    if (goalHue === 0 && from.h > 180) goalHue = 360; // red sits at both ends of the strip; take the nearer one
+    const hueDistance = (Math.abs(goalHue - from.h) / 360) * PICKER_SIZE;
+    if (hueDistance >= 0.5) {
+      move("picker:hue", PICKER_MOVE_MS);
+      press("picker:hue");
+      emit(t, {drag: "hue", selected: false});
+      drag(hueDistance, (progress) => ({h: lerp(from.h, goalHue, progress)}));
+    }
+
+    const svDistance = Math.hypot((to.s - from.s) * PICKER_SIZE, (to.v - from.v) * PICKER_SIZE);
+    if (svDistance >= 0.5) {
+      const reach = Math.min(1, PICKER_APPROACH_PX / svDistance);
+      const grab = {s: to.s + (from.s - to.s) * reach, v: to.v + (from.v - to.v) * reach};
+      emit(t, {grab});
+      move("picker:grab", PICKER_MOVE_MS);
+      press("picker:grab");
+      emit(t, {drag: "spectrum", selected: false, grab: null, s: grab.s, v: grab.v});
+      move("picker:spectrum", 0);
+      drag(svDistance * reach, (progress) => ({s: lerp(grab.s, to.s, progress), v: lerp(grab.v, to.v, progress)}));
+    }
+
+    const alphaDistance = Math.abs(goal.a - start.a) * PICKER_SIZE;
+    if (alphaDistance >= 0.5) {
+      move("picker:alpha", PICKER_MOVE_MS);
+      press("picker:alpha");
+      emit(t, {drag: "alpha", selected: false});
+      drag(alphaDistance, (progress) => ({a: lerp(start.a, goal.a, progress)}));
+    }
+
+    // The grid cannot reach every color; the header settles on the exact requested string.
+    state = {
+      ...state,
+      h: goalHue,
+      s: to.s,
+      v: to.v,
+      a: goal.a,
+      rgb: {r: goal.r, g: goal.g, b: goal.b},
+      text: value,
+      css: cssColor(goal),
+      darkText: needsDarkText(goal)
+    };
+    emit(t, {});
+    t += PICKER_REVIEW_MS;
+
+    move("picker:select", PICKER_MOVE_MS);
+    emit(t, {hoverAtMs: t});
+    t += PICKER_HOVER_MS;
+    press("picker:select");
+    emit(t, {selectAtMs: t});
+    t += PICKER_CLICK_MS;
+    emit(t, {closedAtMs: t});
+    // md-color-picker writes the model when the close animation ends; ng-change then updates the widget.
+    t += PICKER_CLOSE_MS;
+    patch(t, {colorPicker: null, fieldValue: {id: field.id, value}});
+  };
   const lookupField = (id: string) => {
     const field = fields.find((candidate) => candidate.id === id);
     if (!field) {
@@ -444,6 +642,8 @@ export function compileTutorial(options: {
         } else if (field.type === "checkbox") {
           click(target, target);
           patch(t, {fieldValue: {id: field.id, value}});
+        } else if (field.type === "colorpicker") {
+          pickColor(field, value as string);
         } else if (TEXT_TYPES.has(field.type)) {
           click(target, target);
           patch(t, {focusField: field.id, selectAll: field.id});
