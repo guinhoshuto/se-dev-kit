@@ -8,9 +8,27 @@ import {assertSafeSnapshot, attribute, elements, rewriteCss, setAttribute, setTe
 import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/studio-ui/sample-media';
 import {deployedSampleMedia, sampleMediaDataUrl, type SampleMediaSource} from './sample-media';
 import {htmlRefusals, missingPlaceholderWarning, substitutePlaceholders, substitutedHtmlError, hasPlaceholder} from '../src/config/placeholders';
-import {isGoogleFontsHost} from '../src/runtime/google-fonts-url';
+import {canonicalGoogleFontsUrl, isGoogleFontsHost} from '../src/runtime/google-fonts-url';
 
-interface PreviewOptions {origin: string; sessionId: string; nonce: string; sceneId?: string; themeId?: string; fieldData?: JsonObject}
+/**
+ * Resolves a Google Fonts URL on the server for the preview (`cssForPreview` bound to the real
+ * store). A stylesheet comes back as CSS whose font files point at the public cache-only route.
+ */
+export type PreviewFontSource = (url: string, options: {sampleText: string; deadline: number}) => Promise<
+  | {status: 'ok'; kind: 'css'; css: string; partial: boolean}
+  | {status: 'ok'; kind: 'font'; href: string}
+  | {status: 'upstream-4xx'; httpStatus: number; message: string}
+  | {status: 'unavailable'; message: string}>;
+interface PreviewOptions {
+  origin: string; sessionId: string; nonce: string; sceneId?: string; themeId?: string; fieldData?: JsonObject;
+  /** Server-side Google Fonts. Without it, Google URLs stay as written and the frame's broker asks the editor. */
+  fonts?: PreviewFontSource;
+  /** Time for server-side Google Fonts; what is left unresolved goes to the frame's broker. Default 8 s. */
+  fontBudgetMs?: number;
+}
+/** The public, cache-only font route; the only path the preview CSP adds to `font-src`. */
+export const PREVIEW_FONT_PATH = '/api/fonts/v1/f/';
+const PREVIEW_FONT_BUDGET_MS = 8_000;
 function merge(...objects: (JsonObject | undefined)[]): JsonObject { return Object.assign({}, ...objects.filter(Boolean).map(value => structuredClone(value))); }
 
 const PREVIEW_ASSET_LIMIT = 3 * 1024 * 1024;
@@ -76,16 +94,48 @@ export async function previewDocument(prepared: PreparedSnapshot, store: ObjectS
   const resources = new Map<string, string>();
   const visiting = new Set<string>();
   let assetBytes = 0;
+  // Google Fonts captured into `_import/` by older revisions revert to their Google URL, so the page
+  // loads the proxy's bytes and never mixes the old capture with them.
+  const capturedGoogle = new Map(prepared.assets.filter(asset => asset.sourceUrl && canonicalGoogleFontsUrl(asset.sourceUrl).ok).map(asset => [asset.path, asset.sourceUrl!]));
+  const fontDeadline = Date.now() + (options.fontBudgetMs ?? PREVIEW_FONT_BUDGET_MS);
+  let fontSample = '';
+  const googleResults = new Map<string, Promise<{value: string; partial: boolean} | undefined>>();
+  /** A Google Fonts URL resolved on the server: data: CSS for a stylesheet, the public route for a font file. */
+  const google = (reference: string): Promise<{value: string; partial: boolean} | undefined> => {
+    const url = reference.trim().startsWith('//') ? `https:${reference.trim()}` : reference.trim();
+    const known = googleResults.get(url);
+    if (known) return known;
+    const pending = (async () => {
+      if (!options.fonts) { warn(`Google Fonts are resolved by the Studio's font proxy; this preview has none, so text uses a fallback font (${url}).`); return undefined; }
+      if (Date.now() >= fontDeadline) { warn(`Google Fonts took too long on the server; the preview asks for ${url} while it runs.`); return undefined; }
+      const result = await options.fonts(url, {sampleText: fontSample, deadline: fontDeadline});
+      if (result.status === 'ok') return result.kind === 'css' ? {value: `data:text/css;base64,${Buffer.from(result.css).toString('base64')}`, partial: result.partial} : {value: result.href, partial: false};
+      warn(result.status === 'upstream-4xx'
+        ? `Google Fonts refused ${url} (HTTP ${result.httpStatus}); that text stays in a fallback font, as in StreamElements.`
+        : `Google Fonts could not be loaded for ${url}: ${result.message}`);
+      return undefined;
+    })();
+    googleResults.set(url, pending);
+    return pending;
+  };
+  /** The Google URL a reference stands for: itself, or the source of a captured `_import/` copy. */
+  const googleSource = (reference: string, base = ''): string | undefined => {
+    const trimmed = reference.trim();
+    if (REMOTE_REFERENCE.test(trimmed)) {
+      let host = '';
+      try { host = new URL(trimmed, 'https://invalid.invalid/').hostname; } catch { host = ''; }
+      return isGoogleFontsHost(host) ? trimmed : undefined;
+    }
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('data:') || claimsSampleMediaScheme(trimmed) || hasPlaceholder(trimmed)) return undefined;
+    return capturedGoogle.get(posix.normalize(posix.join(base ? posix.dirname(base) : '', trimmed.split(/[?#]/, 1)[0]!)));
+  };
   const inline = async (reference: string, base = ''): Promise<string> => {
     if (!reference || reference.startsWith('#') || reference.startsWith('data:')) return reference;
     if (hasPlaceholder(reference)) { warn(`Preview left ${JSON.stringify(reference)} as written: its {{field}} has no value.`); return reference; }
+    const googleUrl = googleSource(reference, base);
+    if (googleUrl) return (await google(googleUrl))?.value ?? googleUrl;
     if (REMOTE_REFERENCE.test(reference.trim())) {
-      // Until the hosted font proxy reaches the preview, the page CSP blocks these and text uses a fallback font.
-      let host = '';
-      try { host = new URL(reference.trim(), 'https://invalid.invalid/').hostname; } catch { host = ''; }
-      warn(isGoogleFontsHost(host)
-        ? `Google Fonts are not loaded in the interactive preview yet; text uses a fallback font (${reference}).`
-        : `Preview blocks the remote resource a field value points to: ${reference}. Save the value as a captured asset to preview it.`);
+      warn(`Preview blocks the remote resource a field value points to: ${reference}. Save the value as a captured asset to preview it.`);
       return reference;
     }
     const sample = claimsSampleMediaScheme(reference) ? resources.get(reference) : undefined;
@@ -117,7 +167,8 @@ export async function previewDocument(prepared: PreparedSnapshot, store: ObjectS
   };
   // The effective state comes first: placeholders are substituted from it.
   const state = previewState(prepared.snapshot, options);
-  for (const asset of prepared.assets) await inline(asset.path);
+  fontSample = Object.values(state.fieldData).filter((value): value is string => typeof value === 'string' && !/^(?:[a-z][a-z\d+.-]*:|\/)/i.test(value)).join(' ').slice(0, 1000);
+  for (const asset of prepared.assets) if (!capturedGoogle.has(asset.path)) await inline(asset.path);
   // Embed only the samples the effective preview state and the scene fixture use, as verified data URLs.
   const sceneFixture = prepared.snapshot.fixtures.find(item => item.id === prepared.snapshot.scenes.find(scene => scene.id === options.sceneId)?.fixture);
   for (const reference of collectSampleMediaReferences({fieldData: state.fieldData, channel: state.channel, recents: state.recents, events: sceneFixture?.events ?? []})) {
@@ -139,7 +190,18 @@ export async function previewDocument(prepared: PreparedSnapshot, store: ObjectS
   if (refused.length) throw new Error(substitutedHtmlError(refused));
   const document = parse(html);
   for (const node of elements(document)) {
-    for (const name of ['src', 'poster', 'data-sws-src', ...(node.tagName === 'link' ? ['href'] : [])]) { const value = attribute(node, name); if (value) setAttribute(node, name, await inline(value)); }
+    const href = node.tagName === 'link' ? attribute(node, 'href') : undefined;
+    const googleHref = href ? googleSource(href) : undefined;
+    if (googleHref) {
+      // The frame's broker reports the original URL from `href` and never touches this link again.
+      const resolved = await google(googleHref);
+      setAttribute(node, 'href', resolved?.value ?? googleHref);
+      if (resolved) {
+        setAttribute(node, 'data-sws-original-href', googleHref);
+        if (resolved.partial) setAttribute(node, 'data-sws-font-partial', '');
+      }
+    }
+    for (const name of ['src', 'poster', 'data-sws-src', ...(node.tagName === 'link' && !googleHref ? ['href'] : [])]) { const value = attribute(node, name); if (value) setAttribute(node, name, await inline(value)); }
     const style = attribute(node, 'style');
     if (style) setAttribute(node, 'style', await inlineCss(style, 'An inline style attribute'));
     if (node.tagName === 'style') setText(node, await inlineCss(textContent(node), 'A <style> element'));
@@ -150,9 +212,10 @@ export async function previewDocument(prepared: PreparedSnapshot, store: ObjectS
     sessionId: options.sessionId, nonce: options.nonce, parentOrigin: origin,
     widgetScriptUrl, timeoutMs: prepared.snapshot.widget.ready?.timeoutMs ?? 10_000,
     ...(prepared.snapshot.widget.ready?.selector ? {readySelector: prepared.snapshot.widget.ready.selector} : {}),
-    assetMap: Object.fromEntries(resources)
+    assetMap: Object.fromEntries(resources),
+    fontBroker: true
   };
-  const csp = `default-src 'none'; script-src 'nonce-${options.nonce}' data: blob: ${origin}/engine/; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'`;
+  const csp = `default-src 'none'; script-src 'nonce-${options.nonce}' data: blob: ${origin}/engine/; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data: ${origin}${PREVIEW_FONT_PATH}; media-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'`;
   const bootstrap = `import {installFrameRuntime} from ${JSON.stringify(`${origin}/engine/runtime/frame.js`)};installFrameRuntime(${JSON.stringify(runtime).replaceAll('<', '\\u003c')});`;
   const cssUrl = `data:text/css;base64,${Buffer.from(css).toString('base64')}`;
   const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');

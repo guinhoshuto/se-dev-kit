@@ -1,7 +1,7 @@
 // Google Fonts proxy for trusted server code: bounded upstream fetch, append-only content-addressed
 // cache, short-lived negative cache for upstream 4xx, daily budget, and per-revision font locks.
 // This is the only code allowed to reach Google (AGENTS.md). Widget code never calls it directly.
-import {createHash} from 'node:crypto';
+import {createHash, createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
 import {parse as parseHtml} from 'parse5';
 import postcss from 'postcss';
 import type {ObjectStore, PreparedSnapshot, WidgetSnapshot} from './model';
@@ -9,7 +9,7 @@ import type {JsonObject} from '../src/types';
 import {substitutePlaceholders} from '../src/config/placeholders';
 import {previewState} from './preview';
 import {ConflictError} from './errors';
-import {ImmutableReadCache, mutateJson, readJson, writeJson} from './storage';
+import {BlobStore, ImmutableReadCache, LocalStore, mutateJson, readJson, writeJson} from './storage';
 import {attribute, elements, fetchPublicAsset, protectPlaceholders, PublicFetchError, textContent, type PublicLookup, type PublicTransport} from './importer';
 import {safeId} from './schema';
 import {
@@ -591,4 +591,220 @@ export async function resolveMissingFonts(urls: readonly string[], options: {
   };
   await Promise.all(Array.from({length: Math.min(EAGER_CONCURRENCY, queue.length)}, worker));
   return failures.sort((a, b) => (a.url < b.url ? -1 : 1));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Editor preview (stage 6): Google stylesheets become CSS whose font files point at the public,
+// cache-only route `/api/fonts/v1/f/<sha256>.<mac>.<ext>`. The route never contacts Google.
+
+export const FONT_FILE_ROUTE = '/api/fonts/v1/f/';
+export type FontFileExtension = 'woff2' | 'woff' | 'ttf' | 'otf';
+const FONT_FILE_EXTENSIONS: Readonly<Record<string, FontFileExtension>> = {'font/woff2': 'woff2', 'font/woff': 'woff', 'font/ttf': 'ttf', 'font/otf': 'otf'};
+const FONT_FILE_TYPES: Readonly<Record<FontFileExtension, string>> = {woff2: 'font/woff2', woff: 'font/woff', ttf: 'font/ttf', otf: 'font/otf'};
+const FONT_FILE_NAME = /^([0-9a-f]{64})\.([0-9a-f]{16})\.(woff2|woff|ttf|otf)$/;
+/**
+ * Key of the URL filter. The suffix is a filter, not a capability: it keeps random SHA-256 guesses
+ * from costing a Blob read on a public route. Created once per store, never overwritten.
+ */
+const FONT_URL_KEY = 'fonts/v1/url-key.json';
+const urlKeys = new Map<string, Promise<Buffer>>();
+const urlKeysByStore = new WeakMap<ObjectStore, Promise<Buffer>>();
+
+/** Every request gets a new BlobStore, so the key is cached per backing store, not per object. */
+function storeIdentity(store: ObjectStore): string | undefined {
+  if (store instanceof BlobStore) return 'blob';
+  if (store instanceof LocalStore) return `local:${store.root}`;
+  return undefined;
+}
+
+async function loadUrlKey(store: ObjectStore): Promise<Buffer> {
+  const read = async () => {
+    const value = await readJson<{version: number; key: string}>(store, FONT_URL_KEY);
+    return value && typeof value.key === 'string' && /^[0-9a-f]{64}$/.test(value.key) ? Buffer.from(value.key, 'hex') : undefined;
+  };
+  const existing = await read();
+  if (existing) return existing;
+  try { await writeJson(store, FONT_URL_KEY, {version: 1, key: randomBytes(32).toString('hex')}); }
+  catch (error) { if (!(error instanceof ConflictError)) throw error; } // Another instance created it first.
+  const created = await read();
+  if (!created) throw new Error('The Google Fonts URL key is missing or corrupt.');
+  return created;
+}
+
+export function fontUrlKey(store: ObjectStore): Promise<Buffer> {
+  const identity = storeIdentity(store);
+  const cached = identity ? urlKeys.get(identity) : urlKeysByStore.get(store);
+  if (cached) return cached;
+  const loading = loadUrlKey(store);
+  if (identity) urlKeys.set(identity, loading); else urlKeysByStore.set(store, loading);
+  loading.catch(() => { if (identity) urlKeys.delete(identity); else urlKeysByStore.delete(store); });
+  return loading;
+}
+
+const fontFileMac = (key: Buffer, digest: string, extension: FontFileExtension): string =>
+  createHmac('sha256', key).update(`${FONT_CACHE_EPOCH}|${digest}.${extension}`).digest('hex').slice(0, 16);
+
+/** The public, cache-only URL of a cached font object, or undefined for a type the route does not serve. */
+export async function publicFontUrl(store: ObjectStore, origin: string, digest: string, contentType: string): Promise<string | undefined> {
+  const extension = FONT_FILE_EXTENSIONS[contentType];
+  if (!extension || !isSha256(digest)) return undefined;
+  return `${new URL(origin).origin}${FONT_FILE_ROUTE}${digest}.${fontFileMac(await fontUrlKey(store), digest, extension)}.${extension}`;
+}
+
+const FONT_FILE_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Cross-Origin-Resource-Policy': 'cross-origin',
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "default-src 'none'",
+  'Referrer-Policy': 'no-referrer'
+};
+const fontFileRefusal = (status: number, cacheSeconds: number): Response => new Response(null, {
+  status,
+  headers: {...FONT_FILE_HEADERS, 'Cache-Control': cacheSeconds ? `public, max-age=${cacheSeconds}` : 'no-store', ...(cacheSeconds ? {'CDN-Cache-Control': `public, max-age=${cacheSeconds}`} : {}), ...(status === 405 ? {Allow: 'GET, HEAD'} : {})}
+});
+
+/**
+ * `GET /api/fonts/v1/f/<sha256>.<mac>.<ext>`: bytes already in the Google Fonts cache, immutable.
+ * Public on purpose: fonts requested by the opaque preview iframe arrive with `Origin: null` and no
+ * credentials. It never contacts Google and never spends budget. The MAC is checked before any
+ * storage read, and the bytes are hashed and sniffed on every read.
+ */
+export async function fontFileResponse(request: Request, file: string, store: () => ObjectStore, memory: FontMemory = sharedMemory): Promise<Response> {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return fontFileRefusal(405, 0);
+  const url = new URL(request.url);
+  if (url.search !== '' || request.url.includes('?')) return fontFileRefusal(400, 0);
+  const match = FONT_FILE_NAME.exec(file);
+  if (!match) return fontFileRefusal(404, 60);
+  const [, digest, mac, extension] = match as unknown as [string, string, string, FontFileExtension];
+  let objects: ObjectStore;
+  try { objects = store(); } catch { return fontFileRefusal(503, 0); }
+  try {
+    const expected = Buffer.from(fontFileMac(await fontUrlKey(objects), digest, extension), 'hex');
+    if (!timingSafeEqual(expected, Buffer.from(mac, 'hex'))) return fontFileRefusal(404, 60);
+    const body = await memory.reads.read(objects, fontObjectKey(digest));
+    if (!body || sha256(body) !== digest) return fontFileRefusal(404, 60);
+    const format = sniffFont(body);
+    if (format !== extension) return fontFileRefusal(404, 60);
+    const immutable = 'public, max-age=31536000, immutable';
+    return new Response(request.method === 'HEAD' ? null : Buffer.from(body), {
+      status: 200,
+      headers: {...FONT_FILE_HEADERS, 'Content-Type': FONT_FILE_TYPES[extension], 'Content-Length': String(body.byteLength), 'Cache-Control': immutable, 'CDN-Cache-Control': immutable}
+    });
+  } catch {
+    return fontFileRefusal(503, 0);
+  }
+}
+
+/** What the preview gets for one Google Fonts URL. */
+export type PreviewFontResult =
+  | {status: 'ok'; kind: 'css'; url: string; css: string; partial: boolean}
+  | {status: 'ok'; kind: 'font'; url: string; href: string}
+  | {status: 'upstream-4xx'; url: string; httpStatus: number; message: string}
+  | {status: 'unavailable'; code: 'FONT_UNAVAILABLE' | 'FONT_UNSUPPORTED'; url: string; reason: FontUnavailableReason; message: string};
+
+export interface PreviewFontOptions extends Pick<ResolveGoogleFontOptions, 'memory' | 'lookup' | 'transport' | 'now' | 'budgetLimits' | 'lock'> {
+  store: ObjectStore;
+  /** The Studio origin the public font route is served from. */
+  origin: string;
+  epoch: string;
+  userAgent: string;
+  sampleText?: string;
+  /** Absolute epoch milliseconds for every upstream request. */
+  deadline: number;
+}
+
+/**
+ * Resolves a Google Fonts URL for the editor preview, in the `preview` budget bucket. A stylesheet
+ * comes back with every `url()` pointing at the public cache-only route; the files that cover the
+ * sample text (plus Basic Latin) are fetched when the cache lacks them, and `@font-face` rules whose
+ * files are still not cached are removed and the result is marked `partial`. A font file URL comes
+ * back as its public route URL. Only the stylesheet itself goes into the lock, when one is given:
+ * files are pinned by the write-once index, as in job packages.
+ */
+export async function cssForPreview(input: string, options: PreviewFontOptions): Promise<PreviewFontResult> {
+  const {store, origin, epoch, userAgent, sampleText = '', deadline, lock, ...inject} = options;
+  const base = {...inject, store, bucket: 'preview' as const, epoch, userAgent, sampleText, deadline};
+  const resolved = await resolveGoogleFont(input, {...base, ...(lock ? {lock} : {})});
+  if (resolved.status === 'upstream-4xx') return {status: 'upstream-4xx', url: resolved.url, httpStatus: resolved.httpStatus, message: resolved.message};
+  if (resolved.status === 'unavailable') return resolved;
+  if (resolved.kind === 'font') {
+    const href = await publicFontUrl(store, origin, resolved.sha256, resolved.contentType);
+    return href ? {status: 'ok', kind: 'font', url: resolved.url, href} : unavailable(resolved.url, 'unsupported', `The preview cannot serve ${resolved.contentType} font files.`) as PreviewFontResult;
+  }
+  const text = Buffer.from(resolved.body).toString('utf8');
+  const validation = validateGoogleCss(text);
+  if (!validation.ok) return unavailable(resolved.url, 'invalid', validation.message) as PreviewFontResult;
+  const points = samplePoints(sampleText);
+  const ctx: Context = {
+    store, bucket: 'preview', epoch, userAgent, sampleText, deadline, now: inject.now ?? Date.now,
+    limits: {...FONT_BUDGET_LIMITS, ...inject.budgetLimits}, memory: inject.memory ?? sharedMemory, lookup: inject.lookup, transport: inject.transport
+  };
+  const hrefs = new Map<string, string>();
+  const listed = unique(validation.files.map(file => file.url));
+  const covering = unique(validation.files.filter(file => coversAny(file.unicodeRange, points)).map(file => file.url));
+  // A short list is looked up whole, so cached subsets are kept; a long one (CJK) only where it covers the sample.
+  const lookedUp = listed.length <= FONT_EAGER_MAX_FILES ? listed : covering;
+  const inParallel = async (urls: readonly string[], run: (url: string) => Promise<void>) => {
+    const queue = [...urls];
+    await Promise.all(Array.from({length: Math.min(8, queue.length)}, async () => { for (let url = queue.shift(); url !== undefined; url = queue.shift()) await run(url); }));
+  };
+  // The index is write-once and the public route hashes the bytes it serves, so the entry is enough here.
+  await inParallel(lookedUp, async url => {
+    const entry = await readIndex(ctx, url);
+    const href = entry ? await publicFontUrl(store, origin, entry.sha256, entry.contentType) : undefined;
+    if (href) hrefs.set(url, href);
+  });
+  await inParallel(covering.filter(url => !hrefs.has(url)), async url => {
+    if (Date.now() >= deadline) return;
+    const file = await resolveGoogleFont(url, base);
+    const href = file.status === 'ok' ? await publicFontUrl(store, origin, file.sha256, file.contentType) : undefined;
+    if (href) hrefs.set(url, href);
+  });
+  if (validation.files.length && hrefs.size === 0) return unavailable(resolved.url, 'upstream', `None of the font files ${resolved.url} lists could be cached yet.`) as PreviewFontResult;
+  let partial = false;
+  const tree = postcss.parse(text);
+  tree.walkAtRules(rule => {
+    if (rule.name.toLowerCase() !== 'font-face') return;
+    let complete = true;
+    rule.walkDecls(declaration => {
+      if (declaration.prop.toLowerCase() !== 'src') return;
+      declaration.value = declaration.value.replace(/url\(\s*(['"]?)([^'"()\s\\]+)\1\s*\)/gi, (whole, _quote: string, raw: string) => {
+        const canonical = canonicalGoogleFontsUrl(raw);
+        const href = canonical.ok ? hrefs.get(canonical.url) : undefined;
+        if (!href) { complete = false; return whole; }
+        return `url(${JSON.stringify(href)})`;
+      });
+    });
+    if (!complete) { rule.remove(); partial = true; }
+  });
+  return {status: 'ok', kind: 'css', url: resolved.url, css: tree.toString(), partial};
+}
+
+/** The body of `POST /api/studio/projects/:id/fonts` and of `host:font-response`. */
+export type PreviewFontAnswer =
+  | {status: 'ok'; css: string; partial: boolean}
+  | {status: 'upstream-4xx'; httpStatus: number; message: string}
+  | {status: 'unavailable'; code: 'FONT_UNAVAILABLE' | 'FONT_UNSUPPORTED'; reason: FontUnavailableReason; message: string};
+
+/** The preview broker's answer for a stylesheet URL. Font file URLs are refused: a `<link>` never loads one. */
+export async function previewFontAnswer(url: string, options: PreviewFontOptions): Promise<PreviewFontAnswer> {
+  const canonical = canonicalGoogleFontsUrl(url);
+  if (canonical.ok && canonical.kind !== 'css') return {status: 'unavailable', code: 'FONT_UNSUPPORTED', reason: 'unsupported', message: `Only Google Fonts stylesheets load through a <link>, not ${canonical.url}.`};
+  const result = await cssForPreview(url, options);
+  if (result.status === 'ok') return result.kind === 'css' ? {status: 'ok', css: result.css, partial: result.partial} : {status: 'unavailable', code: 'FONT_UNSUPPORTED', reason: 'unsupported', message: 'Only Google Fonts stylesheets load through a <link>.'};
+  if (result.status === 'upstream-4xx') return {status: 'upstream-4xx', httpStatus: result.httpStatus, message: result.message};
+  return {status: 'unavailable', code: result.code, reason: result.reason, message: result.message};
+}
+
+/** Requests per project per minute on one instance: the preview broker can be driven by widget code. */
+export const PREVIEW_FONT_RATE_LIMIT = {requests: 120, windowMs: 60_000};
+const previewFontRequests = new Map<string, number[]>();
+/** False when the project has used its per-minute preview font requests on this instance. */
+export function takePreviewFontRequest(projectId: string, now = Date.now()): boolean {
+  const recent = (previewFontRequests.get(projectId) ?? []).filter(time => now - time < PREVIEW_FONT_RATE_LIMIT.windowMs);
+  if (recent.length >= PREVIEW_FONT_RATE_LIMIT.requests) { previewFontRequests.set(projectId, recent); return false; }
+  recent.push(now);
+  previewFontRequests.set(projectId, recent);
+  if (previewFontRequests.size > 1000) for (const key of previewFontRequests.keys()) { if (key !== projectId) { previewFontRequests.delete(key); break; } }
+  return true;
 }

@@ -14,7 +14,11 @@ function fontFallbackSummary(report: FontReport | undefined): string {
     .map(face => `${String(face.family).slice(0, 80)} ${String(face.weight)}${face.style === 'italic' ? ' italic' : ''} in fallback (${String(face.reason ?? 'unknown')})`).join(', ');
 }
 
-interface PreviewResponse {html: string; state: RuntimeState; backgroundImage?: string; warnings?: string[]; sessionId: string; nonce: string}
+interface PreviewResponse {html: string; state: RuntimeState; backgroundImage?: string; warnings?: string[]; sessionId: string; nonce: string; fontRevisionId?: string}
+
+/** Google Fonts stylesheets one preview session may ask the editor for; a UX limit, the server enforces its own. */
+const FONT_REQUESTS_PER_SESSION = 32;
+type FontAnswer = {status: 'ok'; css: string; partial: boolean} | {status: 'upstream-4xx' | 'unavailable'; message: string};
 
 export function WidgetPreview({projectId, token, snapshot, sceneId, themeId, fieldData, reload = 0, compact = false}: {projectId: string; token: string; snapshot: WidgetSnapshot; sceneId: string; themeId: string; fieldData: JsonObject; reload?: number; compact?: boolean}) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -62,6 +66,30 @@ export function WidgetPreview({projectId, token, snapshot, sceneId, themeId, fie
     if (!prepared) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
     let started = false; let dispatched = false; let ready = false; let fonts = '';
+    let fontRequests = 0;
+    const fontAbort = new AbortController();
+    const answerFont = (requestId: string, answer: FontAnswer) => frame.current?.contentWindow?.postMessage({protocol: BRIDGE_PROTOCOL, version: BRIDGE_VERSION, sessionId: prepared.sessionId, nonce: prepared.nonce, type: 'host:font-response', payload: {requestId, ...answer}}, '*');
+    /** The widget asked for a Google Fonts stylesheet: resolve it with the editing token, which never enters the iframe. */
+    const requestFont = async (payload: unknown) => {
+      const request = payload as {requestId?: unknown; url?: unknown; sampleText?: unknown} | undefined;
+      if (!request || typeof request.requestId !== 'string' || !/^[\w-]{1,64}$/.test(request.requestId) || typeof request.url !== 'string' || request.url.length > 2048) return;
+      const sampleText = typeof request.sampleText === 'string' ? request.sampleText.slice(0, 2000) : '';
+      if (++fontRequests > FONT_REQUESTS_PER_SESSION) {answerFont(request.requestId, {status: 'unavailable', message: `This preview already asked for ${FONT_REQUESTS_PER_SESSION} Google Fonts stylesheets; reload it to load more.`}); return;}
+      let answer: FontAnswer;
+      try {
+        const response = await fetch(`/api/studio/projects/${projectId}/fonts`, {method: 'POST', headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'}, body: JSON.stringify({url: request.url, sampleText, ...(prepared.fontRevisionId ? {revisionId: prepared.fontRevisionId} : {})}), signal: fontAbort.signal});
+        const data = await response.json();
+        if (!response.ok) answer = {status: 'unavailable', message: typeof data?.error === 'string' ? data.error : `The font request failed with HTTP ${response.status}.`};
+        else if (data?.status === 'ok' && typeof data.css === 'string') answer = {status: 'ok', css: data.css, partial: data.partial === true};
+        else answer = {status: data?.status === 'upstream-4xx' ? 'upstream-4xx' : 'unavailable', message: typeof data?.message === 'string' ? data.message : 'Google Fonts are unavailable.'};
+      } catch {
+        if (fontAbort.signal.aborted) return;
+        answer = {status: 'unavailable', message: 'The font request failed.'};
+      }
+      if (fontAbort.signal.aborted) return;
+      if (answer.status !== 'ok') setLog(previous => [...previous.slice(-19), `warn: ${answer.message.slice(0, 1000)}`]);
+      answerFont(request.requestId, answer);
+    };
     // The frame's own font budget (6 s) ends first; a family still loading then is reported as fallback (timeout).
     const readyStatus = () => fonts ? `Ready · ${fonts}` : 'Ready · isolated runtime';
     const deadline = setTimeout(() => {setStatus('Preview timeout'); setError('The widget did not become ready within its configured timeout.');}, (snapshot.widget.ready?.timeoutMs ?? 10000) + 5000);
@@ -80,6 +108,7 @@ export function WidgetPreview({projectId, token, snapshot, sceneId, themeId, fie
         }, item.atMs));}
       }
       if (message.type === 'frame:error' || message.type === 'frame:unhandled-rejection') {clearTimeout(deadline); setStatus('Runtime error'); setError(String(message.payload?.message ?? 'Widget runtime error').slice(0, 2000));}
+      if (message.type === 'frame:font-request') void requestFont(message.payload);
       if (message.type === 'frame:fonts') {
         const summary = fontFallbackSummary(message.payload?.report);
         if (summary && summary !== fonts) setLog(previous => [...previous.slice(-19), `warn: ${summary.slice(0, 1000)}`]);
@@ -89,8 +118,8 @@ export function WidgetPreview({projectId, token, snapshot, sceneId, themeId, fie
       if (message.type === 'frame:console') setLog(previous => [...previous.slice(-19), `${message.payload?.level ?? 'log'}: ${String(message.payload?.message ?? '').slice(0, 1000)}`]);
     };
     window.addEventListener('message', receive);
-    return () => {window.removeEventListener('message', receive); clearTimeout(deadline); timers.forEach(clearTimeout);};
-  }, [prepared, fixture, snapshot.widget.ready?.timeoutMs]);
+    return () => {window.removeEventListener('message', receive); clearTimeout(deadline); timers.forEach(clearTimeout); fontAbort.abort();};
+  }, [prepared, fixture, snapshot.widget.ready?.timeoutMs, projectId, token]);
 
   function sendEvent() {
     if (!prepared || !frame.current?.contentWindow) return;

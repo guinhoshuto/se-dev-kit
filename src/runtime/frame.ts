@@ -1,6 +1,6 @@
 import type {FontFallbackReason, FontReport, FontReportEntry, JsonObject, JsonValue, RuntimeState} from "../types.js";
 import {BRIDGE_PROTOCOL, BRIDGE_VERSION} from "../version.js";
-import {familiesFromUrl, isGoogleFontsHost} from "./google-fonts-url.js";
+import {canonicalGoogleFontsUrl, familiesFromUrl, isGoogleFontsHost} from "./google-fonts-url.js";
 
 declare global {
   interface Window {
@@ -26,6 +26,11 @@ interface FrameRuntimeOptions {
   assetMap?: Record<string, string>;
   /** Absolute base such as `http://127.0.0.1:1234/__sws/sample/`; sample references map below it. */
   sampleMediaBaseUrl?: string;
+  /**
+   * Hosted editor preview: Google Fonts stylesheets a widget links at runtime are held back, resolved
+   * by the editor through `frame:font-request`, and applied as `data:` CSS. Captures never set it.
+   */
+  fontBroker?: boolean;
 }
 
 /**
@@ -220,6 +225,8 @@ const nativeSheetHref = nativeGetter<StyleSheet, string | null>(
   "href"
 );
 const NativeMessageChannel = typeof MessageChannel === "undefined" ? undefined : MessageChannel;
+const nativeGetAttribute = typeof Element === "undefined" ? undefined : Element.prototype.getAttribute;
+const hrefAttribute = (link: HTMLLinkElement): string | null => (nativeGetAttribute ? nativeGetAttribute.call(link, "href") : link.getAttribute("href"));
 
 const linkHref = (link: HTMLLinkElement): string => (nativeLinkHref ? nativeLinkHref.call(link) : link.href);
 const linkSheet = (link: HTMLLinkElement): CSSStyleSheet | null => (nativeLinkSheet ? nativeLinkSheet.call(link) : link.sheet);
@@ -251,6 +258,37 @@ interface StylesheetLoad {
   promise: Promise<void>;
   /** Ends the wait as if the element fired `load` or `error`; `superseded` when a newer href replaces it. */
   settle: (outcome: "load" | "error" | "superseded") => void;
+  /** A Google Fonts stylesheet the preview broker holds back until the editor answers. */
+  broker?: BrokeredLink;
+}
+
+/**
+ * A `<link>` whose Google Fonts `href` the preview broker took over. `raw` is what the widget wrote
+ * (returned by `getAttribute`), `original` its absolute form (returned by `href` and used in the font
+ * report), `dataUrl` the CSS actually applied through the native setter.
+ */
+interface BrokeredLink {
+  raw: string;
+  original: string;
+  url: string;
+  state: "pending" | "applied" | "failed";
+  dataUrl?: string;
+}
+const brokeredLinks = new WeakMap<HTMLLinkElement, BrokeredLink>();
+
+interface FontBroker {
+  /** Takes over a Google Fonts stylesheet the widget linked without the shimmed setters (parser, `innerHTML`). */
+  adopt: (link: HTMLLinkElement, raw: string) => boolean;
+  /** Asks for the subsets that cover text outside what a partial stylesheet already covers; undefined when none. */
+  topUp: (wanted: Map<string, WantedFace>) => Promise<void> | undefined;
+  receive: (payload: unknown) => void;
+}
+let fontBroker: FontBroker | undefined;
+
+/** The href the font report uses for a link: the widget's Google URL when the broker applied it as data: CSS. */
+function reportedHref(link: HTMLLinkElement, href: string): string {
+  const entry = brokeredLinks.get(link);
+  return entry && entry.dataUrl === href ? entry.original : href;
 }
 
 const stylesheetLoads = new Map<HTMLLinkElement, StylesheetLoad>();
@@ -345,7 +383,7 @@ function isStylesheetLink(node: Node): node is HTMLLinkElement {
   return (
     node instanceof HTMLLinkElement &&
     /(?:^|\s)stylesheet(?:\s|$)/i.test(node.rel) &&
-    Boolean(node.getAttribute("href")) &&
+    Boolean(hrefAttribute(node)) &&
     !node.disabled &&
     (!node.type || /^text\/css$/i.test(node.type))
   );
@@ -391,12 +429,25 @@ function forgetStylesheet(link: HTMLLinkElement): void {
 // load or error event instead; a newer href supersedes an older pending one on the same element.
 function trackStylesheet(link: HTMLLinkElement, reassigned = false): void {
   syntheticLoads.delete(link);
+  const brokered = brokeredLinks.get(link);
+  if (brokered?.state === "pending") {
+    if (link.isConnected && isStylesheetRel(link)) holdForBroker(link, brokered);
+    else forgetStylesheet(link);
+    return;
+  }
   if (!isStylesheetLink(link)) {
     forgetStylesheet(link);
     return;
   }
+  // A Google Fonts link the parser or `innerHTML` created: the page CSP refuses it first, then the
+  // broker loads it through the editor.
+  if (fontBroker && !brokered) {
+    const raw = hrefAttribute(link);
+    if (raw && fontBroker.adopt(link, raw)) return;
+  }
   stylesheetLoads.get(link)?.settle("superseded");
   const href = linkHref(link);
+  const reported = reportedHref(link, href);
   const sheet = linkSheet(link);
   // Only a re-assignment can leave the current sheet in place: an inserted link always loads, and
   // Chromium attaches a sheet with the link's href at once, even to one that is about to fail.
@@ -405,7 +456,7 @@ function trackStylesheet(link: HTMLLinkElement, reassigned = false): void {
     if (reassigned) queueSyntheticLoad(link, href);
     return;
   }
-  markGoogleStylesheet(href, "pending");
+  markGoogleStylesheet(reported, "pending");
   let settle: StylesheetLoad["settle"] = () => undefined;
   const promise = new Promise<void>((resolve, reject) => {
     let stopWatchingFetch = () => undefined as void;
@@ -420,21 +471,21 @@ function trackStylesheet(link: HTMLLinkElement, reassigned = false): void {
       if (finished) return;
       cleanup();
       if (outcome === "settled") {
-        markGoogleStylesheet(href, "settled");
+        markGoogleStylesheet(reported, "settled");
         resolve();
         return;
       }
       if (outcome === "error") {
         // A Google Fonts stylesheet that fails leaves its families in fallback, which settle() reports.
-        if (isGoogleFontsUrl(href)) {
-          markGoogleStylesheet(href, "failed", "stylesheet-blocked");
+        if (isGoogleFontsUrl(reported)) {
+          markGoogleStylesheet(reported, "failed", "stylesheet-blocked");
           resolve();
         } else {
           reject(new Error(`Stylesheet failed to load: ${href}`));
         }
         return;
       }
-      if (outcome === "load") markGoogleStylesheet(href, "loaded");
+      if (outcome === "load") markGoogleStylesheet(reported, "loaded");
       resolve();
     };
     const loaded = () => {
@@ -461,6 +512,30 @@ function trackStylesheet(link: HTMLLinkElement, reassigned = false): void {
   stylesheetLoads.set(link, {href, promise, settle});
 }
 
+function isStylesheetRel(link: HTMLLinkElement): boolean {
+  return /(?:^|\s)stylesheet(?:\s|$)/i.test(link.rel);
+}
+
+/** Makes settle() wait for a stylesheet the broker holds back; the applied data: CSS supersedes it. */
+function holdForBroker(link: HTMLLinkElement, entry: BrokeredLink): void {
+  const existing = stylesheetLoads.get(link);
+  if (existing?.broker === entry) return;
+  existing?.settle("superseded");
+  markGoogleStylesheet(entry.original, "pending");
+  let settle: StylesheetLoad["settle"] = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    settle = () => resolve();
+  });
+  stylesheetLoads.set(link, {href: entry.original, promise, settle, broker: entry});
+}
+
+function releaseBrokerHold(link: HTMLLinkElement, entry: BrokeredLink): void {
+  const existing = stylesheetLoads.get(link);
+  if (existing?.broker !== entry) return;
+  existing.settle("superseded");
+  stylesheetLoads.delete(link);
+}
+
 /**
  * Ends the tracked wait for `link` from outside its own events, for a runtime that loads the sheet
  * on the widget's behalf (the Google Fonts preview broker).
@@ -477,11 +552,12 @@ export function watchStylesheets(): void {
   document.addEventListener("error", dedupeNativeLoad, true);
   watchFontErrors();
   for (const link of Array.from(document.querySelectorAll("link"))) {
+    if (brokeredLinks.get(link)?.state === "pending") continue;
     if (!isStylesheetLink(link)) continue;
     // Parser-inserted stylesheets whose media matches block module scripts, and this runtime runs as
     // a module after them, so they have finished; whether they failed is not readable here (the
     // capture's request log has it). A link that did not block scripts may still be loading.
-    if (!link.media || matchMedia(link.media).matches) markGoogleStylesheet(linkHref(link), "settled");
+    if (!link.media || matchMedia(link.media).matches) markGoogleStylesheet(reportedHref(link, linkHref(link)), "settled");
     else trackStylesheet(link);
   }
   const linksIn = (node: Node): HTMLLinkElement[] =>
@@ -857,6 +933,12 @@ async function settleUntilQuiet(options: SettleOptions): Promise<FontReport> {
     }
     const previous = wanted.size;
     wanted = collectWantedFaces(options.sampleText ?? "");
+    const topUp = fontBroker?.topUp(wanted);
+    if (topUp) {
+      settlePhase = `round ${round + 1}: Google Fonts subsets from the editor`;
+      await topUp;
+      forceLayout();
+    }
     settlePhase = `round ${round + 1}: fonts.load (${Array.from(wanted.values(), (face) => `${face.family} ${face.weight} ${face.style}`).slice(0, 12).join(", ")})`;
     await Promise.all(Array.from(wanted.values(), loadWantedFace));
     await nextTask();
@@ -865,8 +947,8 @@ async function settleUntilQuiet(options: SettleOptions): Promise<FontReport> {
     if (document.fonts) await document.fonts.ready;
     const newStylesheet = Array.from(stylesheetLoads.values()).some((load) => !awaited.has(load.promise));
     const fontsLoading = document.fonts ? document.fonts.status !== "loaded" : false;
-    if (!newStylesheet && !fontsLoading && round > 0 && wanted.size <= previous) break;
-    if (!newStylesheet && !fontsLoading && wanted.size === 0) break;
+    if (!newStylesheet && !fontsLoading && !topUp && round > 0 && wanted.size <= previous) break;
+    if (!newStylesheet && !fontsLoading && !topUp && wanted.size === 0) break;
   }
   settlePhase = "idle";
   return fontReport(wanted, true);
@@ -997,6 +1079,221 @@ function withTimeout<T>(task: Promise<T>, timeoutMs: number, label: string): Pro
   return Promise.race([task, new Promise<never>((_resolve, reject) => { timer = window.setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms.`)), timeoutMs); })]).finally(() => window.clearTimeout(timer));
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Google Fonts preview broker (hosted editor only).
+//
+// The preview iframe may not connect to Google (its CSP keeps `connect-src 'none'`), and the editor
+// holds the API token, which never enters the iframe. So the runtime shims `href` and
+// `setAttribute('href')` on links: a Google Fonts stylesheet URL is held back, the editor resolves it
+// through the authenticated API, and the answer is applied as `data:` CSS through the native setter.
+// The widget still reads its Google URL back. After a link's first answer the runtime never touches
+// that link again: subsets for text that arrives later go into a runtime-owned `<style>`, so the
+// widget's `load` handlers run once, as in StreamElements.
+// ---------------------------------------------------------------------------------------------
+
+type FontAnswer =
+  | {status: "ok"; css: string; partial: boolean}
+  | {status: "upstream-4xx" | "unavailable"; message: string};
+type AppliedAnswer = {status: "ok"; dataUrl: string} | {status: "upstream-4xx" | "unavailable"; message: string};
+
+/** How long the frame waits for the editor before treating a stylesheet as unavailable. */
+const FONT_ANSWER_TIMEOUT_MS = 30_000;
+const MAX_FONT_CSS_CHARACTERS = 2_000_000;
+
+function coveredCharacters(text: string): Set<string> {
+  const covered = new Set<string>();
+  for (let code = 0x20; code <= 0x7e; code += 1) covered.add(String.fromCharCode(code));
+  for (const character of text) covered.add(character);
+  return covered;
+}
+
+function installFontBroker(send: (type: string, payload?: unknown) => void, sampleSource: () => string, afterAnswer: () => void): FontBroker | undefined {
+  const prototype = typeof HTMLLinkElement === "undefined" ? undefined : HTMLLinkElement.prototype;
+  const hrefDescriptor = prototype ? Object.getOwnPropertyDescriptor(prototype, "href") : undefined;
+  if (!prototype || !hrefDescriptor?.get || !hrefDescriptor.set) return undefined;
+  const nativeGet = hrefDescriptor.get;
+  const nativeSet = hrefDescriptor.set;
+  const nativeSetAttribute = Element.prototype.setAttribute;
+  const nativeGetAttr = Element.prototype.getAttribute;
+  const nativeRemoveAttribute = Element.prototype.removeAttribute;
+  const pending = new Map<string, (answer: FontAnswer) => void>();
+  const answers = new Map<string, Promise<AppliedAnswer>>();
+  /** Partial stylesheets (canonical URL) and the characters their answers already cover. */
+  const partialSheets = new Map<string, Set<string>>();
+  let nextRequest = 0;
+
+  const ask = (url: string, sampleText: string): Promise<FontAnswer> =>
+    new Promise((resolve) => {
+      nextRequest += 1;
+      const requestId = `font-${nextRequest}`;
+      const timer = window.setTimeout(() => {
+        if (!pending.delete(requestId)) return;
+        resolve({status: "unavailable", message: `The editor did not answer for ${url}.`});
+      }, FONT_ANSWER_TIMEOUT_MS);
+      pending.set(requestId, (answer) => {
+        window.clearTimeout(timer);
+        resolve(answer);
+      });
+      send("frame:font-request", {requestId, url, sampleText});
+    });
+
+  const pageSample = (): string => mergeSample(mergeSample("", sampleSource()), (document.body?.textContent ?? "").slice(0, 4000));
+
+  const stylesheet = (url: string): Promise<AppliedAnswer> => {
+    const known = answers.get(url);
+    if (known) return known;
+    const sample = pageSample();
+    const answer = ask(url, sample).then((result): AppliedAnswer => {
+      if (result.status !== "ok") return result;
+      if (result.partial) partialSheets.set(url, coveredCharacters(sample));
+      return {status: "ok", dataUrl: `data:text/css;charset=utf-8,${encodeURIComponent(result.css)}`};
+    });
+    answers.set(url, answer);
+    return answer;
+  };
+
+  const apply = (link: HTMLLinkElement, entry: BrokeredLink, answer: AppliedAnswer): void => {
+    if (brokeredLinks.get(link) !== entry || entry.state !== "pending") return;
+    if (answer.status === "ok") {
+      entry.state = "applied";
+      entry.dataUrl = answer.dataUrl;
+      // Without the stylesheet observer (not started yet, or a detached link) nothing supersedes the hold.
+      if (!link.isConnected || !watchingStylesheets) releaseBrokerHold(link, entry);
+      nativeSet.call(link, answer.dataUrl);
+    } else {
+      entry.state = "failed";
+      releaseBrokerHold(link, entry);
+      markGoogleStylesheet(entry.original, "failed", answer.status === "upstream-4xx" ? "upstream-4xx" : "not-in-cache");
+      noteFontIssue(answer.message.slice(0, 300));
+      // What a browser would fire for a stylesheet Google refused.
+      link.dispatchEvent(new Event("error"));
+    }
+    afterAnswer();
+  };
+
+  const brokerHref = (link: HTMLLinkElement, raw: string): boolean => {
+    let absolute: string;
+    try {
+      absolute = new URL(raw, document.baseURI).href;
+    } catch {
+      return false;
+    }
+    const canonical = canonicalGoogleFontsUrl(absolute);
+    if (!canonical.ok || canonical.kind !== "css") return false;
+    // The same stylesheet again resolves from the cached answer to the same data: URL, and the
+    // runtime's same-href path gives the widget exactly one load.
+    const entry: BrokeredLink = {raw, original: absolute, url: canonical.url, state: "pending"};
+    brokeredLinks.set(link, entry);
+    if (link.isConnected && isStylesheetRel(link)) holdForBroker(link, entry);
+    void stylesheet(canonical.url).then((answer) => apply(link, entry, answer));
+    return true;
+  };
+
+  const forget = (link: HTMLLinkElement): void => {
+    const entry = brokeredLinks.get(link);
+    if (!entry) return;
+    brokeredLinks.delete(link);
+    releaseBrokerHold(link, entry);
+  };
+
+  Object.defineProperty(prototype, "href", {
+    configurable: true,
+    enumerable: hrefDescriptor.enumerable ?? true,
+    get(this: HTMLLinkElement) {
+      const entry = brokeredLinks.get(this);
+      return entry ? entry.original : nativeGet.call(this);
+    },
+    set(this: HTMLLinkElement, value: unknown) {
+      if (brokerHref(this, String(value))) return;
+      forget(this);
+      nativeSet.call(this, value);
+    }
+  });
+  Element.prototype.setAttribute = function setAttribute(this: Element, name: string, value: string): void {
+    if (this instanceof HTMLLinkElement && String(name).toLowerCase() === "href") {
+      if (brokerHref(this, String(value))) return;
+      forget(this);
+    }
+    nativeSetAttribute.call(this, name, value);
+  };
+  Element.prototype.getAttribute = function getAttribute(this: Element, name: string): string | null {
+    if (this instanceof HTMLLinkElement && String(name).toLowerCase() === "href") {
+      const entry = brokeredLinks.get(this);
+      if (entry) return entry.raw;
+    }
+    return nativeGetAttr.call(this, name);
+  };
+  Element.prototype.removeAttribute = function removeAttribute(this: Element, name: string): void {
+    if (this instanceof HTMLLinkElement && String(name).toLowerCase() === "href") forget(this);
+    nativeRemoveAttribute.call(this, name);
+  };
+
+  const broker: FontBroker = {
+    adopt: brokerHref,
+    topUp(wanted) {
+      const extra = new Map<string, string>();
+      for (const face of wanted.values()) {
+        if (!face.url) continue;
+        const canonical = canonicalGoogleFontsUrl(face.url);
+        const covered = canonical.ok ? partialSheets.get(canonical.url) : undefined;
+        if (!canonical.ok || !covered) continue;
+        let text = extra.get(canonical.url) ?? "";
+        for (const character of face.text) if (character.trim() !== "" && !covered.has(character) && !text.includes(character)) text += character;
+        if (text) extra.set(canonical.url, text);
+      }
+      if (extra.size === 0) return undefined;
+      return Promise.all(
+        Array.from(extra, async ([url, text]) => {
+          const covered = partialSheets.get(url);
+          if (covered) for (const character of text) covered.add(character);
+          const answer = await ask(url, text);
+          if (answer.status !== "ok") return;
+          if (!answer.partial) partialSheets.delete(url);
+          const style = document.createElement("style");
+          style.setAttribute("data-sws-font-subsets", url);
+          style.textContent = answer.css;
+          (document.head ?? document.documentElement).append(style);
+        })
+      ).then(() => undefined);
+    },
+    receive(payload) {
+      const message = payload as {requestId?: unknown; status?: unknown; css?: unknown; partial?: unknown; message?: unknown} | undefined;
+      if (!message || typeof message.requestId !== "string") return;
+      const resolve = pending.get(message.requestId);
+      if (!resolve) return;
+      pending.delete(message.requestId);
+      const text = typeof message.message === "string" ? message.message : "";
+      if (message.status === "ok" && typeof message.css === "string" && message.css.length <= MAX_FONT_CSS_CHARACTERS) resolve({status: "ok", css: message.css, partial: message.partial === true});
+      else if (message.status === "upstream-4xx") resolve({status: "upstream-4xx", message: text || "Google Fonts refused this stylesheet."});
+      else resolve({status: "unavailable", message: text || "Google Fonts are unavailable in this preview."});
+    }
+  };
+
+  // Links in the page source: the server already resolved most of them into data: CSS.
+  for (const link of Array.from(document.querySelectorAll("link"))) {
+    const original = nativeGetAttr.call(link, "data-sws-original-href");
+    if (original) {
+      let absolute: string;
+      try {
+        absolute = new URL(original, document.baseURI).href;
+      } catch {
+        continue;
+      }
+      const canonical = canonicalGoogleFontsUrl(absolute);
+      if (!canonical.ok) continue;
+      const dataUrl = nativeGet.call(link);
+      brokeredLinks.set(link, {raw: original, original: absolute, url: canonical.url, state: "applied", dataUrl});
+      if (!answers.has(canonical.url)) answers.set(canonical.url, Promise.resolve({status: "ok", dataUrl}));
+      if (link.hasAttribute("data-sws-font-partial")) partialSheets.set(canonical.url, coveredCharacters(""));
+      continue;
+    }
+    const raw = nativeGetAttr.call(link, "href");
+    if (raw && isStylesheetRel(link)) brokerHref(link, raw);
+  }
+  return broker;
+}
+
 export function installFrameRuntime(options: FrameRuntimeOptions): void {
   let runtimeState: RuntimeState | null = null;
   let adapter: BrowserAdapter = {};
@@ -1066,6 +1363,23 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
 
   wrapCanvasText();
 
+  // After the editor answers a stylesheet that arrived past the first settle, report fonts again.
+  let widgetReady = false;
+  let refreshQueued = false;
+  const refreshFonts = () => {
+    if (!widgetReady || refreshQueued) return;
+    refreshQueued = true;
+    void nextTask().then(async () => {
+      refreshQueued = false;
+      try {
+        await runSettle(false);
+      } catch {
+        // The next command reports it.
+      }
+    });
+  };
+  if (options.fontBroker) fontBroker = installFontBroker(send, fontSampleText, refreshFonts);
+
   window.SE_API = createSeApi(emitAndAnnounce);
 
   window.__SE_WIDGET_STUDIO__ = {
@@ -1116,6 +1430,7 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
     send("frame:assets-ready");
     if (options.readySelector) await waitForSelector(options.readySelector, options.timeoutMs);
     send("frame:widget-ready");
+    widgetReady = true;
   };
 
   window.addEventListener("message", (event) => {
@@ -1155,6 +1470,9 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
             await runSettle(payload?.light === true, typeof payload?.requestId === "string" ? payload.requestId : undefined);
             break;
           }
+          case "host:font-response":
+            fontBroker?.receive(envelope.payload);
+            break;
           case "host:ping":
             send("frame:pong");
             break;

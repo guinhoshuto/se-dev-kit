@@ -103,7 +103,7 @@ test('prewarm runs only on save: the draft preview path prepares and previews wi
   const page = await previewDocument(prepared, store, previewOptions);
   assert.deepEqual(await store.list('fonts/'), []);
   assert.deepEqual([...store.items.keys()].filter(key => !key.startsWith('draft/')), []);
-  assert.ok(page.warnings.some(warning => /Google Fonts are not loaded in the interactive preview yet/.test(warning)), page.warnings.join('\n'));
+  assert.ok(page.warnings.some(warning => /this preview has none, so text uses a fallback font/.test(warning)), page.warnings.join('\n'));
 });
 
 test('prewarm failures become diagnostics warnings and the revision stays ready', async () => {
@@ -184,15 +184,15 @@ test('substituted values that add document-control elements or inline handlers a
   assert.match((await previewDocument(prepared, store, {...previewOptions, fieldData: {message: '<b>bold</b>'}})).html, /<main><b>bold<\/b><\/main>/);
 });
 
-test('a Google link whose family comes from a placeholder previews without throwing, keeps the URL for the CSP to block, and warns', async () => {
+test('without a font source, a Google link whose family comes from a placeholder previews without throwing, keeps the URL for the frame broker, and warns', async () => {
   const store = new MemoryStore();
   const prepared = await prepareSnapshot(snapshot({html: `${CUSTOM_CHAT_HTML}<p>{{unknown}}</p>`, css: CUSTOM_CHAT_CSS, fields: {fontName: {type: 'googleFont', value: 'Roboto'}, alignment: {type: 'text', value: 'center'}}}), store, 'fixture');
   const {html, warnings} = await previewDocument(prepared, store, previewOptions);
   assert.match(html, /<link href="https:\/\/fonts\.googleapis\.com\/css\?family=Roboto:400,700" rel="stylesheet">/);
-  assert.match(html, /font-src data:;/, 'the preview CSP is unchanged');
+  assert.match(html, /font-src data: http:\/\/127\.0\.0\.1:3000\/api\/fonts\/v1\/f\/;/, 'the preview CSP adds only the cache-only font path');
   assert.match(pageCss(html), /align-items: center;/);
   assert.match(pageCss(html), /font-family: 'Roboto';/);
-  assert.match(warnings.join('\n'), /Google Fonts are not loaded in the interactive preview yet; text uses a fallback font \(https:\/\/fonts\.googleapis\.com\/css\?family=Roboto:400,700\)/);
+  assert.match(warnings.join('\n'), /this preview has none, so text uses a fallback font \(https:\/\/fonts\.googleapis\.com\/css\?family=Roboto:400,700\)/);
   assert.match(warnings.join('\n'), /Widget HTML uses \{\{unknown\}\} with no matching field/);
   assert.match(warnings.join('\n'), /Widget CSS uses .*\{\{fontSize\}\}/, 'placeholders missing from the fields stay as written and warn');
 });

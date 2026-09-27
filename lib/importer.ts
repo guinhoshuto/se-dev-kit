@@ -12,6 +12,7 @@ import type {ObjectStore, PreparedSnapshot, StoredAsset, WidgetSnapshot} from '.
 import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/studio-ui/sample-media';
 import {deployedSampleMedia, type SampleMediaSource} from './sample-media';
 import {hasPlaceholder, refusedHtmlElement} from '../src/config/placeholders';
+import {canonicalGoogleFontsUrl} from '../src/runtime/google-fonts-url';
 
 type Node = DefaultTreeAdapterMap['node'];
 type Element = DefaultTreeAdapterMap['element'];
@@ -285,6 +286,10 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
     const remote = /^https:\/\//i.test(reference) || reference.startsWith('//') || base.startsWith('https:');
     if (remote) {
       const url = new URL(reference, base || 'https://invalid.invalid/').href;
+      // Google Fonts come from the Studio's font proxy in previews and jobs: keep the canonical URL.
+      // URLs the proxy cannot serve (`/icon`, `text=`) are still captured as before.
+      const google = canonicalGoogleFontsUrl(url);
+      if (google.ok) return google.url;
       const existing = remotePaths.get(url);
       if (existing) path = existing;
       else {
@@ -371,6 +376,6 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
     stored.push({path, key, contentType: asset.contentType, bytes: asset.body.byteLength, sha256: digest, ...(asset.sourceUrl ? {sourceUrl: asset.sourceUrl} : {})});
   }
   snapshot.assets = [];
-  const warnings = ['Runtime network requests are blocked. Dynamic resource URLs and JavaScript module imports are not captured.'];
+  const warnings = ['Google Fonts come from the Studio font proxy; all other runtime network requests are blocked. Dynamic resource URLs and JavaScript module imports are not captured.'];
   return {snapshot, assets: stored, warnings, ...(Object.keys(samplePins).length ? {sampleMedia: samplePins} : {})};
 }

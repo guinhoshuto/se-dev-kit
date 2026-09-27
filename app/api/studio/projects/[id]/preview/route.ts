@@ -4,7 +4,9 @@ import {expandUploads,getProjectAuthorized,getRevision} from '@/lib/projects';
 import {bearer,endpoint,json,readInput,requestOrigin} from '@/lib/http';
 import {parseSnapshot} from '@/lib/schema';
 import {prepareSnapshot} from '@/lib/importer';
-import {previewDocument,previewState,previewBackground} from '@/lib/preview';
+import {previewDocument,previewState,previewBackground,type PreviewFontSource} from '@/lib/preview';
+import {cssForPreview} from '@/lib/fonts';
+import {FONT_CACHE_EPOCH,GOOGLE_FONTS_UA} from '@/src/runtime/google-fonts-url';
 import {HttpError} from '@/lib/errors';
 import {z} from 'zod';
 import {jsonObjectSchema} from '@/src/config/schemas';
@@ -32,10 +34,16 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
     const target=isSaved?store:new DraftStore();
     const prepared=isSaved?revision.prepared:await prepareSnapshot(await expandUploads(store,id,supplied!),target,'draft');
     if(!prepared)throw new HttpError(422,'This revision has unresolved dependencies.');
+    // Google Fonts always use the real store, drafts included; DraftStore holds only draft assets.
+    // Only the saved revision without field overrides writes its font lock.
+    const overrides=Object.keys(options.fieldData??{}).length>0;
+    const fontRevisionId=isSaved&&!overrides&&revision.status==='ready'?revision.id:undefined;
+    const pinned=revision.prepared?.googleFonts;
+    const fonts:PreviewFontSource=(url,{sampleText,deadline})=>cssForPreview(url,{store,origin:options.origin,epoch:pinned?.epoch??FONT_CACHE_EPOCH,userAgent:pinned?.userAgent??GOOGLE_FONTS_UA,sampleText,deadline,...(fontRevisionId?{lock:{projectId:id,revisionId:fontRevisionId}}:{})});
     // The state comes first: the page substitutes {{field}} placeholders from it.
-    const state=previewState(prepared.snapshot,options);const {html,warnings}=await previewDocument(prepared,target,options);
+    const state=previewState(prepared.snapshot,options);const {html,warnings}=await previewDocument(prepared,target,{...options,fonts});
     const backgroundImage=await previewBackground(prepared,target,options);
-    const response={html,state,backgroundImage,warnings,sessionId:options.sessionId,nonce:options.nonce};
+    const response={html,state,backgroundImage,warnings,sessionId:options.sessionId,nonce:options.nonce,...(fontRevisionId?{fontRevisionId}:{})};
     if(Buffer.byteLength(JSON.stringify(response))>4_000_000)throw new HttpError(413,'Preview response exceeds 4 MB. Reduce source, preview assets, the sample media this scene uses, or the background image; server-side jobs are not limited by it.');
     return json(response);
   }catch(error){if(error instanceof HttpError)throw error;throw new HttpError(422,error instanceof Error?error.message:'Preview preparation failed.');}
