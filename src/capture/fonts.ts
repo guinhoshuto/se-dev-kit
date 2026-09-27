@@ -40,7 +40,14 @@ export interface FontCheck {
  * FONT_UNSUPPORTED, because the Studio can never serve them; a font that is needed and cannot
  * be served fails with FONT_UNAVAILABLE; a family Google refuses is only a warning.
  */
-export function checkFonts(issues: readonly FontRequestIssue[], report?: FontReport): FontCheck {
+export function checkFonts(
+  issues: readonly FontRequestIssue[],
+  report?: FontReport,
+  options: {
+    /** URLs a discovery pass is collecting (outside the job's font package); they fail nothing here. */
+    ignore?: (url: string) => boolean;
+  } = {}
+): FontCheck {
   const failures = new Map<string, FontRequestIssue>();
   for (const issue of issues) {
     const known = failures.get(issue.url);
@@ -58,6 +65,7 @@ export function checkFonts(issues: readonly FontRequestIssue[], report?: FontRep
   const warnings: string[] = [];
   const unavailable: string[] = [];
   for (const failure of failures.values()) {
+    if (options.ignore?.(failure.url)) continue;
     const canonical = canonicalGoogleFontsUrl(failure.url);
     if (!canonical.ok && canonical.code === "FONT_UNSUPPORTED") {
       throw new StudioError(

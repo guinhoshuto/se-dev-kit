@@ -3,7 +3,7 @@ import {constants} from "node:fs";
 import {platform} from "node:os";
 import {chromium, type Browser, type BrowserContext, type Page} from "playwright-core";
 import {StudioError} from "../shared/errors.js";
-import {isGoogleFontsHost} from "../runtime/google-fonts-url.js";
+import {canonicalGoogleFontsUrl, isGoogleFontsHost} from "../runtime/google-fonts-url.js";
 
 export interface BrowserDetection {
   executablePath?: string;
@@ -89,10 +89,42 @@ export interface FontRouteAnswer {
 
 /**
  * Answers a GET to `fonts.googleapis.com` or `fonts.gstatic.com` from trusted local data, or
- * returns `undefined` to keep it blocked. It is only ever used with `route.fulfill`: requests are
- * never continued or fetched. Hosted renders plug the font cache in here.
+ * returns `undefined` for a miss. It is only ever used with `route.fulfill`: requests are never
+ * continued or fetched. Hosted renders plug the job's font package (`FontResolver`) in here.
  */
 export type FontRoute = (url: string) => Promise<FontRouteAnswer | undefined>;
+
+/** The part of a Playwright `Route` that `serveFontRequest` may use. `continue` and `fetch` are deliberately absent. */
+export interface FontRequestRoute {
+  request(): {method(): string; url(): string};
+  fulfill(response: {status: number; contentType: string; body: Buffer; headers: Record<string, string>}): Promise<void>;
+  abort(errorCode?: string): Promise<void>;
+}
+
+/**
+ * Serves one Google Fonts request from trusted data. Only GETs to URLs the canonicalizer accepts
+ * are looked up; anything else is blocked. A hit, or a recorded upstream 4xx, is fulfilled with its
+ * status; a miss is aborted as `failed`. It never calls `route.continue` or `route.fetch`.
+ */
+export async function serveFontRequest(route: FontRequestRoute, fontRoute: FontRoute): Promise<void> {
+  const request = route.request();
+  if (request.method() !== "GET" || !canonicalGoogleFontsUrl(request.url()).ok) {
+    await route.abort("blockedbyclient");
+    return;
+  }
+  const answer = await fontRoute(request.url());
+  if (!answer) {
+    await route.abort("failed");
+    return;
+  }
+  // @font-face loads in CORS mode from the loopback frame origin.
+  await route.fulfill({
+    status: answer.status,
+    contentType: answer.contentType,
+    body: answer.body,
+    headers: {"access-control-allow-origin": "*", "cache-control": "public, max-age=31536000, immutable"}
+  });
+}
 
 export function isGoogleFontsRequestUrl(url: string): boolean {
   try {
@@ -126,18 +158,9 @@ export async function createIsolatedContext(options: {
       await route.continue();
       return;
     }
-    if (options.fontRoute && route.request().method() === "GET" && isGoogleFontsHost(url.hostname)) {
-      const answer = await options.fontRoute(url.href);
-      if (answer) {
-        // @font-face loads in CORS mode from the loopback frame origin.
-        await route.fulfill({
-          status: answer.status,
-          contentType: answer.contentType,
-          body: answer.body,
-          headers: {"access-control-allow-origin": "*", "cache-control": "public, max-age=31536000, immutable"}
-        });
-        return;
-      }
+    if (options.fontRoute && isGoogleFontsHost(url.hostname)) {
+      await serveFontRequest(route, options.fontRoute);
+      return;
     }
     await route.abort("blockedbyclient");
   });

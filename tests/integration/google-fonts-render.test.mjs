@@ -1,0 +1,339 @@
+// Hosted render path (fonts plan, stage 5): Google Fonts served from a job's font package through
+// FontResolver and route.fulfill, discovery passes (FONTS_MISSING), and zero external attempts.
+// The package is built here from the OFL fixture font (tests/fixtures/fonts/OFL.txt).
+import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
+import {createServer} from "node:http";
+import {mkdir, mkdtemp, readFile, readdir, rm, writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {fileURLToPath} from "node:url";
+import test from "node:test";
+import {chromium} from "playwright-core";
+
+import {detectBrowser} from "../../dist/capture/browser.js";
+import {renderRecipe} from "../../dist/capture/renderer.js";
+import {loadProject} from "../../dist/config/load.js";
+import {FontResolver} from "../../dist/fonts/resolver.js";
+import {captureHostSettle, captureHostUpdateFields, openScene, runBrowserSmoke} from "../../dist/scenarios/runner.js";
+import {startStudioServer} from "../../dist/server/server.js";
+
+const fixtures = fileURLToPath(new URL("../fixtures/fonts/", import.meta.url));
+const FONT_400 = await readFile(join(fixtures, "Unbounded-400.woff2"));
+const FONT_700 = await readFile(join(fixtures, "Unbounded-700.woff2"));
+const sha256 = (buffer) => createHash("sha256").update(buffer).digest("hex");
+
+const css2 = (family) => `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, "+")}`;
+const fileUrl = (family) => `https://fonts.gstatic.com/s/${family.toLowerCase().replace(/ /g, "")}/v1/${family.toLowerCase().replace(/ /g, "-")}.woff2`;
+const FACES = {Unbounded: FONT_400, "Studio Display": FONT_700};
+const LOCAL_FACES_CSS =
+  "@font-face{font-family:'Unbounded';font-weight:400;src:url(fonts/unbounded.woff2) format('woff2')}\n" +
+  "@font-face{font-family:'Studio Display';font-weight:400;src:url(fonts/display.woff2) format('woff2')}\n";
+
+/** Writes a job font package (lock-1.json and objects/) holding `families`, plus recorded 4xx `refused` URLs. */
+async function fontPackage(t, {families = Object.keys(FACES), refused = []} = {}) {
+  const directory = await mkdtemp(join(tmpdir(), "sws-font-package-"));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  await mkdir(join(directory, "objects"));
+  const entries = [];
+  const put = async (url, body, contentType) => {
+    await writeFile(join(directory, "objects", sha256(body)), body);
+    entries.push({url, status: 200, sha256: sha256(body), bytes: body.length, contentType});
+  };
+  for (const family of families) {
+    const css = Buffer.from(`@font-face {\n  font-family: '${family}';\n  font-style: normal;\n  font-weight: 400;\n  src: url(${fileUrl(family)}) format('woff2');\n}\n`);
+    await put(css2(family), css, "text/css");
+    await put(fileUrl(family), FACES[family], "font/woff2");
+  }
+  for (const url of refused) entries.push({url, status: 400});
+  await writeFile(join(directory, "lock-1.json"), JSON.stringify({version: 1, epoch: "v1", userAgent: "fixture-agent", entries}));
+  return {directory, load: () => FontResolver.load(directory, 1)};
+}
+
+async function fontWidget(t, {html, css = "", js = "", fields = {}, scenes = [{}]}) {
+  const root = await mkdtemp(join(tmpdir(), "sws-google-render-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await mkdir(join(root, "fonts"));
+  await Promise.all([
+    writeFile(join(root, "fonts/unbounded.woff2"), FONT_400),
+    writeFile(join(root, "fonts/display.woff2"), FONT_700),
+    writeFile(join(root, "widget.html"), html),
+    writeFile(join(root, "widget.css"), `html,body{margin:0;background:transparent}\n${css}`),
+    writeFile(join(root, "widget.js"), js),
+    writeFile(join(root, "widget.json"), JSON.stringify(fields))
+  ]);
+  const project = await loadProject({inputDirectory: root});
+  scenes.forEach((scene, index) => {
+    const id = index === 0 ? "still" : `still-${index}`;
+    project.scenes.push({
+      id,
+      filePath: "",
+      value: {schemaVersion: 1, id, name: id, viewport: {width: 320, height: 120}, output: {width: 320, height: 120, format: "png"}, background: {id: "dark", color: "#10172b"}, ...scene}
+    });
+  });
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-google-render-out-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  return {project, outputRoot};
+}
+
+const recipe = (scenes, outputs = {screenshots: true}) => ({schemaVersion: 1, id: "fonts", name: "Fonts", scenes, outputs});
+const VIDEO = {screenshots: false, video: {enabled: true, durationMs: 200, fps: 10, format: "mp4", codec: "h264", pixelFormat: "yuv420p", audio: "none"}};
+
+async function render(context, widget, fonts, recipeValue = recipe(["still"])) {
+  const result = await renderRecipe(widget.project, recipeValue, {
+    outputRoot: widget.outputRoot,
+    browserPath: context.browserPath,
+    ffmpegPath: join(widget.outputRoot, "missing-ffmpeg"),
+    allowIntermediate: true,
+    ...(fonts ? {fonts} : {})
+  });
+  return JSON.parse(await readFile(result.manifestPath, "utf8"));
+}
+
+async function browserContext(t) {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return undefined;
+  }
+  return {browserPath: detection.executablePath};
+}
+
+const TITLE_CSS = "h1{margin:0;padding:24px 12px;font:400 40px/1 monospace;color:#fff}";
+// se-windows: one <link> the widget re-points in setFont(), applied on load and on every update,
+// so the first call re-assigns the href the page already has.
+const SET_FONT_JS = `
+window.loads = 0;
+const link = document.getElementById("gf");
+link.addEventListener("load", () => { window.loads += 1; });
+function setFont(name) {
+  link.href = "https://fonts.googleapis.com/css2?family=" + encodeURIComponent(name).replace(/%20/g, "+");
+  document.getElementById("t").style.fontFamily = "'" + name + "', monospace";
+}
+window.addEventListener("onWidgetLoad", (event) => setFont(event.detail.fieldData.font));
+window.addEventListener("onWidgetUpdate", (event) => setFont(event.detail.fieldData.font));
+`;
+const FONT_FIELD = {font: {type: "googleFont", label: "Font", value: "Unbounded"}};
+
+test("se-windows pattern: static link plus setFont() re-assigning the same href renders from the package without hanging", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const google = await fontWidget(t, {html: `<link id="gf" rel="stylesheet" href="${css2("Unbounded")}"><h1 id="t">Studio</h1>`, css: TITLE_CSS, js: SET_FONT_JS, fields: FONT_FIELD});
+  const reference = await fontWidget(t, {html: "<h1 style=\"font-family:'Unbounded'\">Studio</h1>", css: `${LOCAL_FACES_CSS}${TITLE_CSS}`});
+  const fallback = await fontWidget(t, {html: "<h1>Studio</h1>", css: TITLE_CSS});
+  const pkg = await fontPackage(t);
+  const fonts = await pkg.load();
+  const started = Date.now();
+  const served = await render(context, google, fonts);
+  assert.ok(Date.now() - started < 30_000, "the same-href re-assignment does not wait for a load that never fires");
+  const expected = await render(context, reference);
+  const withoutFont = await render(context, fallback);
+  assert.notEqual(withoutFont.artifacts[0].hashes.screenshot, expected.artifacts[0].hashes.screenshot);
+  assert.equal(served.artifacts[0].hashes.screenshot, expected.artifacts[0].hashes.screenshot);
+  assert.equal(served.fonts.mode, "cache");
+  assert.equal(served.fonts.userAgent, "fixture-agent");
+  assert.deepEqual(served.fonts.served.map(({url, status}) => [url, status]), [[css2("Unbounded"), 200], [fileUrl("Unbounded"), 200]]);
+  assert.deepEqual(served.fonts.issues, []);
+
+  // A family change through updateFields, then re-applying it, through the package: one load each time.
+  const {browser} = await (await import("../../dist/capture/browser.js")).launchStudioBrowser({browserPath: context.browserPath});
+  const server = await startStudioServer(google.project, {port: 0, watch: false});
+  try {
+    const opened = await openScene(google.project, server, browser, google.project.scenes[0].value, {fonts});
+    try {
+      const report = await captureHostUpdateFields(opened.page, {font: "Studio Display"});
+      assert.equal(report.families.find((entry) => entry.family === "Studio Display")?.status, "loaded");
+      const frame = opened.frame();
+      const before = await frame.evaluate(() => window.loads);
+      const again = Date.now();
+      await captureHostUpdateFields(opened.page, {font: "Studio Display"});
+      await captureHostSettle(opened.page);
+      assert.ok(Date.now() - again < 5_000);
+      assert.equal((await frame.evaluate(() => window.loads)) - before, 1, "exactly one load for the re-assigned href");
+    } finally {
+      await opened.context.close();
+    }
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("glossy pattern: a link created by JS, and a protocol-relative //fonts… URL, load from the package", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const created = await fontWidget(t, {
+    html: "<h1 style=\"font-family:'Unbounded'\">Studio</h1>",
+    css: TITLE_CSS,
+    js: `window.addEventListener("onWidgetLoad", () => { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = ${JSON.stringify(css2("Unbounded"))}; document.head.append(link); });`
+  });
+  const relativeWidget = () => fontWidget(t, {html: `<link rel="stylesheet" href="//fonts.googleapis.com/css2?family=Unbounded"><h1 style="font-family:'Unbounded'">Studio</h1>`, css: TITLE_CSS});
+  const relative = await relativeWidget();
+  const reference = await fontWidget(t, {html: "<h1 style=\"font-family:'Unbounded'\">Studio</h1>", css: `${LOCAL_FACES_CSS}${TITLE_CSS}`});
+  const pkg = await fontPackage(t);
+  const expected = (await render(context, reference)).artifacts[0].hashes.screenshot;
+  for (const widget of [created, relative]) {
+    const manifest = await render(context, widget, await pkg.load());
+    assert.equal(manifest.artifacts[0].hashes.screenshot, expected);
+    assert.equal(manifest.artifacts[0].fonts.families.find((entry) => entry.family === "Unbounded")?.status, "loaded");
+    // The frame is served over loopback HTTP, so //fonts… is http://fonts…; it is recorded canonically.
+    assert.deepEqual(manifest.fonts.served.map(({url}) => url), [css2("Unbounded"), fileUrl("Unbounded")]);
+  }
+  // The local CLI has no package: the same widget is blocked with FONT_UNAVAILABLE and a hint, not a CSP error.
+  await assert.rejects(render(context, await relativeWidget()), (error) => {
+    assert.equal(error.code, "FONT_UNAVAILABLE");
+    assert.match(error.message, /"Unbounded" \(http:\/\/fonts\.googleapis\.com\/css2\?family=Unbounded\)/);
+    assert.doesNotMatch(error.message, /content security policy/);
+    assert.match(error.hint, /hosted Studio/);
+    return true;
+  });
+});
+
+test("a family Google refused (recorded 400) completes with a warning", {timeout: 120_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const missing = css2("Missing Family");
+  const widget = await fontWidget(t, {html: `<link rel="stylesheet" href="${missing}"><h1 style="font-family:'Missing Family'">Studio</h1>`, css: TITLE_CSS});
+  const pkg = await fontPackage(t, {refused: [missing]});
+  const manifest = await render(context, widget, await pkg.load());
+  assert.equal(manifest.status, "final");
+  assert.deepEqual(manifest.fonts.served, [{url: missing, status: 400}]);
+  assert.equal(manifest.fonts.issues.length, 1);
+  assert.match(manifest.fonts.issues[0], /^upstream-4xx: Google Fonts refused "Missing Family" .* with HTTP 400/);
+});
+
+test("URLs outside the package make a discovery pass: every variant runs, nothing is captured, FONTS_MISSING lists them all", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  // Each scene asks for a different missing family; only a pass that keeps running every variant finds both.
+  const widget = await fontWidget(t, {
+    html: `<link id="gf" rel="stylesheet" href="${css2("Unbounded")}"><h1 id="t">Studio</h1>`,
+    css: TITLE_CSS,
+    js: SET_FONT_JS,
+    fields: FONT_FIELD,
+    scenes: [{fieldData: {font: "Archivo"}}, {fieldData: {font: "Roboto Mono"}}]
+  });
+  const pkg = await fontPackage(t);
+  await assert.rejects(render(context, widget, await pkg.load(), recipe(["still", "still-1"])), (error) => {
+    assert.equal(error.code, "FONTS_MISSING");
+    assert.deepEqual(error.urls, [css2("Archivo"), css2("Roboto Mono")]);
+    return true;
+  });
+  assert.deepEqual(await readdir(join(widget.outputRoot, "fonts")).catch(() => []), [], "no screenshot and no manifest");
+
+  // Video: the pass stops taking frames at the first miss, keeps the timeline running to a second
+  // miss later in the same variant, and writes no frames.json.
+  const video = await fontWidget(t, {
+    html: `<link id="gf" rel="stylesheet" href="${css2("Unbounded")}"><h1 id="t">Studio</h1>`,
+    css: TITLE_CSS,
+    js: `${SET_FONT_JS}\nwindow.addEventListener("onWidgetLoad", () => { setTimeout(() => setFont("Archivo"), 50); setTimeout(() => setFont("Roboto Mono"), 250); });`,
+    fields: FONT_FIELD
+  });
+  await assert.rejects(render(context, video, await pkg.load(), recipe(["still"], {...VIDEO, video: {...VIDEO.video, durationMs: 400}})), (error) => {
+    assert.deepEqual(error.urls, [css2("Archivo"), css2("Roboto Mono")]);
+    return true;
+  });
+  const written = (await readdir(video.outputRoot, {recursive: true})).map(String);
+  assert.deepEqual(written.filter((file) => file.endsWith(".png")).map((file) => file.split("/").pop()), ["frame-0000.png"], "only the frame before the first miss");
+  assert.ok(!written.some((file) => file.endsWith("frames.json") || file.endsWith("manifest.json")), written.join(","));
+});
+
+test("the smoke run of a test job ends with FONTS_MISSING instead of a result when a font is outside the package", {timeout: 120_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const widget = await fontWidget(t, {html: `<link rel="stylesheet" href="${css2("Archivo")}"><h1 style="font-family:'Archivo'">Studio</h1>`, css: TITLE_CSS});
+  const pkg = await fontPackage(t);
+  await assert.rejects(runBrowserSmoke(widget.project, {browserPath: context.browserPath, fonts: await pkg.load()}), (error) => {
+    assert.equal(error.code, "FONTS_MISSING");
+    assert.deepEqual(error.urls, [css2("Archivo")]);
+    return true;
+  });
+});
+
+// se-text-widgets/magazine: fonts.load before the stylesheet exists, one draw in the next frame.
+const SINGLE_DRAW_JS = (sheet) => `
+window.addEventListener("onWidgetLoad", () => {
+  ${sheet ? `const link = document.createElement("link"); link.rel = "stylesheet"; link.href = ${JSON.stringify(sheet)}; document.head.append(link);` : ""}
+  document.fonts.load("48px Unbounded").then(() => requestAnimationFrame(draw));
+});
+function draw() {
+  const context = document.getElementById("c").getContext("2d");
+  context.fillStyle = "#fff";
+  context.font = "48px Unbounded";
+  context.fillText("Canvas", 10, 70);
+}
+`;
+
+test("canvas text drawn once in the next frame shows the Google font through the package (route.fulfill)", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const scenes = [{captureAtMs: 100}];
+  const google = await fontWidget(t, {html: '<canvas id="c" width="320" height="120"></canvas>', js: SINGLE_DRAW_JS(css2("Unbounded")), scenes});
+  const reference = await fontWidget(t, {html: '<canvas id="c" width="320" height="120"></canvas>', css: LOCAL_FACES_CSS, js: SINGLE_DRAW_JS(), scenes});
+  const pkg = await fontPackage(t);
+  const served = await render(context, google, await pkg.load());
+  const expected = await render(context, reference);
+  assert.equal(served.artifacts[0].hashes.screenshot, expected.artifacts[0].hashes.screenshot);
+});
+
+/**
+ * Sink proxy (from the 2026-09-25 patch's harness), with the bypass list `<-loopback>,127.0.0.1`:
+ * only the Studio servers on 127.0.0.1 are reached directly; every other request and connection
+ * goes through the sink. Anything it sees is an external attempt.
+ */
+async function startSink() {
+  const seen = [];
+  const server = createServer((request, response) => {
+    seen.push(`${request.method} ${request.url}`);
+    response.writeHead(502);
+    response.end();
+  });
+  server.on("connect", (request, socket) => {
+    seen.push(`CONNECT ${request.url}`);
+    socket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {seen, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => server.close(resolve))};
+}
+
+test("a render served from the package makes zero external attempts, preconnect and misses included", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const widget = await fontWidget(t, {
+    html: [
+      '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>',
+      `<link id="gf" rel="stylesheet" href="${css2("Unbounded")}">`,
+      '<link rel="stylesheet" href="//fonts.googleapis.com/css2?family=Studio+Display">',
+      '<h1 id="t">Studio</h1><p style="font-family:\'Studio Display\'">Display</p>'
+    ].join(""),
+    css: TITLE_CSS,
+    js: `${SET_FONT_JS}\nwindow.addEventListener("onWidgetLoad", () => { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = ${JSON.stringify(css2("Not In Package"))}; document.head.append(link); const image = new Image(); image.src = "https://static-cdn.jtvnw.net/emote.png"; });`,
+    fields: FONT_FIELD
+  });
+  const sink = await startSink();
+  const browser = await chromium.launch({executablePath: context.browserPath, headless: true, proxy: {server: sink.url, bypass: "<-loopback>,127.0.0.1"}, args: ["--disable-background-networking", "--disable-component-update"]});
+  const server = await startStudioServer(widget.project, {port: 0, watch: false});
+  const fonts = await (await fontPackage(t)).load();
+  try {
+    const opened = await openScene(widget.project, server, browser, widget.project.scenes[0].value, {fonts});
+    try {
+      await captureHostSettle(opened.page);
+      await captureHostUpdateFields(opened.page, {font: "Studio Display"});
+      await captureHostSettle(opened.page);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      await opened.context.close();
+    }
+    assert.deepEqual(fonts.missing(), [css2("Not In Package")]);
+    assert.deepEqual(fonts.served().map(({url}) => url), [css2("Studio Display"), css2("Unbounded"), fileUrl("Studio Display"), fileUrl("Unbounded")]);
+    // A branded Chrome also talks to its own services (update, time, accounts) through the proxy;
+    // those are the browser's, not the page's. Nothing the widget asked for may appear.
+    const fromPage = sink.seen.filter((line) => /fonts\.googleapis\.com|fonts\.gstatic\.com|static-cdn\.jtvnw\.net/.test(line));
+    assert.deepEqual(fromPage, [], "no request or connection for the widget left the browser");
+    assert.ok(sink.seen.every((line) => !line.includes("127.0.0.1")), "the Studio servers are reached directly");
+  } finally {
+    await browser.close();
+    await server.close();
+    await sink.close();
+  }
+});

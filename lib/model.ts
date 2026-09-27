@@ -38,6 +38,8 @@ export interface Job {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   createdAt: string; updatedAt: string; progress: string; artifacts: Artifact[]; error?: string;
   workflowId?: string; sandboxId?: string; commandId?: string;
+  /** Discovery pass the recorded command runs (1 when absent). A pass that finds Google Fonts outside the job package leads to the next one, at most four. */
+  fontPass?: number;
 }
 export interface ProjectView {project: Omit<ProjectRecord, 'accessHash'>; revision: Revision; etag: string; revisions: {id: string; createdAt: string; status: Revision['status']}[]; jobs: Job[]}
 export interface ObjectValue {body: Uint8Array; etag: string}

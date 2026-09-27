@@ -23,6 +23,7 @@ import {
   captureHostDispatch,
   captureHostSettle,
   captureHostUpdateFields,
+  checkOpenedFonts,
   frameEvents,
   openScene,
   sampleFrameAnimations,
@@ -34,7 +35,7 @@ import {compileVariantTutorial, EMULATE_MENU, tutorialCamera} from "../tutorial/
 import type {TutorialTimeline} from "../tutorial/timeline.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
 import {launchStudioBrowser, type FontRoute} from "./browser.js";
-import {checkFonts} from "./fonts.js";
+import {FontsMissingError, type FontResolver} from "../fonts/resolver.js";
 import {hashFile, hashJson, sha256} from "./hash.js";
 import {assertRecipeMatrixCardinality, expandRecipe} from "./matrix.js";
 import {detectMediaTooling, encodeFrameSequence, type MediaTooling} from "./media.js";
@@ -86,6 +87,12 @@ export interface RenderOptions {
   statfs?: StatfsFunction;
   /** Answers Google Fonts requests with `route.fulfill` from trusted data; without it they stay blocked. */
   fontRoute?: FontRoute;
+  /**
+   * The hosted job's font package. On the first URL outside it the render becomes a discovery
+   * pass: no more screenshots or encodes, but every variant's timeline still runs, and the render
+   * ends with FONTS_MISSING listing every missing URL. The manifest gains `fonts`.
+   */
+  fonts?: FontResolver;
 }
 
 /** Fonts as the manifest records them for one artifact. */
@@ -117,6 +124,16 @@ async function settleStill(opened: OpenSceneResult): Promise<ArtifactFonts> {
     found.forEach((warning) => warnings.add(warning));
   }
   return {families: report.families, warnings: [...warnings], redrawMs};
+}
+
+/**
+ * `manifest.fonts` of a hosted render: the package's epoch and User-Agent, what this render served
+ * (and its digest, which covers only that, so the preview adding lock entries never changes it),
+ * the font warnings of every artifact, and the virtual time added for canvas redraws.
+ */
+function jobFonts(fonts: FontResolver, account: {issues: Set<string>; redrawMs: number}): JsonObject {
+  const report = fonts.report();
+  return JSON.parse(JSON.stringify({...report, issues: [...account.issues].sort(), redrawMs: account.redrawMs})) as JsonObject;
 }
 
 export interface RenderPlan {
@@ -483,7 +500,10 @@ async function renderVideoFrames(options: {
   temporaryFiles: TemporaryFiles;
   onFrame: (written: number) => void;
   fontRoute?: FontRoute;
+  fonts?: FontResolver;
 }): Promise<{
+  /** True when a font was outside the package: frames stopped, and nothing below was written. */
+  discovery: boolean;
   fonts: ArtifactFonts;
   framesDirectory: string;
   framesManifest: string;
@@ -504,16 +524,17 @@ async function renderVideoFrames(options: {
       ...(tutorial
         ? {host: "tutorial" as const, camera: tutorialCamera(tutorial), background: {id: "tutorial-editor", color: "transparent"}}
         : {}),
-      ...(options.fontRoute ? {fontRoute: options.fontRoute} : {})
+      ...(options.fonts ? {fonts: options.fonts} : options.fontRoute ? {fontRoute: options.fontRoute} : {})
     }
   );
   const fontWarnings = new Set<string>();
   let fontFamilies: FontReport["families"] = [];
   // Font failures fail the frame where they happen, not the end of the video.
   const noteFonts = (report: FontReport | undefined, full: boolean) => {
-    for (const warning of checkFonts(opened.issues.fonts, report).warnings) fontWarnings.add(warning);
+    for (const warning of checkOpenedFonts(opened, report).warnings) fontWarnings.add(warning);
     if (report && full) fontFamilies = report.families;
   };
+  const discovering = () => options.fonts?.hasMissing() ?? false;
   const framesDirectory = resolve(options.recipeDirectory, options.variant.id, "frames");
   const frameCount = videoFrameCount(options.video);
   const frames: {file: string; timestampMs: number; sha256: string}[] = [];
@@ -574,6 +595,8 @@ async function renderVideoFrames(options: {
           timestampMs
         );
       }
+      // A discovery pass keeps the timeline running for the URLs it would still request, without frames.
+      if (discovering()) continue;
       const target = resolve(framesDirectory, `frame-${String(index).padStart(4, "0")}.png`);
       await screenshotScene(
         opened.page,
@@ -588,7 +611,7 @@ async function renderVideoFrames(options: {
     const runtimeErrors = (await frameEvents(opened.page)).filter(
       (event) => event.type === "frame:error" || event.type === "frame:unhandled-rejection"
     );
-    if (runtimeErrors.length > 0 || opened.issues.errors.length > 0) {
+    if (!discovering() && (runtimeErrors.length > 0 || opened.issues.errors.length > 0)) {
       throw new StudioError(
         "VIDEO_RUNTIME_ERROR",
         [...opened.issues.errors, ...runtimeErrors.map((event) => JSON.stringify(event.payload))].join("; ")
@@ -598,6 +621,9 @@ async function renderVideoFrames(options: {
     await opened.context.close();
   }
   const framesManifest = resolve(framesDirectory, "frames.json");
+  if (discovering()) {
+    return {discovery: true, fonts: {families: fontFamilies, warnings: [...fontWarnings], redrawMs: 0}, framesDirectory, framesManifest, frameFiles: [], sequence: {}, sequenceText: ""};
+  }
   const sequence: JsonObject = {
     schemaVersion: 1,
     fps: options.video.fps,
@@ -610,6 +636,7 @@ async function renderVideoFrames(options: {
   const sequenceText = `${stableStringify(sequence, 2)}\n`;
   await atomicWriteFile(options.outputRoot, framesManifest, sequenceText, options.temporaryFiles);
   return {
+    discovery: false,
     fonts: {families: fontFamilies, warnings: [...fontWarnings], redrawMs: 0},
     framesDirectory,
     framesManifest,
@@ -785,7 +812,11 @@ export async function renderRecipe(
     const detection = launched.detection;
     const contactItems: {id: string; path: string}[] = [];
     let contactSheetPath: string | undefined;
-    for (const variant of variants) {
+    const discovering = () => options.fonts?.hasMissing() ?? false;
+    const fontAccount = {issues: new Set<string>(), redrawMs: 0};
+    const sceneFonts = options.fonts ? {fonts: options.fonts} : options.fontRoute ? {fontRoute: options.fontRoute} : {};
+    const activeBrowser = browser;
+    const renderVariant = async (variant: CaptureVariant): Promise<void> => {
       progress.variant = variant.id;
       progress.step = "input check";
       progress.framesWritten = 0;
@@ -806,25 +837,30 @@ export async function renderRecipe(
       let videoFonts: ArtifactFonts | undefined;
       if (recipe.outputs?.screenshots !== false) {
         progress.step = "screenshot";
-        const resolvedScene = await openScene(renderProject, server, browser, variant.scene, options.fontRoute ? {fontRoute: options.fontRoute} : {});
+        const resolvedScene = await openScene(renderProject, server, activeBrowser, variant.scene, sceneFonts);
         try {
           await replayUntil(resolvedScene.page, variant, variant.scene.captureAtMs ?? 0);
           // Between the replay and the screenshot: stylesheets, layout and every face in use.
           stillFonts = await settleStill(resolvedScene);
-          const runtimeErrors = (await frameEvents(resolvedScene.page)).filter(
-            (event) => event.type === "frame:error" || event.type === "frame:unhandled-rejection"
-          );
-          if (runtimeErrors.length > 0 || resolvedScene.issues.errors.length > 0) {
-            throw new StudioError(
-              "CAPTURE_RUNTIME_ERROR",
-              [...resolvedScene.issues.errors, ...runtimeErrors.map((event) => JSON.stringify(event.payload))].join("; ")
+          // A discovery pass takes no screenshot; the timeline above ran for the URLs it requests.
+          if (discovering()) {
+            stillFonts = undefined;
+          } else {
+            const runtimeErrors = (await frameEvents(resolvedScene.page)).filter(
+              (event) => event.type === "frame:error" || event.type === "frame:unhandled-rejection"
             );
+            if (runtimeErrors.length > 0 || resolvedScene.issues.errors.length > 0) {
+              throw new StudioError(
+                "CAPTURE_RUNTIME_ERROR",
+                [...resolvedScene.issues.errors, ...runtimeErrors.map((event) => JSON.stringify(event.payload))].join("; ")
+              );
+            }
+            const extension = (variant.output.format ?? "png") === "jpeg" ? "jpg" : "png";
+            screenshotPath = resolve(recipeDirectory, `${variant.id}.${extension}`);
+            await screenshotScene(resolvedScene.page, variant, outputRoot, screenshotPath, temporaryFiles);
+            artifacts.push(screenshotPath);
+            contactItems.push({id: variant.id, path: screenshotPath});
           }
-          const extension = (variant.output.format ?? "png") === "jpeg" ? "jpg" : "png";
-          screenshotPath = resolve(recipeDirectory, `${variant.id}.${extension}`);
-          await screenshotScene(resolvedScene.page, variant, outputRoot, screenshotPath, temporaryFiles);
-          artifacts.push(screenshotPath);
-          contactItems.push({id: variant.id, path: screenshotPath});
         } finally {
           await resolvedScene.context.close();
         }
@@ -834,7 +870,7 @@ export async function renderRecipe(
         progress.step = "thumbnail";
         const extension = recipe.outputs.thumbnails.format === "jpeg" ? "jpg" : "png";
         thumbnailPath = resolve(recipeDirectory, `${variant.id}-thumb.${extension}`);
-        await renderThumbnail(browser, screenshotPath, outputRoot, thumbnailPath, recipe.outputs.thumbnails, temporaryFiles);
+        await renderThumbnail(activeBrowser, screenshotPath, outputRoot, thumbnailPath, recipe.outputs.thumbnails, temporaryFiles);
         artifacts.push(thumbnailPath);
       }
 
@@ -845,7 +881,7 @@ export async function renderRecipe(
         const renderedFrames = await renderVideoFrames({
           project: renderProject,
           server,
-          browser,
+          browser: activeBrowser,
           variant,
           video,
           outputRoot,
@@ -854,8 +890,10 @@ export async function renderRecipe(
           onFrame: (written) => {
             progress.framesWritten = written;
           },
-          ...(options.fontRoute ? {fontRoute: options.fontRoute} : {})
+          ...sceneFonts
         });
+        // Nothing of a discovery pass is kept: no encode, no manifest entry.
+        if (renderedFrames.discovery) return;
         videoFonts = renderedFrames.fonts;
         framesPath = renderedFrames.framesDirectory;
         framesManifestPath = renderedFrames.framesManifest;
@@ -916,6 +954,7 @@ export async function renderRecipe(
         if (framesRetained) artifacts.push(renderedFrames.framesManifest);
       }
 
+      if (discovering()) return;
       const hashes: JsonObject = {};
       if (screenshotPath) hashes.screenshot = await hashFile(screenshotPath);
       if (thumbnailPath) hashes.thumbnail = await hashFile(thumbnailPath);
@@ -926,6 +965,11 @@ export async function renderRecipe(
       if (thumbnailPath) files.thumbnail = await describeArtifact(outputRoot, thumbnailPath);
       if (videoPath) files.video = await describeArtifact(outputRoot, videoPath, videoDimensions);
       if (framesManifestPath && framesRetained) files.framesManifest = await describeArtifact(outputRoot, framesManifestPath);
+      for (const fonts of [stillFonts, videoFonts]) {
+        if (!fonts) continue;
+        fonts.warnings.forEach((warning) => fontAccount.issues.add(warning));
+        fontAccount.redrawMs += fonts.redrawMs;
+      }
       entries.push({
         id: variant.id,
         scene: variant.scene.id,
@@ -950,7 +994,16 @@ export async function renderRecipe(
         files
       });
       progress.completedVariants.push(variant.id);
+    };
+    for (const variant of variants) {
+      try {
+        await renderVariant(variant);
+      } catch (error) {
+        // In a discovery pass a failure may only be the missing font; the pass result is discarded anyway.
+        if (!discovering() || isNoSpaceError(error)) throw error;
+      }
     }
+    if (discovering()) throw new FontsMissingError(options.fonts!.missing());
     delete progress.variant;
     delete progress.framesDirectory;
     progress.framesPlanned = 0;
@@ -970,6 +1023,7 @@ export async function renderRecipe(
       generatedAt: new Date().toISOString(),
       studio: {name: "se-widget-studio", version: STUDIO_VERSION},
       runtime: {seed: DEFAULT_SEED, fixedTime: DEFAULT_FIXED_TIME, locale: "en-US", timezone: "UTC"},
+      ...(options.fonts ? {fonts: jobFonts(options.fonts, fontAccount)} : {}),
       widget: {
         files: project.relativeFiles,
         resolvedConfig: renderProject.config,

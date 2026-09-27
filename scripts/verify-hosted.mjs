@@ -6,6 +6,7 @@ import {lstat, mkdir, mkdtemp, readFile, realpath, writeFile} from 'node:fs/prom
 import {basename, dirname, isAbsolute, relative, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
+import {inflateSync} from 'node:zlib';
 
 const exec = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -14,6 +15,9 @@ const JOB_LIMIT_MS = 10 * 60_000;
 const MAX_RESPONSE_BYTES = 4_000_000;
 const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
 const JOBS = [{kind: 'test', selection: 'all'}, {kind: 'render', selection: 'verification-image'}, {kind: 'render', selection: 'verification-video'}];
+// --fonts: the same revision rendered twice (a recipe, then its scene), then a smoke test.
+const FONT_JOBS = [{kind: 'render', selection: 'fonts-image'}, {kind: 'render', selection: 'scene:fonts'}, {kind: 'test', selection: 'all'}];
+const FONT_MISSING_FAMILY = 'Studio Verification Missing Family';
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const pause = ms => new Promise(done => setTimeout(done, ms));
 const check = (condition, message) => {if (!condition) throw new Error(message);};
@@ -26,6 +30,7 @@ export function parseOptions(args) {
     const arg = args[index];
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--allow-hosted') options.allowHosted = true;
+    else if (arg === '--fonts') options.fonts = true;
     else if (values.has(arg)) {
       check(args[index + 1] && !args[index + 1].startsWith('--'), `${arg} requires a value.`);
       const key = values.get(arg);
@@ -70,6 +75,71 @@ export function verificationSnapshot() {
   };
 }
 
+/**
+ * Synthetic Google Fonts project (fonts plan, stage 5): a static <link>, an @import, a setFont() that
+ * re-points a link at load, and a JS link to a family Google does not have. Nothing is vendored.
+ */
+export function fontsVerificationSnapshot() {
+  return {
+    schemaVersion: 1, name: 'Hosted verification — Google Fonts',
+    widget: {
+      viewport: {width: 320, height: 240}, ready: {selector: '#widget', timeoutMs: 10000},
+      html: '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap"><link id="runtime-font" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto&display=swap"><main id="widget"><h1 id="title">Studio fonts</h1><p class="imported">Imported Inter</p><p id="runtime">Runtime Archivo</p><p class="missing">Missing family</p></main>',
+      css: "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400&display=swap');*{box-sizing:border-box}body{margin:0;background:#20202a;color:#f6f4ff}main{padding:20px}h1{margin:0 0 12px;font:700 26px Roboto,sans-serif}.imported{font:400 18px Inter,sans-serif}#runtime{font-size:18px}.missing{font:400 18px '" + FONT_MISSING_FAMILY + "',sans-serif}",
+      js: "function setFont(name){document.getElementById('runtime-font').href='https://fonts.googleapis.com/css2?family='+encodeURIComponent(name).replace(/%20/g,'+')+'&display=swap';document.getElementById('runtime').style.fontFamily=\"'\"+name+\"',sans-serif\";}window.addEventListener('onWidgetLoad',({detail})=>{setFont(detail.fieldData.font);const link=document.createElement('link');link.rel='stylesheet';link.href='https://fonts.googleapis.com/css2?family=" + FONT_MISSING_FAMILY.replace(/ /g, '+') + "';document.head.append(link);});window.addEventListener('onWidgetUpdate',({detail})=>setFont(detail.fieldData.font));",
+      fields: {font: {type: 'googleFont', label: 'Font', value: 'Archivo'}}
+    },
+    channel: {username: 'synthetic_studio_viewer'},
+    themes: [], fixtures: [],
+    scenes: [{schemaVersion: 1, id: 'fonts', name: 'Google Fonts', viewport: {width: 320, height: 240}, output: {width: 320, height: 240, format: 'png'}, captureAtMs: 100, background: {id: 'plain', color: '#20202a'}}],
+    scenarios: [],
+    recipes: [{schemaVersion: 1, id: 'fonts-image', name: 'Google Fonts PNG', scenes: ['fonts'], outputs: {screenshots: true}, limit: 1}],
+    assets: []
+  };
+}
+
+/** Decodes an 8-bit RGB or RGBA, non-interlaced PNG into RGBA pixels (enough for the Studio's own screenshots). */
+export function decodePng(bytes) {
+  inspectPng(bytes, false);
+  const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20), depth = bytes[24], type = bytes[25], interlace = bytes[28];
+  check(depth === 8 && (type === 6 || type === 2) && interlace === 0, 'Only 8-bit RGB(A), non-interlaced PNGs can be compared.');
+  const channels = type === 6 ? 4 : 3; const idat = [];
+  for (let offset = 8; offset + 8 <= bytes.length;) {
+    const length = bytes.readUInt32BE(offset); const kind = bytes.subarray(offset + 4, offset + 8).toString('latin1');
+    if (kind === 'IDAT') idat.push(bytes.subarray(offset + 8, offset + 8 + length));
+    offset += 12 + length;
+  }
+  const raw = inflateSync(Buffer.concat(idat)); const stride = width * channels; const pixels = Buffer.alloc(width * height * 4);
+  let previous = Buffer.alloc(stride);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)]; const line = Buffer.from(raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)));
+    for (let x = 0; x < stride; x++) {
+      const left = x >= channels ? line[x - channels] : 0; const up = previous[x]; const corner = x >= channels ? previous[x - channels] : 0;
+      const p = left + up - corner; const pa = Math.abs(p - left), pb = Math.abs(p - up), pc = Math.abs(p - corner);
+      const predictor = [0, left, up, (left + up) >> 1, pa <= pb && pa <= pc ? left : pb <= pc ? up : corner][filter];
+      check(predictor !== undefined, 'PNG uses an unknown filter.');
+      line[x] = (line[x] + predictor) & 255;
+    }
+    for (let x = 0; x < width; x++) for (let c = 0; c < 4; c++) pixels[(y * width + x) * 4 + c] = c < channels ? line[x * channels + c] : 255;
+    previous = line;
+  }
+  return {width, height, pixels};
+}
+
+/**
+ * Share of pixels whose channels differ by more than `threshold`. Two renders in two Sandboxes may
+ * rasterize slightly differently (CPU), so they are compared within a tolerance, not by SHA-256.
+ */
+export function pngDifference(left, right, threshold = 32) {
+  const a = decodePng(left), b = decodePng(right);
+  check(a.width === b.width && a.height === b.height, 'Compared PNGs have different dimensions.');
+  let differing = 0;
+  for (let index = 0; index < a.pixels.length; index += 4) {
+    for (let c = 0; c < 4; c++) if (Math.abs(a.pixels[index + c] - b.pixels[index + c]) > threshold) { differing++; break; }
+  }
+  return differing / (a.width * a.height);
+}
+
 export function redact(value, secrets = []) {
   let result = String(value);
   for (const secret of secrets.filter(Boolean)) result = result.replaceAll(secret, '[REDACTED]');
@@ -96,10 +166,10 @@ async function boundedBody(response, limit) {
   return Buffer.concat(chunks);
 }
 
-export function inspectPng(bytes) {
+export function inspectPng(bytes, requireSize = true) {
   check(bytes.length >= 24 && bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' && bytes.subarray(12, 16).toString() === 'IHDR', 'Artifact is not a PNG with an IHDR header.');
   const dimensions = {width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20)};
-  check(dimensions.width === 320 && dimensions.height === 240, 'PNG dimensions must be 320×240.');
+  if (requireSize) check(dimensions.width === 320 && dimensions.height === 240, 'PNG dimensions must be 320×240.');
   return dimensions;
 }
 
@@ -142,6 +212,11 @@ export async function verify(options) {
   const privateDirectory = await privateRoot();
   const output = await mkdtemp(resolve(privateDirectory, 'hosted-verification-'));
   const report = {schemaVersion: 1, origin: options.origin, startedAt: new Date().toISOString(), status: 'running', checks: [], jobs: [], limitations: ['API verification does not replace an interactive editor or real StreamElements/OBS check.']};
+  const snapshot = options.fonts ? fontsVerificationSnapshot() : verificationSnapshot();
+  const jobs = options.fonts ? FONT_JOBS : JOBS;
+  if (options.fonts) report.mode = 'fonts';
+  /** Font evidence per job selection: parsed manifest or test report, and the PNG bytes. */
+  const fontEvidence = new Map();
   let access; let phase = 'preflight'; let requestDeadline = Infinity;
   const secrets = [process.env.STUDIO_CREATE_KEY];
   const addCheck = value => {if (!report.checks.includes(value)) report.checks.push(value);};
@@ -175,14 +250,14 @@ export async function verify(options) {
     const samples = await api('/api/v1/sample-media', {authorization: false}); expect(samples, 200, 'Sample media list');
     const served = new Map((samples.data?.items ?? []).map(item => [item?.reference, item?.sha256]));
     const localManifest = JSON.parse(await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../sample-media/manifest.json'), 'utf8'));
-    for (const reference of new Set(JSON.stringify(verificationSnapshot()).match(/sws-sample:[a-z0-9/.-]+/g) ?? [])) {
+    for (const reference of new Set(JSON.stringify(snapshot).match(/sws-sample:[a-z0-9/.-]+/g) ?? [])) {
       check(served.get(reference) === localManifest.items.find(item => item.reference === reference)?.sha256, `Deployment does not serve ${reference} with the manifest hash.`);
     }
     addCheck('sample media list served with manifest hashes before project creation');
     phase = 'project creation or resume';
     if (options.resume) access = await readAccess(options.resume, privateDirectory, options.origin);
     else {
-      const result = await api('/api/v1/projects', {method: 'POST', authorization: false, body: verificationSnapshot(), headers: process.env.STUDIO_CREATE_KEY ? {'X-Studio-Key': process.env.STUDIO_CREATE_KEY} : {}});
+      const result = await api('/api/v1/projects', {method: 'POST', authorization: false, body: snapshot, headers: process.env.STUDIO_CREATE_KEY ? {'X-Studio-Key': process.env.STUDIO_CREATE_KEY} : {}});
       if (typeof result.data?.token === 'string') secrets.push(result.data.token);
       expect(result, 201, 'Project creation');
       check(ID.test(result.data.projectId) && typeof result.data.token === 'string', 'Project creation did not return a valid editing capability.');
@@ -197,12 +272,13 @@ export async function verify(options) {
     const studioPath = `/api/studio/projects/${access.projectId}`;
     phase = 'project and preview checks';
     const current = await api(projectPath); expect(current, 200, 'Project reload');
-    check(current.data.revision.status === 'ready' && current.data.revision.id === access.revisionId && current.data.revision.snapshot.name === verificationSnapshot().name, 'Resume project is not the unchanged, ready synthetic verification project.');
+    check(current.data.revision.status === 'ready' && current.data.revision.id === access.revisionId && current.data.revision.snapshot.name === snapshot.name, 'Resume project is not the unchanged, ready synthetic verification project.');
     report.revisionId = current.data.revision.id; addCheck('authorized project reload');
     expect(await api(projectPath, {authorization: false}), 403, 'Unauthorized project read'); addCheck('unauthorized project read rejected');
     expect(await api(projectPath, {method: 'PUT', headers: {'If-Match': '"verification-stale-revision"'}, body: current.data.revision.snapshot}), 409, 'Stale full replacement');
     const unchanged = await api(projectPath); expect(unchanged, 200, 'Reload after stale replacement');
     check(unchanged.data.revision.id === report.revisionId, 'Stale replacement changed the immutable revision.'); addCheck('stale full replacement rejected without revision change');
+    if (!options.fonts) {
     const preview = await api(`${studioPath}/preview`, {method: 'POST', body: {sceneId: 'demo', fieldData: {title: 'Synthetic API preview'}}}); expect(preview, 200, 'Preview');
     const previewText = JSON.stringify(preview.data);
     check(!previewText.includes(access.token), 'Preview response exposed the editing capability.');
@@ -210,8 +286,9 @@ export async function verify(options) {
     check(preview.data.state?.fieldData?.title === 'Synthetic API preview' && typeof preview.data.nonce === 'string' && typeof preview.data.sessionId === 'string', 'Preview state or bridge values are missing.');
     check(preview.data.html.includes('sws-sample:gallery/neon-city.jpg') && /^data:image\/jpeg;base64,/.test(preview.data.backgroundImage ?? ''), 'Preview did not embed the deployed sample media.');
     addCheck('preview response, field overrides, embedded sample media, restrictive CSP, and capability isolation');
+    }
 
-    for (const requested of JOBS) {
+    for (const requested of jobs) {
       phase = `${requested.kind} job: ${requested.selection}`;
       requestDeadline = Date.now() + JOB_LIMIT_MS;
       const listed = await api(`${studioPath}/jobs`); expect(listed, 200, 'Job listing');
@@ -259,12 +336,35 @@ export async function verify(options) {
         await writeFile(path, bytes, {flag: 'wx', mode: 0o600});
         const item = {id: artifact.id, file, contentType: artifact.contentType, bytes: bytes.length, sha256};
         if (artifact.contentType === 'image/png') item.png = inspectPng(bytes);
+        if (options.fonts) {
+          const evidence = fontEvidence.get(requested.selection) ?? {fontPass: job.fontPass ?? 1};
+          if (artifact.contentType === 'image/png') evidence.png = bytes;
+          if (artifact.contentType === 'application/json') evidence.json = JSON.parse(bytes.toString('utf8'));
+          fontEvidence.set(requested.selection, evidence);
+        }
         if (artifact.contentType === 'video/mp4') item.video = await probeVideo(options.ffprobe, path);
         jobReport.artifacts.push(item);
       }
       if (requested.selection === 'verification-image') check(jobReport.artifacts.filter(item => item.png).length === 1, 'Image job must produce one verified PNG.');
       if (requested.selection === 'verification-video') check(jobReport.artifacts.filter(item => item.video).length === 1, 'Video job must produce one verified MP4.');
-      addCheck(requested.kind === 'test' ? 'synthetic smoke job' : requested.selection === 'verification-image' ? 'PNG download, SHA-256, and 320×240 dimensions' : 'MP4 download, SHA-256, H.264, one-second duration, and no audio');
+      if (!options.fonts) addCheck(requested.kind === 'test' ? 'synthetic smoke job' : requested.selection === 'verification-image' ? 'PNG download, SHA-256, and 320×240 dimensions' : 'MP4 download, SHA-256, H.264, one-second duration, and no audio');
+    }
+    if (options.fonts) {
+      phase = 'Google Fonts checks';
+      const first = fontEvidence.get('fonts-image'); const second = fontEvidence.get('scene:fonts'); const smoke = fontEvidence.get('all');
+      const served = first?.json?.fonts?.served ?? [];
+      check(first?.json?.fonts?.mode === 'cache' && served.some(item => item.url?.startsWith('https://fonts.googleapis.com/') && item.status === 200 && /^[a-f0-9]{64}$/.test(item.sha256)) && served.some(item => /^https:\/\/fonts\.gstatic\.com\/.+\.woff2$/.test(item.url ?? '') && item.status === 200 && /^[a-f0-9]{64}$/.test(item.sha256)), 'The first render did not serve a Google stylesheet and a woff2 with SHA-256 from the cache.');
+      report.fonts = {firstPasses: first.fontPass, secondPasses: second?.fontPass, servedDigest: first.json.fonts.servedDigest, userAgent: first.json.fonts.userAgent, served: served.length, issues: first.json.fonts.issues};
+      addCheck(`first render completed in ${first.fontPass} pass(es), serving ${served.length} Google Fonts URLs from the cache`);
+      check(second?.fontPass === 1, `The second render of the same revision needed a refill (${second?.fontPass} passes).`);
+      check(second.json?.fonts?.servedDigest === first.json.fonts.servedDigest, 'The second render served different fonts (servedDigest differs).');
+      const difference = pngDifference(first.png, second.png);
+      report.fonts.pngDifference = difference; report.fonts.pngIdentical = createHash('sha256').update(first.png).digest('hex') === createHash('sha256').update(second.png).digest('hex');
+      check(difference <= 0.01, `The second render's PNG differs from the first in ${(difference * 100).toFixed(2)}% of pixels.`);
+      addCheck('second render: no refill, identical servedDigest, PNG within pixel tolerance (SHA-256 equality is informational)');
+      const warnings = smoke?.json?.smoke?.warnings ?? [];
+      check(smoke?.json?.smoke?.status === 'passed' && warnings.some(warning => warning.startsWith('upstream-4xx:') && warning.includes(FONT_MISSING_FAMILY)), 'The smoke test did not complete with an upstream-4xx warning for the missing family.');
+      addCheck('smoke test completed with a warning for the family Google does not have');
     }
     report.status = 'passed';
   } catch (error) {
@@ -280,9 +380,12 @@ export async function verify(options) {
 async function main() {
   const options = parseOptions(process.argv.slice(2));
   if (options.help) {
-    console.log(`Usage: node scripts/verify-hosted.mjs --base-url <origin> [--allow-hosted] [--resume <private-file>] [--ffprobe <executable>]
+    console.log(`Usage: node scripts/verify-hosted.mjs --base-url <origin> [--allow-hosted] [--fonts] [--resume <private-file>] [--ffprobe <executable>]
 
 Creates one synthetic project and at most three jobs: smoke, 320×240 PNG, and one-second MP4.
+With --fonts, a synthetic Google Fonts project instead: a render, a second render of the same
+revision (no refill, same servedDigest, PNG within a pixel tolerance), and a smoke test whose
+missing family completes with a warning.
 Hosted origins require HTTPS and --allow-hosted. Loopback HTTP is allowed.
 Uses STUDIO_CREATE_KEY from the environment only when creating a project.
 Requires an already installed ffprobe (PATH, STUDIO_FFPROBE_PATH, or --ffprobe).

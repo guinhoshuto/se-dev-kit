@@ -5,6 +5,7 @@ import {normalizeFields} from '../src/config/fields';
 import {STUDIO_VERSION} from '../src/version';
 import type {CatalogItem, ResolvedProject} from '../src/types';
 import type {ObjectStore, PreparedSnapshot} from './model';
+import {canonicalGoogleFontsUrl} from '../src/runtime/google-fonts-url';
 
 const RESERVED = new Set(['widget.html', 'widget.css', 'widget.js', 'fields.json']);
 export function safeAssetPath(path: string): string {
@@ -13,6 +14,25 @@ export function safeAssetPath(path: string): string {
     throw new Error('Asset path must be a safe relative path and must not replace a production or catalog file.');
   }
   return path;
+}
+
+/**
+ * Revisions prepared before the font cache captured Google Fonts stylesheets and files into
+ * `_import/` (TTF, an old User-Agent). Jobs point those references back at their Google URL, so the
+ * worker serves the proxy's bytes from the job's font package and a page never mixes the two.
+ * The stored revision is not changed; only the job's materialized copy is.
+ */
+function capturedGoogleFonts(prepared: PreparedSnapshot): {path: string; url: string}[] {
+  return prepared.assets
+    .filter(asset => asset.path.startsWith('_import/') && asset.sourceUrl && canonicalGoogleFontsUrl(asset.sourceUrl).ok)
+    .map(asset => ({path: asset.path, url: asset.sourceUrl!}));
+}
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export function restoreGoogleFontReferences(text: string, captured: readonly {path: string; url: string}[]): string {
+  let restored = text;
+  // Captured paths are `_import/<sha256 prefix>.<ext>`, so an exact match cannot hit anything else.
+  for (const {path, url} of captured) restored = restored.replace(new RegExp(`(?:\\.{1,2}/)*${escapeRegExp(path)}`, 'g'), () => url);
+  return restored;
 }
 
 /** Materializes only the derived immutable snapshot in a newly owned job directory. */
@@ -25,9 +45,10 @@ export async function materializeSnapshot(prepared: PreparedSnapshot, store: Obj
   const snapshot = prepared.snapshot;
   const relativeFiles = {html: 'widget.html', css: 'widget.css', js: 'widget.js', fields: 'fields.json'};
   const files = {html: resolve(root, relativeFiles.html), css: resolve(root, relativeFiles.css), js: resolve(root, relativeFiles.js), fields: resolve(root, relativeFiles.fields)};
+  const captured = capturedGoogleFonts(prepared);
   await Promise.all([
-    writeFile(files.html, snapshot.widget.html, {flag: 'wx'}),
-    writeFile(files.css, snapshot.widget.css, {flag: 'wx'}),
+    writeFile(files.html, restoreGoogleFontReferences(snapshot.widget.html, captured), {flag: 'wx'}),
+    writeFile(files.css, restoreGoogleFontReferences(snapshot.widget.css, captured), {flag: 'wx'}),
     writeFile(files.js, snapshot.widget.js, {flag: 'wx'}),
     writeFile(files.fields, JSON.stringify(snapshot.widget.fields), {flag: 'wx'})
   ]);
@@ -46,7 +67,8 @@ export async function materializeSnapshot(prepared: PreparedSnapshot, store: Obj
     }
     const target = resolve(root, path);
     await mkdir(dirname(target), {recursive: true});
-    await writeFile(target, stored.body, {flag: 'wx'});
+    const text = captured.length && (asset.contentType === 'text/css' || path.endsWith('.css'));
+    await writeFile(target, text ? restoreGoogleFontReferences(Buffer.from(stored.body).toString('utf8'), captured) : stored.body, {flag: 'wx'});
   }
   async function catalog<T extends {id: string}>(kind: string, values: T[]): Promise<CatalogItem<T>[]> {
     await mkdir(resolve(root, 'catalog', kind), {recursive: true});

@@ -13,6 +13,7 @@ import {assetUrlPath} from "../server/assets.js";
 import {startStudioServer, type StudioServer} from "../server/server.js";
 import {createIsolatedContext, launchStudioBrowser, observePage, type BrowserIssueLog, type FontRoute} from "../capture/browser.js";
 import {checkFonts} from "../capture/fonts.js";
+import {FontsMissingError, isFontsMissing, type FontResolver} from "../fonts/resolver.js";
 import {createDefaultScene, resolveSceneState, type ResolvedSceneState} from "./state.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
 import {claimsSampleMediaScheme} from "../studio-ui/sample-media.js";
@@ -32,6 +33,8 @@ export interface OpenSceneResult {
   issues: BrowserIssueLog;
   resolved: ResolvedSceneState;
   frame: () => Frame;
+  /** The job's font package, when the capture replays one (hosted jobs). */
+  fonts?: FontResolver;
 }
 
 export async function backgroundForBrowser(
@@ -202,11 +205,20 @@ export async function captureHostSettle(page: Page, realDeadlineMs = SETTLE_DEAD
 
 /** Settles, then turns Google Fonts failures seen so far into FONT_UNAVAILABLE or FONT_UNSUPPORTED; returns warnings. */
 export async function settleAndCheckFonts(
-  opened: Pick<OpenSceneResult, "page" | "issues">,
+  opened: Pick<OpenSceneResult, "page" | "issues" | "fonts">,
   options: {light?: boolean; deadlineMs?: number} = {}
 ): Promise<{report: FontReport; warnings: string[]}> {
   const report = await captureHostSettle(opened.page, options.deadlineMs ?? SETTLE_DEADLINE_MS, options.light ?? false);
-  return {report, warnings: checkFonts(opened.issues.fonts, report).warnings};
+  return {report, warnings: checkOpenedFonts(opened, report).warnings};
+}
+
+/**
+ * checkFonts for an opened scene. URLs outside the job's font package are not failures here: the
+ * discovery pass collects them and ends with FONTS_MISSING instead.
+ */
+export function checkOpenedFonts(opened: Pick<OpenSceneResult, "issues" | "fonts">, report: FontReport | undefined): {warnings: string[]} {
+  const fonts = opened.fonts;
+  return checkFonts(opened.issues.fonts, report, fonts ? {ignore: (url) => fonts.isMissing(url)} : {});
 }
 
 export async function frameEvents(page: Page): Promise<{type: string; payload?: unknown}[]> {
@@ -243,6 +255,8 @@ export interface OpenSceneOptions {
   background?: ResolvedSceneState["background"];
   /** Answers Google Fonts requests with `route.fulfill`; without it they stay blocked. */
   fontRoute?: FontRoute;
+  /** The job's font package: answers Google Fonts requests like `fontRoute` and records misses. It wins over `fontRoute`. */
+  fonts?: FontResolver;
 }
 
 export async function openScene(
@@ -262,7 +276,7 @@ export async function openScene(
     allowedOrigins: [server.origin, server.frameOrigin],
     viewport: {width: resolved.output.width, height: resolved.output.height},
     deviceScaleFactor: resolved.viewport.deviceScaleFactor ?? 1,
-    ...(options.fontRoute ? {fontRoute: options.fontRoute} : {})
+    ...(options.fonts ? {fontRoute: options.fonts.route} : options.fontRoute ? {fontRoute: options.fontRoute} : {})
   });
   const page = await context.newPage();
   const issues = observePage(page);
@@ -290,7 +304,7 @@ export async function openScene(
     if (!frame) throw new StudioError("FRAME_NOT_FOUND", "Widget frame did not attach to the capture host.");
     return frame;
   };
-  return {context, page, issues, resolved, frame: getFrame};
+  return {context, page, issues, resolved, frame: getFrame, ...(options.fonts ? {fonts: options.fonts} : {})};
 }
 
 export async function replayFixture(page: Page, fixture: FixtureDefinition | undefined): Promise<number> {
@@ -354,18 +368,24 @@ function scenarioScene(project: ResolvedProject, scenario: ScenarioDefinition): 
   };
 }
 
+/**
+ * Runs one scenario and reports failures in its result. The one error it does not swallow is
+ * FONTS_MISSING: once any Google Fonts URL was outside the job's package, results are discarded
+ * and the workflow refills the package for another pass.
+ */
 async function runOneScenario(
   project: ResolvedProject,
   server: StudioServer,
   browser: Browser,
-  scenario: ScenarioDefinition
+  scenario: ScenarioDefinition,
+  fonts?: FontResolver
 ): Promise<ScenarioResult> {
   const startedAt = Date.now();
   const errors: string[] = [];
   const fontWarnings = new Set<string>();
   let opened: OpenSceneResult | undefined;
   try {
-    opened = await openScene(project, server, browser, scenarioScene(project, scenario));
+    opened = await openScene(project, server, browser, scenarioScene(project, scenario), fonts ? {fonts} : {});
     const scene = opened;
     const settleFonts = async () => {
       for (const warning of (await settleAndCheckFonts(scene)).warnings) fontWarnings.add(warning);
@@ -402,6 +422,7 @@ async function runOneScenario(
   } finally {
     await opened?.context.close();
   }
+  if (fonts?.hasMissing()) throw new FontsMissingError(fonts.missing());
   return {
     id: scenario.id,
     name: scenario.name,
@@ -414,7 +435,7 @@ async function runOneScenario(
 
 export async function runScenarios(
   project: ResolvedProject,
-  options: {scenarioIds?: string[]; browserPath?: string; headed?: boolean} = {}
+  options: {scenarioIds?: string[]; browserPath?: string; headed?: boolean; fonts?: FontResolver} = {}
 ): Promise<{results: ScenarioResult[]; browserPath: string}> {
   assertPublicSafeProject(project);
   const selected = options.scenarioIds?.length
@@ -435,7 +456,15 @@ export async function runScenarios(
     });
     browser = launched.browser;
     const results: ScenarioResult[] = [];
-    for (const scenario of selected) results.push(await runOneScenario(project, server, browser, scenario));
+    for (const scenario of selected) {
+      try {
+        results.push(await runOneScenario(project, server, browser, scenario, options.fonts));
+      } catch (error) {
+        // Keep running the other scenarios, so one discovery pass collects every missing URL.
+        if (!isFontsMissing(error)) throw error;
+      }
+    }
+    if (options.fonts?.hasMissing()) throw new FontsMissingError(options.fonts.missing());
     return {results, browserPath: launched.detection.executablePath ?? "unknown"};
   } finally {
     await browser?.close();
@@ -445,7 +474,7 @@ export async function runScenarios(
 
 export async function runBrowserSmoke(
   project: ResolvedProject,
-  options: {browserPath?: string; headed?: boolean} = {}
+  options: {browserPath?: string; headed?: boolean; fonts?: FontResolver} = {}
 ): Promise<ScenarioResult> {
   const smoke: ScenarioDefinition = {
     schemaVersion: 1,
@@ -457,8 +486,11 @@ export async function runBrowserSmoke(
   const server = await startStudioServer(project, {port: 0, watch: false});
   let browser: Browser | undefined;
   try {
-    ({browser} = await launchStudioBrowser(options));
-    return await runOneScenario(project, server, browser, smoke);
+    ({browser} = await launchStudioBrowser({
+      ...(options.browserPath ? {browserPath: options.browserPath} : {}),
+      ...(options.headed !== undefined ? {headed: options.headed} : {})
+    }));
+    return await runOneScenario(project, server, browser, smoke, options.fonts);
   } finally {
     await browser?.close();
     await server.close();

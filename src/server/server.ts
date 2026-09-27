@@ -165,13 +165,20 @@ async function closeServer(server: Server): Promise<void> {
   );
 }
 
+/**
+ * A protocol-relative `//fonts.googleapis.com/…` in a frame served over loopback HTTP becomes
+ * `http:`. The CSP lets exactly those two hosts through so the request reaches the route, which
+ * answers it from the job's font package (or blocks it); nothing is fetched over plain HTTP.
+ */
+const GOOGLE_FONTS_HTTP_SOURCES = "http://fonts.googleapis.com http://fonts.gstatic.com";
+
 function frameContentSecurityPolicy(controlOrigin: string): string {
   return [
     "default-src 'self' data: blob: https:",
     "script-src 'self' 'unsafe-inline' https:",
-    "style-src 'self' 'unsafe-inline' https:",
+    `style-src 'self' 'unsafe-inline' https: ${GOOGLE_FONTS_HTTP_SOURCES}`,
     "img-src 'self' data: blob: https:",
-    "font-src 'self' data: https:",
+    `font-src 'self' data: https: ${GOOGLE_FONTS_HTTP_SOURCES}`,
     "media-src 'self' data: blob: https:",
     "connect-src 'self' https:",
     `frame-ancestors ${controlOrigin}`,

@@ -491,3 +491,104 @@ export async function prewarmGoogleFonts(urls: readonly string[], options: Prewa
   for (const warning of outcomes) if (warning) warnings.push(warning);
   return warnings;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Job packages (stage 5): the fonts a render or test Sandbox receives as files. The Sandbox stays
+// `deny-all`; the trusted worker answers Chromium from these files with `route.fulfill`.
+
+/** A job package: lock entries (URL to status and SHA-256) and the objects they pin. */
+export interface JobFontPackage {
+  lock: {version: 1; epoch: string; userAgent: string; entries: FontLockEntry[]};
+  objects: Map<string, Uint8Array>;
+  bytes: number;
+}
+export const FONT_PACKAGE_MAX_ENTRIES = 1024;
+export const FONT_PACKAGE_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Builds a job's font package from storage only; it never contacts Google. It holds the revision's
+ * whole lock (4xx entries included), then the files each locked stylesheet lists that the cache
+ * already holds, then `cachedUrls` (static stylesheets, the previous revision's lock) when the cache
+ * already holds them in this revision's epoch and User-Agent. Anything else is found by a discovery pass.
+ */
+export async function buildJobFontPackage(options: {
+  store: ObjectStore; projectId: string; revisionId: string; epoch: string; userAgent: string;
+  cachedUrls?: readonly string[]; memory?: FontMemory;
+}): Promise<JobFontPackage> {
+  const ctx: Context = {
+    store: options.store, bucket: 'render', epoch: options.epoch, userAgent: options.userAgent, sampleText: '', deadline: 0, now: Date.now,
+    limits: {...FONT_BUDGET_LIMITS}, memory: options.memory ?? sharedMemory, lookup: undefined, transport: undefined
+  };
+  const entries = new Map<string, FontLockEntry>();
+  const objects = new Map<string, Uint8Array>();
+  let bytes = 0;
+  const add = async (entry: FontLockEntry): Promise<void> => {
+    if (entries.has(entry.url) || entries.size >= FONT_PACKAGE_MAX_ENTRIES) return;
+    if (entry.status !== 200) { entries.set(entry.url, entry); return; }
+    const body = objects.get(entry.sha256!) ?? await readObject(ctx, entry.sha256!, entry.bytes);
+    // A missing or altered object is left out; the pass that needs it reports it missing.
+    if (!body) return;
+    if (!objects.has(entry.sha256!)) {
+      if (bytes + body.byteLength > FONT_PACKAGE_MAX_BYTES) return;
+      objects.set(entry.sha256!, body);
+      bytes += body.byteLength;
+    }
+    entries.set(entry.url, entry);
+  };
+  const addCached = async (input: string): Promise<void> => {
+    const canonical = canonicalGoogleFontsUrl(input);
+    if (!canonical.ok || entries.has(canonical.url)) return;
+    const indexed = await readIndex(ctx, canonical.url);
+    if (indexed) await add({url: indexed.url, status: 200, sha256: indexed.sha256, bytes: indexed.bytes, contentType: indexed.contentType});
+  };
+  const locked = await lockForRevision(options.store, options.projectId, options.revisionId);
+  for (const entry of locked) await add(entry);
+  const stylesheetFiles = async (): Promise<void> => {
+    for (const entry of [...entries.values()]) {
+      if (entry.status !== 200 || entry.contentType !== 'text/css') continue;
+      const body = objects.get(entry.sha256!);
+      const validation = body ? validateGoogleCss(body) : undefined;
+      if (validation?.ok) for (const file of validation.files) await addCached(file.url);
+    }
+  };
+  await stylesheetFiles();
+  for (const url of options.cachedUrls ?? []) await addCached(url);
+  await stylesheetFiles();
+  const sorted = [...entries.values()].sort((a, b) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0));
+  return {lock: {version: 1, epoch: options.epoch, userAgent: options.userAgent, entries: sorted}, objects, bytes};
+}
+
+/** At most this many URLs a pass reports missing are resolved; the list comes from an unsandboxed Chromium. */
+export const FONT_REFILL_MAX_URLS = 256;
+
+/** Re-canonicalizes and caps a worker's `needsFonts`: unique canonical Google Fonts URLs only. */
+export function canonicalNeedsFonts(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const urls: string[] = [];
+  for (const item of value.slice(0, FONT_REFILL_MAX_URLS)) {
+    if (typeof item !== 'string') continue;
+    const canonical = canonicalGoogleFontsUrl(item);
+    if (canonical.ok && !urls.includes(canonical.url)) urls.push(canonical.url);
+  }
+  return urls;
+}
+
+/**
+ * Resolves the URLs a discovery pass missed, in the `render` budget bucket, into the cache and the
+ * revision's lock (4xx answers included). Returns the failures that leave a font unavailable.
+ */
+export async function resolveMissingFonts(urls: readonly string[], options: {
+  store: ObjectStore; projectId: string; revisionId: string; epoch: string; userAgent: string; deadline: number;
+} & Pick<ResolveGoogleFontOptions, 'memory' | 'lookup' | 'transport' | 'now' | 'budgetLimits'>): Promise<{url: string; reason: FontUnavailableReason; message: string}[]> {
+  const {store, projectId, revisionId, ...rest} = options;
+  const failures: {url: string; reason: FontUnavailableReason; message: string}[] = [];
+  const queue = [...urls];
+  const worker = async () => {
+    for (let url = queue.shift(); url !== undefined; url = queue.shift()) {
+      const result = await resolveGoogleFont(url, {...rest, store, bucket: 'render', lock: {projectId, revisionId}});
+      if (result.status === 'unavailable') failures.push({url, reason: result.reason, message: result.message});
+    }
+  };
+  await Promise.all(Array.from({length: Math.min(EAGER_CONCURRENCY, queue.length)}, worker));
+  return failures.sort((a, b) => (a.url < b.url ? -1 : 1));
+}
