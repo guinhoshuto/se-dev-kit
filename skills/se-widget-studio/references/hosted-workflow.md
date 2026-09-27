@@ -29,6 +29,10 @@ These skill-only `file` entries are uploaded through private reservations after 
 
 Creation is an external mutation. Confirm the intended widget root and target origin before running it. The command prints only safe identifiers and the access-file path. If the response is uncertain, do not import again; inspect the access file or service state first.
 
+If `import` prints `"status": "blocked"`, the project already exists and the output lists its `diagnostics` (`status` shows them again). Fix the catalog, then `pull` and `push` on that same project; do not import again.
+
+When the catalog uses `sws-sample:` references, `import` and `push` first check them, before any change: offline against `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json`, present when the skill runs from a checkout or a linked skill directory), then against `GET /api/v1/sample-media` on the selected origin. If the deployment answers that it does not support them or does not serve a reference, nothing is created or pushed: stop and tell the user that the deployment must be updated first. Do not upload, draw, or generate images as a workaround.
+
 ### Widgets with a local Studio config
 
 A `se-widget-studio.config.mjs` cannot be passed as `--catalog`. Build a JSON catalog from it and keep that file with the widget's other Studio-only files, never among its production files:
@@ -36,7 +40,8 @@ A `se-widget-studio.config.mjs` cannot be passed as `--catalog`. Build a JSON ca
 - Copy only `widget.viewport` and `widget.ready`. Drop `widget.root`, `widget.files`, `widget.assets`, and the top-level `output`; the helper or the strict hosted schema rejects them.
 - Expand each `{glob}` into an array of the matching JSON objects. Wrap a plain field-data file, such as a production theme preset, as `{"schemaVersion": 1, "id": "<file name without .json>", "name": "<name>", "fieldData": <file contents>}`, because local mode derives that ID from the file name and scenes refer to it.
 - Replace asset globs with one `{path, file, contentType}` entry per file, keeping `path` equal to the file's path relative to the widget root.
-- Rewrite local-only media values in `fieldData` from `/__sws/widget/<path>` to `<path>`; hosted import rejects absolute local paths. Hosted import rewrites only string media values, so check array-valued media fields (an `image-input` with `multiple: true`) in a test job before rendering.
+- Convert copies of the Studio's sample media first (next item), then rewrite the remaining local-only media values in `fieldData` from `/__sws/widget/<path>` to `<path>`; hosted import rejects absolute local paths. Hosted import rewrites only string media values, so check array-valued media fields (an `image-input` with `multiple: true`) that hold widget asset paths in a test job before rendering. Arrays of `sws-sample:` references need no check: import validates them and every mode resolves them.
+- Test images that are copies of the Studio's sample media become `sws-sample:` references instead of uploads. For the images an agent generated for se-windows, a gallery value `/__sws/widget/studio/media/gallery/NN-<name>.jpg` (or `studio/media/gallery/NN-<name>.jpg`, if the previous rewrite already ran) becomes `sws-sample:gallery/<name>.jpg`, dropping the `NN-` prefix; a `background.image` `studio/media/backdrops/bd-<name>.jpg` becomes `sws-sample:backdrops/<name>.jpg`, dropping `bd-`. Add the backdrop's paired `color` from [the sample table](catalog-authoring.md#sample-media) when the background has none, and drop the matching `assets` entries. The sample files were recompressed, so renders are not byte-identical to renders made from the generated originals. Do this only in the JSON catalog you build, never in the widget directory. Where a widget has no test media at all, use samples from [catalog-authoring.md](catalog-authoring.md#sample-media) rather than creating images.
 - Check the result against the per-revision limits below before importing; split it as described in "Plan a large batch" when it does not fit.
 
 ## Open and manipulate
@@ -102,7 +107,9 @@ Hosted mode is the default even for marketing batches. Plan them inside the boun
 
 - Complete JSON request/preview response: 4 MB.
 - A revision holds at most 48 themes, fixtures, scenes, scenarios, and recipes each, and at most 128 asset files and 100 MB of assets, 10 MB per file.
-- Interactive editor preview: at most 3 MB of captured assets in total. When a revision is too large to preview, preview a smaller revision; render jobs keep the 100 MB revision budget.
+- Interactive editor preview: captured assets and the `sws-sample:` images the previewed scene uses share one 3 MiB budget. The preview response carries them as base64 together with the stage background image and must stay under 4,000,000 bytes, so plan for well under 3 MB of raw media in total, background included; an image the widget HTML or CSS references directly is embedded more than once. When a revision is too large to preview, preview a smaller revision; render jobs keep the 100 MB revision budget. Sample media never count toward the 128-file or 100 MB revision budget or the upload quota.
+- `sws-sample:` references need a deployment that ships sample media, announced by `GET /api/v1/sample-media`. An older deployment blocks such a revision with an unrelated path error (`Asset paths must be relative…`) or passes gallery arrays to the widget unresolved; the client check above prevents both.
+- A saved revision pins each sample it uses to its SHA-256. If a deployment ever served different bytes for that reference, preview and jobs fail with `Sample media changed since this revision was saved` instead of rendering other pixels.
 - One active job per project, two globally; 50 jobs per UTC day.
 - Video: up to 15 seconds and 30 fps per variant, and 900 frames per job.
 - A render recipe has at most 48 variants, or four when video is enabled.

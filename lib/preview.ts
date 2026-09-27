@@ -4,14 +4,23 @@ import type {JsonObject, JsonValue, RuntimeState} from '../src/types';
 import {normalizeFields} from '../src/config/fields';
 import type {ObjectStore, PreparedSnapshot, WidgetSnapshot} from './model';
 import {assertSafeSnapshot, attribute, elements, rewriteCss, setAttribute, setText, sha256, textContent} from './importer';
+import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/studio-ui/sample-media';
+import {deployedSampleMedia, sampleMediaDataUrl, type SampleMediaSource} from './sample-media';
 
 interface PreviewOptions {origin: string; sessionId: string; nonce: string; sceneId?: string; themeId?: string; fieldData?: JsonObject}
 function merge(...objects: (JsonObject | undefined)[]): JsonObject { return Object.assign({}, ...objects.filter(Boolean).map(value => structuredClone(value))); }
 
+const PREVIEW_ASSET_LIMIT = 3 * 1024 * 1024;
+
 /** The editor host may display only embedded, verified images, never submitted remote URLs. */
-export async function previewBackground(prepared: PreparedSnapshot, store: ObjectStore, options: Pick<PreviewOptions, 'sceneId'>): Promise<string | undefined> {
+export async function previewBackground(prepared: PreparedSnapshot, store: ObjectStore, options: Pick<PreviewOptions, 'sceneId'>, sampleMedia: SampleMediaSource = deployedSampleMedia): Promise<string | undefined> {
   const reference = prepared.snapshot.scenes.find(scene => scene.id === options.sceneId)?.background?.image;
   if (!reference) return undefined;
+  if (claimsSampleMediaScheme(reference)) {
+    const sample = await sampleMediaDataUrl(reference, sampleMedia, prepared.sampleMedia);
+    if (sample.bytes > PREVIEW_ASSET_LIMIT) throw new Error('Interactive preview background exceeds the 3 MB limit.');
+    return sample.dataUrl;
+  }
   if (reference.startsWith('data:')) {
     if (!/^data:image\/(?:png|jpeg|gif|webp|avif|svg\+xml)(?:;[^,]*)?,/i.test(reference)) throw new Error('Preview backgrounds must be embedded image data.');
     if (Buffer.byteLength(reference) > 3 * 1024 * 1024) throw new Error('Interactive preview background exceeds the 3 MB limit.');
@@ -38,7 +47,7 @@ export function previewState(snapshot: WidgetSnapshot, options: Pick<PreviewOpti
 }
 
 /** Prepared resources are data URLs inside an opaque iframe, never executable uploads on the editor origin. */
-export async function previewHtml(prepared: PreparedSnapshot, store: ObjectStore, options: PreviewOptions): Promise<string> {
+export async function previewHtml(prepared: PreparedSnapshot, store: ObjectStore, options: PreviewOptions, sampleMedia: SampleMediaSource = deployedSampleMedia): Promise<string> {
   assertSafeSnapshot(prepared.snapshot, options.fieldData);
   for (const value of Object.values(options.fieldData ?? {})) if (typeof value === 'string' && /^(?:https?:|\/\/|blob:)/i.test(value)) throw new Error('New remote field resources must be saved and prepared before preview.');
   const origin = new URL(options.origin).origin;
@@ -58,7 +67,7 @@ export async function previewHtml(prepared: PreparedSnapshot, store: ObjectStore
     const object = await store.get(asset.key);
     if (!object || object.body.byteLength !== asset.bytes || sha256(object.body) !== asset.sha256) throw new Error(`Preview resource integrity check failed: ${path}`);
     assetBytes += object.body.byteLength;
-    if (assetBytes > 3 * 1024 * 1024) throw new Error('Interactive preview supports up to 3 MB of captured assets. Use a smaller preview revision; server-side jobs retain the 100 MB revision limit.');
+    if (assetBytes > PREVIEW_ASSET_LIMIT) throw new Error('Interactive preview supports up to 3 MB of captured assets. Use a smaller preview revision; server-side jobs retain the 100 MB revision limit.');
     visiting.add(path);
     const body = asset.contentType === 'text/css' || path.endsWith('.css') ? Buffer.from(await rewriteCss(Buffer.from(object.body).toString('utf8'), ref => inline(ref, path))) : Buffer.from(object.body);
     const data = `data:${asset.contentType};base64,${body.toString('base64')}`;
@@ -66,6 +75,15 @@ export async function previewHtml(prepared: PreparedSnapshot, store: ObjectStore
     return data;
   };
   for (const asset of prepared.assets) await inline(asset.path);
+  // Embed only the samples the effective preview state and the scene fixture use, as verified data URLs.
+  const state = previewState(prepared.snapshot, options);
+  const sceneFixture = prepared.snapshot.fixtures.find(item => item.id === prepared.snapshot.scenes.find(scene => scene.id === options.sceneId)?.fixture);
+  for (const reference of collectSampleMediaReferences({fieldData: state.fieldData, channel: state.channel, recents: state.recents, events: sceneFixture?.events ?? []})) {
+    const sample = await sampleMediaDataUrl(reference, sampleMedia, prepared.sampleMedia);
+    assetBytes += sample.bytes;
+    if (assetBytes > PREVIEW_ASSET_LIMIT) throw new Error('Interactive preview supports up to 3 MB of captured assets and sample media together. Sample media counts toward this preview budget; use fewer samples in this scene. Server-side jobs are not limited by it.');
+    resources.set(reference, sample.dataUrl);
+  }
   const document = parse(prepared.snapshot.widget.html);
   for (const node of elements(document)) {
     for (const name of ['src', 'poster', 'data-sws-src', ...(node.tagName === 'link' ? ['href'] : [])]) { const value = attribute(node, name); if (value) setAttribute(node, name, await inline(value)); }

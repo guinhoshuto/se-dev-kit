@@ -12,6 +12,7 @@ import type {
 import {StudioError} from "../shared/errors.js";
 import {DEFAULT_FIXED_TIME} from "../scenarios/state.js";
 import {cssColor, formatColor, hsvToRgb, needsDarkText, parseColor, rgbToHsv, type Rgba} from "./color.js";
+import {sampleMediaDisplayText} from "../studio-ui/sample-media.js";
 
 /** Internal cursor targets extend the author-facing ones with transient menu entries. */
 export type TimelineTarget =
@@ -171,6 +172,8 @@ export const EMULATE_MENU: EmulateMenuEntry[] = [
   {kind: "charity", label: "Charity event", icon: "charity", options: ["Tiltify", "Extralife", "DonorDrive"], emulatable: false},
   {kind: "other", label: "Other", icon: "dots", options: ["Custom..."], emulatable: false}
 ];
+
+const MEDIA_TYPES = new Set(["image-input", "video-input", "sound-input"]);
 
 const TEXT_TYPES = new Set([
   "text",
@@ -393,7 +396,10 @@ export function compileTutorial(options: {
   const groups = [...new Set(fields.map((field) => field.group))];
   const values: Record<string, JsonPrimitive> = {};
   for (const field of fields) values[field.id] = asPrimitive(options.fieldData[field.id]);
-  const initialValues = {...values};
+  // The editor replica shows a sample's file name, never the internal sws-sample: reference.
+  const shownValue = (field: {type: string}, value: JsonPrimitive): JsonPrimitive =>
+    MEDIA_TYPES.has(field.type) && typeof value === "string" ? sampleMediaDisplayText(value) : value;
+  const initialValues = Object.fromEntries(fields.map((field) => [field.id, shownValue(field, values[field.id] ?? null)]));
   const typingMs = tutorial.typingMsPerChar ?? DEFAULT_TYPING_MS;
   const hasChatStep = tutorial.steps.some((step) => step.action === "chat");
   const channel = tutorial.chat?.channel ?? options.channel;
@@ -649,9 +655,10 @@ export function compileTutorial(options: {
           patch(t, {focusField: field.id, selectAll: field.id});
           t += 320;
           patch(t, {selectAll: null, fieldValue: {id: field.id, value: ""}});
-          typeInto((partial) => ({fieldValue: {id: field.id, value: partial}}), String(value));
+          const shown = shownValue(field, value);
+          typeInto((partial) => ({fieldValue: {id: field.id, value: partial}}), String(shown));
           t += 220;
-          patch(t, {focusField: null, fieldValue: {id: field.id, value}});
+          patch(t, {focusField: null, fieldValue: {id: field.id, value: shown}});
         } else {
           throw new StudioError(
             "TUTORIAL_FIELD_UNSUPPORTED",

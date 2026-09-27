@@ -15,7 +15,11 @@ export interface WidgetSnapshot {
 }
 export interface StoredAsset {path: string; key: string; contentType: string; bytes: number; sha256: string; sourceUrl?: string}
 /** A derived, offline-ready snapshot. Original source remains in Revision.snapshot. */
-export interface PreparedSnapshot {snapshot: WidgetSnapshot; assets: StoredAsset[]; warnings: string[]}
+export interface PreparedSnapshot {
+  snapshot: WidgetSnapshot; assets: StoredAsset[]; warnings: string[];
+  /** Built-in sample references used by the revision, pinned to the SHA-256 of the deployed bytes at preparation. */
+  sampleMedia?: Record<string, string>;
+}
 export interface ProjectRecord {id: string; name: string; revisionId: string; accessHash: string; createdAt: string; updatedAt: string}
 export interface Revision {id: string; projectId: string; createdAt: string; snapshot: WidgetSnapshot; status: 'preparing' | 'ready' | 'blocked'; diagnostics: string[]; prepared?: PreparedSnapshot}
 export interface Artifact {id: string; name: string; key: string; contentType: string; bytes: number; sha256: string}

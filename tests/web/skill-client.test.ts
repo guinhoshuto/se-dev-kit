@@ -41,6 +41,125 @@ test('hosted skill client normalizes safe origins and builds source-faithful sna
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test('hosted skill client passes built-in sample references through without uploads', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-samples-'));
+  try {
+    await widget(root);
+    const catalog = join(root, 'catalog.json');
+    const scene = {schemaVersion: 1, id: 'gallery', name: 'Gallery', fieldData: {image: 'sws-sample:gallery/neon-city.jpg', galleryImages: ['sws-sample:gallery/ocean-moon.jpg', 'sws-sample:gallery/pixel-forest.jpg']}, background: {id: 'aurora', image: 'sws-sample:backdrops/aurora-mesh.jpg', color: '#2e2b52'}};
+    await writeFile(catalog, JSON.stringify({scenes: [scene]}));
+    const snapshot = await buildSnapshot(root, {catalog});
+    assert.deepEqual(snapshot.scenes[0], scene);
+    assert.deepEqual(snapshot.assets, []);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+const SAMPLE_SCENE = {schemaVersion: 1, id: 'gallery', name: 'Gallery', fieldData: {galleryImages: ['sws-sample:gallery/ocean-moon.jpg', 'sws-sample:gallery/pixel-forest.jpg']}, background: {id: 'aurora', image: 'sws-sample:backdrops/aurora-mesh.jpg', color: '#2e2b52'}};
+const TEST_TOKEN = 'private_capability_12345678901234567890';
+
+/** A fake Studio whose sample-media support is selectable: `old` predates the list, `partial` lacks the backdrop. */
+async function sampleStudio(mode: {current: 'old' | 'partial' | 'current'}) {
+  const manifest = JSON.parse(await readFile(resolve('sample-media/manifest.json'), 'utf8')) as {items: {reference: string; sha256: string}[]};
+  const requests: string[] = [];
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    requests.push(`${request.method} ${request.url}`);
+    if (request.method === 'GET' && request.url === '/api/v1/sample-media') {
+      if (mode.current === 'old') {response.statusCode = 404; response.setHeader('Content-Type', 'text/html'); return response.end('<!doctype html><title>404</title>');}
+      const items = manifest.items.filter(item => mode.current === 'current' || !item.reference.includes('backdrops/')).map(({reference, sha256}) => ({reference, sha256}));
+      response.setHeader('Content-Type', 'application/json'); return response.end(JSON.stringify({schemaVersion: 1, items}));
+    }
+    response.setHeader('Content-Type', 'application/json');
+    if (request.method === 'POST' && request.url === '/api/v1/projects') {
+      response.statusCode = 201;
+      return response.end(JSON.stringify({projectId: 'project-test', revisionId: 'revision-test', status: 'ready', token: TEST_TOKEN, editorUrl: `/p/project-test#key=${TEST_TOKEN}`, etag: 'etag-test'}));
+    }
+    if (request.method === 'PUT' && request.url === '/api/v1/projects/project-test') return response.end(JSON.stringify({revision: {id: 'revision-next', status: 'ready', diagnostics: []}}));
+    response.statusCode = 500; response.end(JSON.stringify({error: 'Unexpected test route.'}));
+  });
+  await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const address = server.address(); assert.ok(address && typeof address === 'object');
+  return {server, requests, origin: `http://127.0.0.1:${address.port}`};
+}
+const failure = (pattern: RegExp) => (error: {stderr?: string}) => {assert.match(error.stderr ?? '', pattern); return true;};
+
+test('hosted import checks sample references offline and against the deployment before creating a project', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-sample-support-'));
+  const mode: {current: 'old' | 'partial' | 'current'} = {current: 'current'};
+  const studio = await sampleStudio(mode);
+  try {
+    await widget(root);
+    const catalog = join(root, 'catalog.json');
+    const run = (out: string) => exec(process.execPath, [script, 'import', '--widget-root', root, '--catalog', catalog, '--origin', studio.origin, '--access-out', join(root, out)], {env: {...process.env, STUDIO_CREATE_KEY: undefined}});
+
+    await writeFile(catalog, JSON.stringify({scenes: [{...SAMPLE_SCENE, fieldData: {galleryImages: ['sws-sample:gallery/not-a-sample.jpg']}}]}));
+    await assert.rejects(run('a.json'), failure(/Unknown sample media reference\(s\): sws-sample:gallery\/not-a-sample\.jpg\. Valid references: .*sws-sample:gallery\/neon-city\.jpg.*Nothing was created\./));
+    assert.deepEqual(studio.requests, [], 'an unknown reference must fail before any request');
+
+    await writeFile(catalog, JSON.stringify({scenes: [SAMPLE_SCENE]}));
+    mode.current = 'old';
+    await assert.rejects(run('b.json'), failure(/does not support sws-sample: references: GET \/api\/v1\/sample-media returned HTTP 404.*Nothing was created\./));
+    mode.current = 'partial';
+    await assert.rejects(run('c.json'), failure(/does not serve these sample references: sws-sample:backdrops\/aurora-mesh\.jpg\./));
+    assert.deepEqual(studio.requests, ['GET /api/v1/sample-media', 'GET /api/v1/sample-media'], 'no project may be created without deployment support');
+
+    mode.current = 'current';
+    const {stdout} = await run('d.json');
+    assert.equal(JSON.parse(stdout).status, 'ready');
+    assert.deepEqual(studio.requests.slice(2), ['GET /api/v1/sample-media', 'POST /api/v1/projects']);
+  } finally {
+    await new Promise<void>(done => studio.server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('hosted push refuses sample references the deployment does not serve', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-sample-push-'));
+  const mode: {current: 'old' | 'partial' | 'current'} = {current: 'old'};
+  const studio = await sampleStudio(mode);
+  try {
+    const access = join(root, 'access.json');
+    await writeFile(access, JSON.stringify({schemaVersion: 1, purpose: 'se-widget-studio-access', origin: studio.origin, projectId: 'project-test', token: TEST_TOKEN, editorUrl: `/p/project-test#key=${TEST_TOKEN}`}), {mode: 0o600});
+    const draft = join(root, 'draft.json');
+    await writeFile(draft, JSON.stringify({schemaVersion: 1, purpose: 'se-widget-studio-draft', origin: studio.origin, projectId: 'project-test', revisionId: 'revision-test', etag: 'etag-test', snapshot: {schemaVersion: 1, name: 'Draft', scenes: [SAMPLE_SCENE]}}));
+    await assert.rejects(main(['push', '--access', access, '--draft', draft]), /does not support sws-sample: references.*Nothing was pushed\./);
+    assert.deepEqual(studio.requests, ['GET /api/v1/sample-media']);
+    mode.current = 'current';
+    await main(['push', '--access', access, '--draft', draft]);
+    assert.deepEqual(studio.requests.slice(1), ['GET /api/v1/sample-media', 'PUT /api/v1/projects/project-test']);
+  } finally {
+    await new Promise<void>(done => studio.server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('hosted import prints the diagnostics of a blocked revision without its capability', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-blocked-'));
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    response.setHeader('Content-Type', 'application/json');
+    if (request.method === 'POST' && request.url === '/api/v1/projects') {
+      response.statusCode = 201;
+      return response.end(JSON.stringify({projectId: 'project-test', revisionId: 'revision-test', status: 'blocked', token: TEST_TOKEN, editorUrl: `/p/project-test#key=${TEST_TOKEN}`, etag: 'etag-test'}));
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/projects/project-test') return response.end(JSON.stringify({etag: 'etag-test', revision: {id: 'revision-test', status: 'blocked', diagnostics: ['Missing asset: logo.png']}}));
+    response.statusCode = 500; response.end(JSON.stringify({error: 'Unexpected test route.'}));
+  });
+  try {
+    await widget(root);
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const {stdout} = await exec(process.execPath, [script, 'import', '--widget-root', root, '--origin', `http://127.0.0.1:${address.port}`, '--access-out', join(root, 'access.json')], {env: {...process.env, STUDIO_CREATE_KEY: undefined}});
+    assert.equal(stdout.includes(TEST_TOKEN), false);
+    const printed = JSON.parse(stdout);
+    assert.equal(printed.status, 'blocked');
+    assert.deepEqual(printed.diagnostics, ['Missing asset: logo.png']);
+  } finally {
+    await new Promise<void>(done => server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('hosted import stores the capability privately and never prints it', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-skill-import-'));
   let submitted: any; let finalized: any; let uploaded = Buffer.alloc(0); let uploadAuthorization = '';

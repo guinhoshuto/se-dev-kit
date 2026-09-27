@@ -37,6 +37,7 @@ Every render writes a versioned `manifest.json` with:
 - Per-artifact MIME type, byte count, actual image dimensions, and SHA-256.
 - Deterministic seed, fixed time, locale, and timezone.
 - Hashes for the adapter and every allowlisted local asset, including widget images, fonts, and media.
+- `widget.sampleMediaHashes`: the SHA-256 of every built-in `sws-sample:` image that FIELDS defaults, channel, or any catalog uses, computed from the verified bytes the server serves. They join the input digest only when a sample is used, so digests of sample-free projects are unchanged.
 - Contact sheet path, hash, byte count, MIME type, and dimensions when one is produced.
 - Final, unvalidated, or intermediate status.
 

@@ -4,7 +4,8 @@ const config = {
   poweredByHeader: false,
   serverExternalPackages: ['playwright-core'],
   outputFileTracingRoot: process.cwd(),
-  outputFileTracingIncludes: {'/*': ['./dist/**/*', './scripts/job-worker.mjs', './presets/**/*']},
+  // Read at runtime by fs and uploaded to the Sandbox (lib/jobs.ts SANDBOX_ENGINE_FOLDERS); verify with npm run verify:bundle.
+  outputFileTracingIncludes: {'/*': ['./dist/**/*', './scripts/job-worker.mjs', './presets/**/*', './sample-media/**/*']},
   webpack(config) {
     config.resolve.extensionAlias = {'.js': ['.ts', '.tsx', '.js'], '.mjs': ['.mts', '.mjs']};
     return config;

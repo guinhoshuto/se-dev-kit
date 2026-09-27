@@ -13,6 +13,7 @@ import {startStudioServer, type StudioServer} from "../server/server.js";
 import {createIsolatedContext, launchStudioBrowser, observePage, type BrowserIssueLog} from "../capture/browser.js";
 import {createDefaultScene, resolveSceneState, type ResolvedSceneState} from "./state.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
+import {claimsSampleMediaScheme} from "../studio-ui/sample-media.js";
 
 export interface ScenarioResult {
   id: string;
@@ -31,9 +32,15 @@ export interface OpenSceneResult {
   frame: () => Frame;
 }
 
-function backgroundForBrowser(background: ResolvedSceneState["background"], frameOrigin: string) {
+export async function backgroundForBrowser(
+  background: ResolvedSceneState["background"],
+  server: Pick<StudioServer, "frameOrigin" | "sampleMediaUrl">
+): Promise<ResolvedSceneState["background"]> {
+  const frameOrigin = server.frameOrigin;
   const image = background.image;
   if (!image) return background;
+  // Built-in samples resolve only through the verified manifest, before the generic scheme block.
+  if (claimsSampleMediaScheme(image)) return {...background, image: await server.sampleMediaUrl(image)};
   if (/^(?:data|blob):/i.test(image)) return background;
   if (/^(?:[a-z][a-z\d+.-]*:|\/\/|\/)/i.test(image)) {
     throw new StudioError(
@@ -183,7 +190,7 @@ export async function openScene(
     viewport: resolved.viewport,
     output: resolved.output,
     camera: resolved.camera,
-    background: backgroundForBrowser(resolved.background, server.frameOrigin),
+    background: await backgroundForBrowser(resolved.background, server),
     readyTimeoutMs
   }, readyTimeoutMs, project.config.widget.ready?.selector);
   await page.clock.setSystemTime(captureTime);

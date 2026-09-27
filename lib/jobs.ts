@@ -8,6 +8,8 @@ import {materializeSnapshot, relocateProject} from './materialize';
 import {getStore, mutateJson, readJson} from './storage';
 
 const MAX_JOB_MS = 10 * 60_000;
+/** Trusted deployment folders copied into every offline Sandbox; next.config.mjs must trace the same folders. */
+export const SANDBOX_ENGINE_FOLDERS = ['dist', 'presets', 'sample-media'] as const;
 const REMOTE_ROOT = '/vercel/sandbox/studio';
 interface WorkerResult {ok: boolean; artifacts: {name: string; bytes: number; sha256: string}[]; progress: string; error?: string}
 const jobKey = (job: Pick<Job, 'projectId' | 'id'>) => `projects/${job.projectId}/jobs/${job.id}.json`;
@@ -92,7 +94,7 @@ export async function runJob(job: Job, revision: Revision, store: ObjectStore): 
     const project = await materializeSnapshot(revision.prepared!, store, directory);
     const input = resolve(directory, 'input.json');
     const resultFile = resolve(directory, 'result.json');
-    await writeFile(input, JSON.stringify({job, project}), {flag: 'wx'});
+    await writeFile(input, JSON.stringify({job, project, sampleMedia: revision.prepared!.sampleMedia ?? {}}), {flag: 'wx'});
     const environment: NodeJS.ProcessEnv = {PATH: process.env.PATH, TMPDIR: tmpdir(), NODE_ENV: 'production'};
     for (const name of ['SE_WIDGET_STUDIO_BROWSER', 'STUDIO_FFMPEG_PATH', 'STUDIO_FFPROBE_PATH']) if (process.env[name]) environment[name] = process.env[name];
     const timeoutMs = remainingJobTime(current);
@@ -121,6 +123,7 @@ export async function runJob(job: Job, revision: Revision, store: ObjectStore): 
 async function filesUnder(directory: string): Promise<{path: string; content: Buffer}[]> {
   const files: {path: string; content: Buffer}[] = [];
   for (const entry of await readdir(directory, {withFileTypes: true})) {
+    if (entry.name.startsWith('.')) continue; // e.g. a local .DS_Store; nothing the worker reads is hidden.
     const path = resolve(directory, entry.name);
     if (entry.isDirectory()) files.push(...await filesUnder(path));
     else if (entry.isFile()) files.push({path, content: await readFile(path)});
@@ -163,11 +166,11 @@ export async function launchHostedJob(projectId: string, id: string): Promise<vo
     const project = relocateProject(local, directory, remoteJob);
     const uploads = (await filesUnder(directory)).map(file => ({path: `${remoteJob}/${relative(directory, file.path)}`, content: file.content}));
     // Upload only trusted built engine files and the immutable widget data. Dependencies exist in the prepared snapshot.
-    for (const folder of ['dist', 'presets']) {
+    for (const folder of SANDBOX_ENGINE_FOLDERS) {
       for (const file of await filesUnder(resolve(process.cwd(), folder))) uploads.push({path: `${REMOTE_ROOT}/${folder}/${relative(resolve(process.cwd(), folder), file.path)}`, content: file.content});
     }
     uploads.push({path: `${REMOTE_ROOT}/scripts/job-worker.mjs`, content: await readFile(resolve(process.cwd(), 'scripts/job-worker.mjs'))});
-    uploads.push({path: `${remoteJob}/input.json`, content: Buffer.from(JSON.stringify({job, project}))});
+    uploads.push({path: `${remoteJob}/input.json`, content: Buffer.from(JSON.stringify({job, project, sampleMedia: revision.prepared!.sampleMedia ?? {}}))});
     for (let index = 0; index < uploads.length; index += 16) await sandbox.writeFiles(uploads.slice(index, index + 16));
     const ready = await readJson<Job>(store, jobKey(job));
     if (ready && terminalStatuses.has(ready.status)) {await sandbox.stop().catch(() => {}); return;}

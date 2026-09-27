@@ -21,5 +21,7 @@ installFrameRuntime({
   widgetScriptUrl,
   ...(adapterUrl ? {adapterUrl} : {}),
   ...(readySelector ? {readySelector} : {}),
-  timeoutMs: Number.isFinite(parsedTimeout) ? parsedTimeout : 10_000
+  timeoutMs: Number.isFinite(parsedTimeout) ? parsedTimeout : 10_000,
+  // Built-in samples are served by the same frame origin, outside the widget allowlist.
+  sampleMediaBaseUrl: new URL("/__sws/sample/", import.meta.url).href
 });

@@ -9,6 +9,8 @@ import type {JsonValue} from '../src/types';
 import {normalizeFields} from '../src/config/fields';
 import {inspectSensitive} from '../src/validation/privacy';
 import type {ObjectStore, PreparedSnapshot, StoredAsset, WidgetSnapshot} from './model';
+import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/studio-ui/sample-media';
+import {deployedSampleMedia, type SampleMediaSource} from './sample-media';
 
 type Node = DefaultTreeAdapterMap['node'];
 type Element = DefaultTreeAdapterMap['element'];
@@ -113,10 +115,30 @@ export async function rewriteCss(css: string, resolve: (url: string) => Promise<
   return tree.toString();
 }
 
-export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore, prefix: string): Promise<PreparedSnapshot> {
+/**
+ * Validates built-in `sws-sample:` references and pins each to the deployed SHA-256. They stay
+ * literal in the revision and never become captured assets, uploads, or Blob objects.
+ */
+export async function pinSampleMedia(snapshot: WidgetSnapshot, sampleMedia: SampleMediaSource): Promise<Record<string, string>> {
+  const inFields = collectSampleMediaReferences(snapshot.widget.fields);
+  if (inFields.length) throw new Error(`Sample media references cannot be saved as FIELDS defaults: ${inFields[0]}. StreamElements does not understand them; set them in a theme, fixture, or scene.`);
+  const references = collectSampleMediaReferences({channel: snapshot.channel, themes: snapshot.themes, fixtures: snapshot.fixtures, scenes: snapshot.scenes, scenarios: snapshot.scenarios, recipes: snapshot.recipes}).sort();
+  const pins: Record<string, string> = {};
+  if (!references.length) return pins;
+  const catalog = await sampleMedia();
+  for (const reference of references) {
+    const entry = catalog.entry(reference);
+    if (!entry) throw new Error(`Unknown sample media reference: ${reference}. See sample-media/manifest.json for the available references.`);
+    pins[reference] = entry.sha256;
+  }
+  return pins;
+}
+
+export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore, prefix: string, sampleMedia: SampleMediaSource = deployedSampleMedia): Promise<PreparedSnapshot> {
   assertSafeSnapshot(source);
   const deadline = Date.now() + 45_000;
   const snapshot = structuredClone(source);
+  const samplePins = await pinSampleMedia(snapshot, sampleMedia);
   const assets = new Map<string, {body: Buffer; contentType: string; sourceUrl?: string}>();
   const remotePaths = new Map<string, string>();
   const completed = new Set<string>();
@@ -144,6 +166,7 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
   }
   const resolveReference = async (reference: string, base = '', destination = ''): Promise<string> => {
     if (!reference || reference.startsWith('#') || reference.startsWith('data:')) return reference;
+    if (claimsSampleMediaScheme(reference)) throw new Error(`Sample media references are supported only in catalog values and scene backgrounds, not in widget HTML or CSS: ${reference}`);
     if (/^(?:blob:|javascript:|file:|http:)/i.test(reference)) throw new Error('Only captured project assets, data URLs, and public HTTPS imports are supported.');
     let path: string;
     const remote = /^https:\/\//i.test(reference) || reference.startsWith('//') || base.startsWith('https:');
@@ -208,7 +231,8 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
   snapshot.widget.html = serialize(document);
   snapshot.widget.css = await rewriteCss(snapshot.widget.css, ref => resolveReference(ref));
   const mediaFields = new Set(normalizeFields(snapshot.widget.fields).fields.filter(field => ['image-input', 'video-input', 'sound-input'].includes(field.type)).map(field => field.id));
-  const rewriteFieldData = async (data: Record<string, JsonValue>) => { for (const key of mediaFields) if (typeof data[key] === 'string' && data[key]) data[key] = await resolveReference(String(data[key])); };
+  // Sample references stay literal; arrays (multiple fields) stay literal as before, and their samples were pinned above.
+  const rewriteFieldData = async (data: Record<string, JsonValue>) => { for (const key of mediaFields) if (typeof data[key] === 'string' && data[key] && !claimsSampleMediaScheme(data[key])) data[key] = await resolveReference(String(data[key])); };
   const raw = snapshot.widget.fields;
   const fields = raw && typeof raw === 'object' && !Array.isArray(raw) && 'fields' in raw ? raw.fields : raw;
   if (fields && typeof fields === 'object') for (const [key, value] of Object.entries(fields)) {
@@ -219,7 +243,7 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
   for (const item of [...snapshot.themes, ...snapshot.fixtures, ...snapshot.scenes]) if (item.fieldData) await rewriteFieldData(item.fieldData);
   const backgrounds = [...snapshot.scenes.flatMap(scene => scene.background ? [scene.background] : []), ...snapshot.recipes.flatMap(recipe => recipe.matrix?.backgrounds ?? [])];
   for (const background of backgrounds) {
-    if (!background.image) continue;
+    if (!background.image || claimsSampleMediaScheme(background.image)) continue;
     const reference = await resolveReference(background.image);
     const contentType = reference.startsWith('data:') ? /^data:([^;,]+)/i.exec(reference)?.[1] : assets.get(reference)?.contentType;
     if (!contentType || !/^image\/(?:png|jpeg|gif|webp|avif|svg\+xml)$/i.test(contentType)) throw new Error('Scene backgrounds must use a captured PNG, JPEG, GIF, WebP, AVIF, or SVG image.');
@@ -235,5 +259,5 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
   }
   snapshot.assets = [];
   const warnings = ['Runtime network requests are blocked. Dynamic resource URLs and JavaScript module imports are not captured.'];
-  return {snapshot, assets: stored, warnings};
+  return {snapshot, assets: stored, warnings, ...(Object.keys(samplePins).length ? {sampleMedia: samplePins} : {})};
 }

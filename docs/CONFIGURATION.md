@@ -87,6 +87,8 @@ A scene composes field state and external presentation state:
 
 - `viewport` controls responsive widget layout.
 - `output` controls the external export canvas.
+- `background.image` accepts an allowlisted widget asset, a data URL, or a built-in sample such as `"sws-sample:backdrops/aurora-mesh.jpg"`. Pair a sample with its manifest `color` so the stage has a matching fallback.
+- Media values in `fieldData` (themes, fixtures, scenes, scenario `updateFields`, and event payloads) may be built-in samples such as `"sws-sample:gallery/neon-city.jpg"`, or arrays of them for `image-input` fields with `multiple: true`. See [`sample-media/`](../sample-media/README.md); `validate` reports unknown references as `SAMPLE_MEDIA_UNKNOWN`.
 - `camera` scales and positions the iframe without changing widget typography.
 - `crop` is an optional final clip in output CSS pixels.
 

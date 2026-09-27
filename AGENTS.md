@@ -11,6 +11,7 @@ This repository contains SE Widget Studio Web and its shared StreamElements simu
 - Never download browsers, FFmpeg, codecs, or fonts from runtime code.
 - Require `--force` for exact output replacement; never recursively clean consumer output directories.
 - Keep marketplace rules in dated JSON presets with official URLs.
+- Keep built-in test media in `sample-media/` with its manifest. It is append-only: never change the bytes of a published `sws-sample:` reference; add a new file, manifest entry, and `tests/unit/sample-media.lock.json` entry instead. After `npm run build`, run `npm run verify:bundle`.
 - Run `npm run typecheck`, `npm test`, `npm run build`, and proportional browser/media checks. Preserve the legacy engine tests.
 - Store immutable revisions; full API replacement must use optimistic concurrency. Keep write capabilities out of iframe data, URLs sent to servers, and logs.
 - Use local storage only outside Vercel. Vercel deployments must fail clearly if Blob or Sandbox configuration is missing; never silently fall back to ephemeral disk.

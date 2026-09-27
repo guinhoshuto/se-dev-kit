@@ -1025,6 +1025,25 @@ button:disabled {
   gap: 6px;
 }
 
+.media-control {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.media-control .control-textarea {
+  min-height: 54px;
+}
+
+.media-control .is-error {
+  border-color: rgb(248 113 113 / 0.7);
+}
+
+.fill-samples {
+  justify-self: start;
+  margin: 0 0 10px;
+}
+
 .color-control input[type="color"] {
   width: 28px;
   height: 28px;

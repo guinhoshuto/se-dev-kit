@@ -6,7 +6,7 @@ This app uses Next.js, private Vercel Blob objects, Vercel Workflows and short-l
 
 1. Import this repository into a Vercel project and connect a **private** Blob store. Set `BLOB_READ_WRITE_TOKEN` using the integration, `STUDIO_STORAGE=blob` and `STUDIO_EXECUTION=vercel`.
 2. Prepare the trusted Sandbox snapshot below and set its returned `STUDIO_SANDBOX_SNAPSHOT_ID` in the project. Workflows run using the deployment's Vercel identity. Local setup needs your own Vercel OIDC credentials; do not add them to Git.
-3. Deploy the root directory with `npm run build`. Do not set the former nested `se-widget-studio` directory as the project root.
+3. Deploy the root directory with `npm run build`. Do not set the former nested `se-widget-studio` directory as the project root. Before deploying a change to `sample-media/`, `next.config.mjs`, or `lib/jobs.ts`, run `npm run build && npm run verify:bundle` locally: the sample media list, preview, import, and workflow functions read `sample-media/` from their traced bundle, and the workflow uploads it to the offline Sandbox beside `dist/` and `presets/`. After deploying, `GET /api/v1/sample-media` must answer 200 with every manifest reference; the skill client refuses `sws-sample:` catalogs until it does.
 4. Test creation, replacement conflict, a browser scenario, screenshot and short video on the deployed URL. Local validation is not proof of hosted credential/quota setup.
 
 Missing Blob or Sandbox settings fail explicitly. A Vercel deployment never silently stores data on ephemeral disk or starts a local background renderer. Uploaded source is data, not an executable Node.js configuration.

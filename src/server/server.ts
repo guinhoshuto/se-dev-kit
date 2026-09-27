@@ -12,6 +12,8 @@ import {renderTutorialPage} from "./tutorial-page.js";
 import {renderFrameDocument} from "./html.js";
 import {loadProject} from "../config/load.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
+import {loadSampleMediaCatalog, requireSampleMedia, sampleMediaSummaries, type SampleMediaCatalog} from "../config/sample-media.js";
+import {SAMPLE_REFERENCE_PATTERN, type SampleMediaSummary} from "../studio-ui/sample-media.js";
 
 export interface StartServerOptions {
   host?: string;
@@ -27,6 +29,8 @@ export interface StudioServer {
   framePort: number;
   origin: string;
   frameOrigin: string;
+  /** Absolute frame-origin URL of a built-in sample; fails with SAMPLE_MEDIA_NOT_FOUND for unknown references. */
+  sampleMediaUrl: (reference: string) => Promise<string>;
   close: () => Promise<void>;
 }
 
@@ -37,7 +41,8 @@ const uiAssets = new Map([
   ["app.js", resolve(distributionRoot, "studio-ui/app.js")],
   ["bridge.js", resolve(distributionRoot, "studio-ui/bridge.js")],
   ["capture-host.js", resolve(distributionRoot, "studio-ui/capture-host.js")],
-  ["tutorial-host.js", resolve(distributionRoot, "studio-ui/tutorial-host.js")]
+  ["tutorial-host.js", resolve(distributionRoot, "studio-ui/tutorial-host.js")],
+  ["sample-media.js", resolve(distributionRoot, "studio-ui/sample-media.js")]
 ]);
 
 function commonHeaders(response: ServerResponse): void {
@@ -80,7 +85,12 @@ function validateRequest(request: IncomingMessage, response: ServerResponse, exp
   return true;
 }
 
-function publicProject(project: ResolvedProject, origin: string, frameOrigin: string) {
+function publicProject(
+  project: ResolvedProject,
+  origin: string,
+  frameOrigin: string,
+  sampleMedia: {items: SampleMediaSummary[]; error?: string}
+) {
   const catalog = <T extends {id: string; name: string}>(items: {value: T}[]) => items.map(({value}) => value);
   return {
     studio: {version: project.packageVersion, origin, frameOrigin},
@@ -99,6 +109,8 @@ function publicProject(project: ResolvedProject, origin: string, frameOrigin: st
     scenarios: catalog(project.scenarios),
     scenes: catalog(project.scenes),
     recipes: catalog(project.recipes),
+    sampleMedia: sampleMedia.items,
+    ...(sampleMedia.error ? {sampleMediaError: sampleMedia.error} : {}),
     limitations: [
       "This is an essential local StreamElements simulation, not full platform parity.",
       "Only documented Studio bridge events and the explicitly listed SE_API methods are simulated."
@@ -175,6 +187,8 @@ export async function startStudioServer(
   const sseClients = new Set<ServerResponse>();
   let watcher: FSWatcher | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  // Loaded on first use so widgets without sample references never depend on sample-media/.
+  const sampleMedia = (): Promise<SampleMediaCatalog> => loadSampleMediaCatalog();
 
   const frameServer = createServer((request, response) => {
     void (async () => {
@@ -207,6 +221,27 @@ export async function startStudioServer(
       if (pathname === "/__sws/version.js") {
         const source = await readFile(resolve(distributionRoot, "version.js"));
         send(request, response, 200, "text/javascript; charset=utf-8", source, frameHeaders);
+        return;
+      }
+      if (pathname.startsWith("/__sws/sample/")) {
+        // Exact lookup in the verified manifest; the widget asset allowlist is never consulted.
+        let reference = "";
+        try {
+          reference = `sws-sample:${decodeURIComponent(pathname.slice("/__sws/sample/".length))}`;
+        } catch {
+          reference = "";
+        }
+        if (!SAMPLE_REFERENCE_PATTERN.test(reference)) {
+          send(request, response, 404, "text/plain; charset=utf-8", "Not Found\n", frameHeaders);
+          return;
+        }
+        const catalog = await sampleMedia();
+        const entry = catalog.entry(reference);
+        if (!entry) {
+          send(request, response, 404, "text/plain; charset=utf-8", "Not Found\n", frameHeaders);
+          return;
+        }
+        send(request, response, 200, entry.contentType, catalog.body(reference), frameHeaders);
         return;
       }
       if (pathname.startsWith("/__sws/widget/")) {
@@ -245,7 +280,14 @@ export async function startStudioServer(
         return;
       }
       if (pathname === "/__sws/api/project") {
-        sendJson(request, response, 200, publicProject(activeProject, controlOrigin, frameOrigin));
+        const samples = await sampleMedia().then(
+          (catalog) => ({items: sampleMediaSummaries(catalog, frameOrigin)}),
+          (error: unknown) => {
+            options.onLog?.(`Sample media unavailable: ${toErrorMessage(error)}`);
+            return {items: [], error: toErrorMessage(error)};
+          }
+        );
+        sendJson(request, response, 200, publicProject(activeProject, controlOrigin, frameOrigin, samples));
         return;
       }
       if (pathname === "/__sws/events") {
@@ -342,6 +384,10 @@ export async function startStudioServer(
     framePort,
     origin: controlOrigin,
     frameOrigin,
+    sampleMediaUrl: async (reference) => {
+      const entry = requireSampleMedia(await sampleMedia(), reference);
+      return `${frameOrigin}/__sws/sample/${entry.file}`;
+    },
     close: async () => {
       if (closed) return;
       closed = true;

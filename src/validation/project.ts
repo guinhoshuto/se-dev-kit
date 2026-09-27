@@ -4,6 +4,8 @@ import type {Diagnostic, ResolvedProject} from "../types.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
 import {expandRecipe} from "../capture/matrix.js";
 import {findSensitiveTestData} from "./privacy.js";
+import {loadSampleMediaCatalog} from "../config/sample-media.js";
+import {collectSampleMediaReferences} from "../studio-ui/sample-media.js";
 
 const RECOGNIZED_FIELD_TYPES = new Set([
   "text",
@@ -178,6 +180,8 @@ export async function validateProject(project: ResolvedProject): Promise<Diagnos
     }
   }
 
+  diagnostics.push(...(await sampleMediaDiagnostics(project)));
+
   diagnostics.push(
     diagnostic(
       "ok",
@@ -193,6 +197,41 @@ export async function validateProject(project: ResolvedProject): Promise<Diagnos
     )
   );
   return diagnostics;
+}
+
+/** Checks every `sws-sample:` reference against the built-in manifest; loads it only when one is used. */
+async function sampleMediaDiagnostics(project: ResolvedProject): Promise<Diagnostic[]> {
+  const sources: [string, unknown][] = [
+    ["FIELDS defaults", project.fieldDefaults],
+    ["channel", project.config.channel ?? {}],
+    ...project.themes.map((item): [string, unknown] => [`theme "${item.id}"`, item.value]),
+    ...project.fixtures.map((item): [string, unknown] => [`fixture "${item.id}"`, item.value]),
+    ...project.scenes.map((item): [string, unknown] => [`scene "${item.id}"`, item.value]),
+    ...project.scenarios.map((item): [string, unknown] => [`scenario "${item.id}"`, item.value]),
+    ...project.recipes.map((item): [string, unknown] => [`recipe "${item.id}"`, item.value])
+  ];
+  const used = sources.flatMap(([label, value]) => collectSampleMediaReferences(value).map((reference) => ({label, reference})));
+  if (used.length === 0) return [];
+  let known: (reference: string) => boolean;
+  try {
+    const catalog = await loadSampleMediaCatalog();
+    known = (reference) => catalog.entry(reference) !== undefined;
+  } catch (error) {
+    return [diagnostic("error", "SAMPLE_MEDIA_CATALOG_INVALID", error instanceof Error ? error.message : String(error))];
+  }
+  const unknown = used.filter(({reference}) => !known(reference));
+  if (unknown.length > 0) {
+    return [
+      diagnostic(
+        "error",
+        "SAMPLE_MEDIA_UNKNOWN",
+        `Unknown sample media references: ${unknown.map(({label, reference}) => `${label} uses ${reference}`).join("; ")}.`,
+        "See sample-media/manifest.json in the Studio package for the available sws-sample: references."
+      )
+    ];
+  }
+  const distinct = new Set(used.map(({reference}) => reference)).size;
+  return [diagnostic("ok", "SAMPLE_MEDIA", `${distinct} built-in sample media reference${distinct === 1 ? "" : "s"} resolved.`)];
 }
 
 export function hasValidationErrors(diagnostics: Diagnostic[]): boolean {

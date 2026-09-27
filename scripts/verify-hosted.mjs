@@ -46,22 +46,22 @@ export function parseOptions(args) {
   return options;
 }
 
-/** Small, fully synthetic fixture: 320×240, one image variant, ten video frames. */
+/** Small, fully synthetic fixture: 320×240, one image variant, ten video frames, and built-in sample media. */
 export function verificationSnapshot() {
   return {
     schemaVersion: 1, name: 'Hosted verification — synthetic demo',
     widget: {
       viewport: {width: 320, height: 240}, ready: {selector: '#widget', timeoutMs: 10000},
-      html: '<main id="widget"><h1 id="title"></h1><p id="message">Synthetic preview</p><small>WIDGET STUDIO · SYNTHETIC DATA</small></main>',
-      css: '*{box-sizing:border-box}body{margin:0;font:16px Arial,sans-serif;background:#20202a;color:#f6f4ff}main{padding:28px}h1{font-size:24px;color:var(--accent,#ac96ff)}p{line-height:1.5}small{font-size:10px;opacity:.6}',
-      js: "const apply=({detail})=>{document.querySelector('#title').textContent=detail.fieldData.title;document.documentElement.style.setProperty('--accent',detail.fieldData.accent);};window.addEventListener('onWidgetLoad',apply);window.addEventListener('onWidgetUpdate',apply);window.addEventListener('onEventReceived',({detail})=>{if(detail.listener==='message')document.querySelector('#message').textContent=detail.event.data.text;});",
-      fields: {title: {type: 'text', label: 'Title', value: 'Synthetic demo'}, accent: {type: 'colorpicker', label: 'Accent', value: '#ac96ff'}}
+      html: '<main id="widget"><h1 id="title"></h1><p id="message">Synthetic preview</p><div id="gallery"></div><small>WIDGET STUDIO · SYNTHETIC DATA</small></main>',
+      css: '*{box-sizing:border-box}body{margin:0;font:16px Arial,sans-serif;background:#20202a;color:#f6f4ff}main{padding:28px}h1{font-size:24px;color:var(--accent,#ac96ff)}p{line-height:1.5}#gallery img{width:48px;height:27px;margin-right:6px}small{font-size:10px;opacity:.6}',
+      js: "const gallery=list=>(Array.isArray(list)?list:[]).map(value=>{const url=new URL(value,window.location.href);const image=document.createElement('img');image.addEventListener('load',()=>{image.dataset.width=String(image.naturalWidth);});image.src=['http:','https:','data:'].includes(url.protocol)?url.href:'';return image;});const apply=({detail})=>{document.querySelector('#title').textContent=detail.fieldData.title;document.documentElement.style.setProperty('--accent',detail.fieldData.accent);document.querySelector('#gallery').replaceChildren(...gallery(detail.fieldData.gallery));};window.addEventListener('onWidgetLoad',apply);window.addEventListener('onWidgetUpdate',apply);window.addEventListener('onEventReceived',({detail})=>{if(detail.listener==='message')document.querySelector('#message').textContent=detail.event.data.text;});",
+      fields: {title: {type: 'text', label: 'Title', value: 'Synthetic demo'}, accent: {type: 'colorpicker', label: 'Accent', value: '#ac96ff'}, gallery: {type: 'image-input', label: 'Gallery', multiple: true, value: []}}
     },
     channel: {username: 'synthetic_studio_viewer'},
     themes: [{schemaVersion: 1, id: 'violet', name: 'Violet', fieldData: {accent: '#ac96ff'}}],
     fixtures: [{schemaVersion: 1, id: 'message', name: 'Synthetic message', events: [{atMs: 100, listener: 'message', event: {data: {displayName: 'Synthetic viewer', text: 'Hosted rendering is ready.'}}}]}],
-    scenes: [{schemaVersion: 1, id: 'demo', name: 'Synthetic demo', theme: 'violet', fixture: 'message', viewport: {width: 320, height: 240}, output: {width: 320, height: 240, format: 'png'}, captureAtMs: 200}],
-    scenarios: [{schemaVersion: 1, id: 'verification-smoke', name: 'Synthetic smoke', scene: 'demo', steps: [{action: 'assert', selector: '#widget', visible: true}, {action: 'updateFields', fieldData: {title: 'Synthetic field update'}}, {action: 'assert', selector: '#title', text: 'Synthetic field update'}, {action: 'dispatch', listener: 'message', event: {data: {text: 'Synthetic event verified'}}}, {action: 'assert', selector: '#message', text: 'Synthetic event verified'}]}],
+    scenes: [{schemaVersion: 1, id: 'demo', name: 'Synthetic demo', theme: 'violet', fixture: 'message', viewport: {width: 320, height: 240}, output: {width: 320, height: 240, format: 'png'}, captureAtMs: 200, fieldData: {gallery: ['sws-sample:gallery/neon-city.jpg', 'sws-sample:gallery/pixel-forest.jpg']}, background: {id: 'aurora', image: 'sws-sample:backdrops/sunset-mesh.jpg', color: '#a44085'}}],
+    scenarios: [{schemaVersion: 1, id: 'verification-smoke', name: 'Synthetic smoke', scene: 'demo', steps: [{action: 'assert', selector: '#widget', visible: true}, {action: 'assert', selector: '#gallery img[data-width="1600"]', count: 2}, {action: 'updateFields', fieldData: {title: 'Synthetic field update'}}, {action: 'assert', selector: '#title', text: 'Synthetic field update'}, {action: 'dispatch', listener: 'message', event: {data: {text: 'Synthetic event verified'}}}, {action: 'assert', selector: '#message', text: 'Synthetic event verified'}]}],
     recipes: [
       {schemaVersion: 1, id: 'verification-image', name: 'Verification PNG', scenes: ['demo'], outputs: {screenshots: true}, limit: 1},
       {schemaVersion: 1, id: 'verification-video', name: 'Verification MP4', scenes: ['demo'], outputs: {screenshots: false, video: {enabled: true, durationMs: 1000, fps: 10, format: 'mp4', codec: 'h264', audio: 'none'}}, limit: 1}
@@ -170,6 +170,15 @@ export async function verify(options) {
   };
   const expect = (result, status, operation) => check(result.status === status, `${operation} returned HTTP ${result.status}; expected ${status}. ${redact(result.data?.error ?? '', secrets)}`);
   try {
+    phase = 'sample media support';
+    // Read-only and capability-free: an older deployment answers 404 here before any project is spent.
+    const samples = await api('/api/v1/sample-media', {authorization: false}); expect(samples, 200, 'Sample media list');
+    const served = new Map((samples.data?.items ?? []).map(item => [item?.reference, item?.sha256]));
+    const localManifest = JSON.parse(await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../sample-media/manifest.json'), 'utf8'));
+    for (const reference of new Set(JSON.stringify(verificationSnapshot()).match(/sws-sample:[a-z0-9/.-]+/g) ?? [])) {
+      check(served.get(reference) === localManifest.items.find(item => item.reference === reference)?.sha256, `Deployment does not serve ${reference} with the manifest hash.`);
+    }
+    addCheck('sample media list served with manifest hashes before project creation');
     phase = 'project creation or resume';
     if (options.resume) access = await readAccess(options.resume, privateDirectory, options.origin);
     else {
@@ -199,7 +208,8 @@ export async function verify(options) {
     check(!previewText.includes(access.token), 'Preview response exposed the editing capability.');
     check(typeof preview.data.html === 'string' && preview.data.html.includes('Content-Security-Policy') && preview.data.html.includes("connect-src 'none'") && preview.data.html.includes("frame-src 'none'"), 'Preview is missing its restrictive content policy.');
     check(preview.data.state?.fieldData?.title === 'Synthetic API preview' && typeof preview.data.nonce === 'string' && typeof preview.data.sessionId === 'string', 'Preview state or bridge values are missing.');
-    addCheck('preview response, field overrides, restrictive CSP, and capability isolation');
+    check(preview.data.html.includes('sws-sample:gallery/neon-city.jpg') && /^data:image\/jpeg;base64,/.test(preview.data.backgroundImage ?? ''), 'Preview did not embed the deployed sample media.');
+    addCheck('preview response, field overrides, embedded sample media, restrictive CSP, and capability isolation');
 
     for (const requested of JOBS) {
       phase = `${requested.kind} job: ${requested.selection}`;

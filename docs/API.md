@@ -1,6 +1,6 @@
 # Web API
 
-This reference describes the routes implemented in this checkout. Use the application's own origin as the base URL, for example `http://127.0.0.1:3000` locally. The `/api/v1` routes cover project import/replacement and uploads; `/api/studio` routes also power the editor. They are not StreamElements API endpoints.
+This reference describes the routes implemented in this checkout. Use the application's own origin as the base URL, for example `http://127.0.0.1:3000` locally. The `/api/v1` routes cover project import/replacement, uploads, and the sample media list; `/api/studio` routes also power the editor. They are not StreamElements API endpoints.
 
 ## Authorization and request rules
 
@@ -41,7 +41,7 @@ All catalog entries require `schemaVersion: 1`, `id`, and `name`, and accept opt
 
 Scene and recipe presentation objects use these keys:
 
-- `background`: required `id`; optional `label`, `color`, `image`, `checkerboard`. Images must be captured project resources or supported image data URLs.
+- `background`: required `id`; optional `label`, `color`, `image`, `checkerboard`. Images must be captured project resources, supported image data URLs, or built-in `sws-sample:` references (see [Sample media](#sample-media)). The editor stage displays the verified background image returned by preview.
 - `viewport`: `width`, `height`, optional `deviceScaleFactor`. Recipe matrix viewports also require `id`, with optional `label`.
 - `output`: `width`, `height`, optional `format` (`png` or `jpeg`) and `quality` (1–100).
 - `camera`: required `id`, `scale` (0.05–20), `x`, `y`; optional `label` and `origin`.
@@ -183,11 +183,22 @@ Local reservations point to `PUT /api/v1/projects/:id/uploads/:uploadId`; Blob r
 
 The JSON schema accepts up to 256 asset declarations, but preparation enforces at most **128 captured files**, including discovered dependencies. Dynamic URLs created inside JavaScript and ES module imports are not captured. Inline HTML event handlers, embedded frames/objects, import maps, and `srcset` are unsupported; keep widget behavior in classic JavaScript.
 
+## Sample media
+
+The deployment ships the synthetic images in [`sample-media/`](../sample-media/README.md) so a widget can be tested without creating or uploading media. Reference one as the whole JSON string `sws-sample:<file>`, for example `sws-sample:gallery/neon-city.jpg` or `sws-sample:backdrops/aurora-mesh.jpg`:
+
+- as a media value in theme, fixture, scene, scenario, or channel data, including arrays of `image-input` fields with `multiple: true`;
+- as `scene.background.image` or `recipe.matrix.backgrounds[].image`.
+
+Preparation validates every reference against the deployed `sample-media/manifest.json` and blocks the revision on an unknown one. A reference is kept literally in the revision and recorded in `prepared.sampleMedia` with the SHA-256 of the deployed bytes; it never becomes an asset, upload, or Blob object and does not count toward the asset or upload limits. Preview and jobs refuse a revision whose pinned hash differs from the current deployment. References are rejected in widget HTML/CSS and in FIELDS `value`/`default`, because StreamElements cannot resolve them. Do not declare them in `assets`.
+
+`GET /api/v1/sample-media` needs no capability and returns `{schemaVersion: 1, items: [{reference, kind, contentType, width, height, bytes, sha256, label, alt, color, tone?}]}` for the verified files this deployment ships. It never returns the image bytes. A deployment that predates sample media answers 404, and one whose files do not match the manifest answers 503. Call it before creating or replacing a project that uses `sws-sample:` references, because an older deployment either blocks the revision with an unrelated path error or passes array values through unresolved; the skill client does this and refuses to continue.
+
 ## Interactive preview
 
 `POST /api/studio/projects/:id/preview` takes an object with optional `snapshot` (a complete unsaved draft), `sceneId`, `themeId`, and `fieldData`. `{}` previews the saved revision. Success returns `{html, state, backgroundImage?, sessionId, nonce}`; the response contains no project capability.
 
-Draft preparation stays in request memory and does not create a revision. New external resources in field overrides must be included in a prepared snapshot. The effective fields merge shallowly as `FIELDS defaults → theme → fixture → scene → explicit fieldData`.
+Draft preparation stays in request memory and does not create a revision. New external resources in field overrides must be included in a prepared snapshot. Sample references in the effective field data, channel, recents, and the scene fixture's events, including overrides, are embedded as verified data URLs; references used only by other scenes are not. `backgroundImage` is the scene background as a verified data URL. The effective fields merge shallowly as `FIELDS defaults → theme → fixture → scene → explicit fieldData`.
 
 Prefer the supplied editor for interactive manipulation. A custom client must load `html` into `srcdoc` on an iframe with exactly the restricted `sandbox="allow-scripts"` policy, preserve its CSP, and implement the existing bridge's source/origin/session/nonce validation. Never inject preview HTML into the editor DOM or add `allow-same-origin`. See [the preview component](../components/widget-preview.tsx) and [runtime message handling](../src/runtime/frame.ts).
 
@@ -224,7 +235,7 @@ These are application guardrails in the current source, not Vercel plan quotas o
 | Job execution | 10 minutes; active reservations expire after 11 minutes |
 | Upload reservations | 100 MiB per UTC day; at most 10 MiB per file on Blob, 4,000,000 bytes locally |
 | Prepared assets | 10 MiB per file; 100 MiB and 128 captured files per revision |
-| Preview captured assets / background | 3 MiB for embedded assets; background also capped at 3 MiB |
+| Preview captured assets / background | One 3 MiB budget shared by embedded captured assets and the sample media the previewed state uses; background also capped at 3 MiB. The whole preview response, which carries them as base64 with the background, must stay under 4,000,000 bytes, so plan for well under 3 MB of raw media |
 | Ready timeout / scene capture time | 30 seconds / 15 seconds |
 | Scenario | 100 steps; sum of explicit waits at most 30 seconds |
 | Render recipe | At most 48 variants; at most 4 variants when video is enabled |

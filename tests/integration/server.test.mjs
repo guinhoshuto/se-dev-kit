@@ -115,3 +115,59 @@ test("asset serving rejects traversal and dotfiles and leaves every production f
     assert.deepEqual(await readFile(path), before.get(key), `${key} changed after serving`);
   }
 });
+
+test("built-in sample media are served only by exact manifest lookup on the frame origin", async () => {
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const manifest = JSON.parse(await readFile(new URL("../../sample-media/manifest.json", import.meta.url), "utf8"));
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  try {
+    const expected = await readFile(new URL("../../sample-media/gallery/synthwave-sunset.jpg", import.meta.url));
+    const sample = await requestBuffer(`${server.frameOrigin}/__sws/sample/gallery/synthwave-sunset.jpg`);
+    assert.equal(sample.status, 200);
+    assert.deepEqual(sample.body, expected);
+    assert.equal(sample.headers["content-type"], "image/jpeg");
+    assert.equal(sample.headers["x-content-type-options"], "nosniff");
+    assert.match(String(sample.headers["content-security-policy"]), /frame-ancestors/);
+    assert.equal(
+      await server.sampleMediaUrl("sws-sample:backdrops/aurora-mesh.jpg"),
+      `${server.frameOrigin}/__sws/sample/backdrops/aurora-mesh.jpg`
+    );
+    await assert.rejects(server.sampleMediaUrl("sws-sample:gallery/unknown.jpg"), {code: "SAMPLE_MEDIA_NOT_FOUND"});
+    await assert.rejects(server.sampleMediaUrl("sws-sample:../package.json"), {code: "SAMPLE_MEDIA_NOT_FOUND"});
+
+    const hostilePaths = [
+      "/__sws/sample/..%2Fpackage.json",
+      "/__sws/sample/%2e%2e%2fpackage.json",
+      "/__sws/sample/%252e%252e%252fpackage.json",
+      "/__sws/sample/.hidden",
+      "/__sws/sample/gallery/.hidden.jpg",
+      "/__sws/sample/%5Cetc%5Cpasswd",
+      "/__sws/sample/gallery/synthwave-sunset.jpg%00.png",
+      "/__sws/sample/gallery/unknown.jpg",
+      "/__sws/sample/manifest.json",
+      "/__sws/sample/README.md",
+      "/__sws/sample/gallery/",
+      "/__sws/sample/%E0%A4%A"
+    ];
+    for (const path of hostilePaths) {
+      const response = await requestBuffer(`${server.frameOrigin}${path}`);
+      assert.equal(response.status, 404, `${path} must not resolve to sample media`);
+      assert.equal(response.body.toString("utf8"), "Not Found\n");
+    }
+    const control = await requestBuffer(`${server.origin}/__sws/sample/gallery/synthwave-sunset.jpg`);
+    assert.equal(control.status, 404, "the control origin must not serve sample media");
+
+    const payload = JSON.parse((await requestBuffer(`${server.origin}/__sws/api/project`)).body.toString("utf8"));
+    assert.equal(payload.sampleMedia.length, manifest.items.length);
+    assert.equal(payload.sampleMediaError, undefined);
+    for (const item of payload.sampleMedia) {
+      assert.ok(item.url.startsWith(`${server.frameOrigin}/__sws/sample/`), item.url);
+      assert.equal(item.url, `${server.frameOrigin}/__sws/sample/${item.reference.slice("sws-sample:".length)}`);
+    }
+    const script = await requestBuffer(`${server.origin}/__sws/ui/sample-media.js`);
+    assert.equal(script.status, 200);
+    assert.match(String(script.headers["content-type"]), /javascript/);
+  } finally {
+    await server.close();
+  }
+});

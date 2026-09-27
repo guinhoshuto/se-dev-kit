@@ -7,7 +7,7 @@ import test from "node:test";
 
 import {createIsolatedContext, detectBrowser, launchStudioBrowser} from "../../dist/capture/browser.js";
 import {loadProject} from "../../dist/config/load.js";
-import {captureHostDispatch, frameEvents, openScene} from "../../dist/scenarios/runner.js";
+import {captureHostDispatch, captureHostUpdateFields, frameEvents, openScene} from "../../dist/scenarios/runner.js";
 import {createDefaultScene} from "../../dist/scenarios/state.js";
 import {startStudioServer} from "../../dist/server/server.js";
 
@@ -201,6 +201,105 @@ test("timer-based readiness advances in fixed quanta and unmanaged previews keep
     } finally {
       await context.close();
     }
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("built-in sample media reach widgets as absolute same-origin URLs in fields, arrays, events, and backgrounds", {timeout: 120_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "sws-sample-integration-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await Promise.all([
+    writeFile(join(root, "widget.html"), '<main id="widget"><div id="single"></div><div id="gallery"></div></main>\n'),
+    writeFile(join(root, "widget.css"), "body{margin:0;background:transparent}img{width:40px;height:30px}\n"),
+    writeFile(
+      join(root, "widget.json"),
+      JSON.stringify({image: {type: "image-input", label: "Image", value: ""}, gallery: {type: "image-input", label: "Gallery", multiple: true, value: []}})
+    ),
+    // Like se-windows, media values are normalized with new URL(value, location.href) and only http(s)/blob survive.
+    writeFile(
+      join(root, "widget.js"),
+      `const toUrl = (value) => {
+  try {
+    const url = new URL(value, window.location.href);
+    return ["http:", "https:", "blob:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+};
+const render = (target, values) => {
+  document.getElementById(target).replaceChildren(...values.map(toUrl).filter(Boolean).map((src) => {
+    const image = document.createElement("img");
+    image.addEventListener("load", () => { image.dataset.width = String(image.naturalWidth); });
+    image.src = src;
+    return image;
+  }));
+};
+const apply = ({detail}) => {
+  render("single", detail.fieldData.image ? [detail.fieldData.image] : []);
+  render("gallery", Array.isArray(detail.fieldData.gallery) ? detail.fieldData.gallery : []);
+};
+window.addEventListener("onWidgetLoad", apply);
+window.addEventListener("onWidgetUpdate", apply);
+window.addEventListener("onEventReceived", ({detail}) => {
+  if (detail.listener === "avatar") render("single", [detail.event.data.avatar]);
+});\n`
+    )
+  ]);
+
+  const project = await loadProject({inputDirectory: root});
+  const scene = {
+    schemaVersion: 1,
+    id: "samples",
+    name: "Samples",
+    viewport: {width: 320, height: 240},
+    output: {width: 320, height: 240, format: "png"},
+    fieldData: {image: "sws-sample:gallery/neon-city.jpg", gallery: ["sws-sample:gallery/synthwave-sunset.jpg", "sws-sample:gallery/pixel-forest.jpg"]},
+    background: {id: "aurora", image: "sws-sample:backdrops/aurora-mesh.jpg"}
+  };
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  try {
+    const opened = await openScene(project, server, browser, scene);
+    try {
+      const frame = opened.frame();
+      const sampleBase = `${server.frameOrigin}/__sws/sample/`;
+      const images = await frame.locator("img").evaluateAll((nodes) => nodes.map((node) => ({src: node.src, width: node.naturalWidth})));
+      assert.deepEqual(images, [
+        {src: `${sampleBase}gallery/neon-city.jpg`, width: 1600},
+        {src: `${sampleBase}gallery/synthwave-sunset.jpg`, width: 1600},
+        {src: `${sampleBase}gallery/pixel-forest.jpg`, width: 1600}
+      ]);
+      const stageImage = await opened.page.evaluate(() => document.querySelector("#capture-stage").style.backgroundImage);
+      assert.ok(stageImage.includes(`${sampleBase}backdrops/aurora-mesh.jpg`), stageImage);
+
+      await captureHostUpdateFields(opened.page, {gallery: ["sws-sample:gallery/ocean-moon.jpg"]});
+      await frame.locator(`#gallery img[src="${sampleBase}gallery/ocean-moon.jpg"][data-width="1600"]`).waitFor({state: "attached"});
+      await captureHostDispatch(opened.page, "avatar", {data: {avatar: "sws-sample:gallery/cozy-desk.jpg"}});
+      await frame.locator(`#single img[src="${sampleBase}gallery/cozy-desk.jpg"][data-width="1600"]`).waitFor({state: "attached"});
+
+      const runtimeErrors = (await frameEvents(opened.page)).filter(({type}) => type === "frame:error" || type === "frame:unhandled-rejection");
+      assert.deepEqual(runtimeErrors, []);
+      assert.deepEqual(opened.issues.errors, []);
+    } finally {
+      await opened.context.close();
+    }
+
+    await assert.rejects(
+      openScene(project, server, browser, {...scene, background: {id: "missing", image: "sws-sample:backdrops/missing.jpg"}}),
+      {code: "SAMPLE_MEDIA_NOT_FOUND"}
+    );
+    await assert.rejects(
+      openScene(project, server, browser, {...scene, background: {id: "remote", image: "https://example.com/a.jpg"}}),
+      {code: "EXTERNAL_BACKGROUND_BLOCKED"}
+    );
   } finally {
     await browser.close();
     await server.close();

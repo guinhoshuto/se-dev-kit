@@ -37,7 +37,7 @@ Check each command's current `--help` before selecting flags. Run `doctor` first
 
 Before rendering a matrix, report its variant, frame, and target counts from the dry run. `--allow-large-matrix` and `--allow-large-render` require deliberate workload review. If FFmpeg is unavailable, report the numbered PNG sequence and `frames.json` intermediate offered by the CLI; do not download a media tool implicitly.
 
-Inspect final images/video and provenance. Report exact commands and output paths. Local Studio validation covers its documented bridge and partial `SE_API`, not undocumented StreamElements payloads or OBS parity.
+Built-in `sws-sample:` references (see [catalog-authoring.md](catalog-authoring.md#sample-media)) work in `dev`, `capture`, `record`, `test`, and `render`, and `validate` reports unknown ones; the `dev` UI lists them in the stage background menu and in image fields. Inspect final images/video and provenance. Report exact commands and output paths. Local Studio validation covers its documented bridge and partial `SE_API`, not undocumented StreamElements payloads or OBS parity.
 
 ## Develop SE Widget Studio itself
 

@@ -167,7 +167,7 @@ FIELDS defaults → theme → fixture → scene → explicit override
 
 Stage background, widget viewport, final output, crop, camera transform, and device scale are not inserted into `fieldData`.
 
-Known editor types include text, number, slider, checkbox, dropdown, color/colorpicker, font/Google Font, image, video, and sound inputs. Hidden values remain in `fieldData`. Unknown field definitions remain available through the raw JSON editor.
+Known editor types include text, number, slider, checkbox, dropdown, color/colorpicker, font/Google Font, image, video, and sound inputs. Hidden values remain in `fieldData`. Unknown field definitions remain available through the raw JSON editor. Media fields with `multiple: true` are edited as JSON arrays and are committed only while the text is a valid array. Image fields offer the built-in sample images, and **Fill empty image fields** sets empty image fields to samples as a temporary override; the stage background menu lists the sample backdrops.
 
 See [Configuration](CONFIGURATION.md) for catalog schemas.
 
@@ -188,6 +188,7 @@ The example includes separate Etsy image and video recipes because their canvase
 - The control UI and widget frame use separate loopback origins.
 - The iframe bridge validates the origin, `event.source`, session id, and a 128-bit nonce.
 - Widget assets come from a precomputed allowlist; URL paths are never translated directly into filesystem paths.
+- Built-in `sws-sample:` media come from the package's fixed, hash-verified `sample-media/manifest.json` through a separate exact-lookup route, never from the widget directory.
 - Automated contexts are fresh, block service workers, and block non-loopback network requests.
 - Config modules, scenario modules, and adapters are trusted local code with Node or browser privileges appropriate to where they run.
 - Fixtures containing token, cookie, authorization, webhook, secret, password, or live StreamElements API values fail validation.

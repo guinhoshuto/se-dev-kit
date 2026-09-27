@@ -1,4 +1,14 @@
 import {FrameBridge, type FrameEvent} from "./bridge.js";
+import {
+  applySampleChoice,
+  backgroundSelectValue,
+  browserAssetUrl as resolveBrowserAssetUrl,
+  fillEmptyImageFields,
+  isMultipleMediaField,
+  parseBackgroundSelectValue,
+  parseMediaArrayText,
+  type SampleMediaSummary
+} from "./sample-media.js";
 import type {
   FixtureDefinition,
   JsonObject,
@@ -43,6 +53,8 @@ interface ProjectPayload {
   scenarios: ScenarioDefinition[];
   scenes: SceneDefinition[];
   recipes: RecipeDefinition[];
+  sampleMedia: SampleMediaSummary[];
+  sampleMediaError?: string;
   limitations: string[];
 }
 
@@ -73,6 +85,7 @@ interface StudioState {
   backgroundMode: "checker" | "charcoal" | "white" | "transparent" | "image" | "custom";
   backgroundColor: string;
   backgroundImage: string | null;
+  sceneBackgroundImage: string | null;
   cameraX: number;
   cameraY: number;
   zoom: number;
@@ -105,6 +118,7 @@ const state: StudioState = {
   backgroundMode: "checker",
   backgroundColor: "#16202a",
   backgroundImage: null,
+  sceneBackgroundImage: null,
   cameraX: 0,
   cameraY: 0,
   zoom: 100,
@@ -216,11 +230,11 @@ function safeMessage(error: unknown): string {
 }
 
 function browserAssetUrl(value: string): string {
-  if (/^[a-z]+:/i.test(value) || value.startsWith("//")) return value;
-  const origin = state.project?.studio.frameOrigin ?? window.location.origin;
-  const clean = (value.split(/[?#]/, 1)[0] ?? value).replaceAll("\\", "/").replace(/^\.\//, "");
-  const encoded = clean.split("/").filter(Boolean).map(encodeURIComponent).join("/");
-  return `${origin}/__sws/widget/${encoded}`;
+  return resolveBrowserAssetUrl(value, state.project?.studio.frameOrigin ?? window.location.origin, sampleMediaList());
+}
+
+function sampleMediaList(): SampleMediaSummary[] {
+  return state.project?.sampleMedia ?? [];
 }
 
 function catalogItems(key: CatalogKey): NamedCatalogItem[] {
@@ -394,6 +408,7 @@ function renderCatalog(): void {
 
 function setBackgroundFromScene(background: StageBackground | undefined): void {
   state.backgroundImage = background?.image ?? null;
+  state.sceneBackgroundImage = state.backgroundImage;
   if (!background) {
     state.backgroundMode = "checker";
     state.backgroundColor = "#16202a";
@@ -480,7 +495,7 @@ async function selectCatalogItem(key: CatalogKey, id: string): Promise<void> {
 function syncStageControls(): void {
   elements.viewportWidth.value = String(state.viewport.width);
   elements.viewportHeight.value = String(state.viewport.height);
-  elements.backgroundMode.value = state.backgroundMode;
+  elements.backgroundMode.value = backgroundSelectValue(state.backgroundMode, state.backgroundImage, sampleMediaList());
   elements.backgroundColor.value = /^#[0-9a-f]{6}$/i.test(state.backgroundColor) ? state.backgroundColor : "#16202a";
   elements.backgroundColorWrap.hidden = state.backgroundMode !== "custom";
   elements.zoom.value = String(Math.min(2_000, Math.max(5, state.zoom)));
@@ -532,7 +547,8 @@ function applyStageBackground(): void {
       elements.stageCanvas.style.backgroundImage = image ? `url("${image.replaceAll('"', '%22')}")` : "none";
       elements.stageCanvas.style.backgroundPosition = "center";
       elements.stageCanvas.style.backgroundSize = "cover";
-      elements.canvasBackground.textContent = image ? "Scene image" : "Image unavailable";
+      const sample = sampleMediaList().find((item) => item.reference === state.backgroundImage);
+      elements.canvasBackground.textContent = image ? sample?.label ?? "Scene image" : "Image unavailable";
       break;
     }
     case "custom":
@@ -739,6 +755,88 @@ function createButtonControl(field: NormalizedField): HTMLButtonElement {
   return button;
 }
 
+function sampleOptionGroups(select: HTMLSelectElement, kinds: SampleMediaSummary["kind"][], valuePrefix = ""): void {
+  for (const kind of kinds) {
+    const items = sampleMediaList().filter((item) => item.kind === kind);
+    if (items.length === 0) continue;
+    const group = document.createElement("optgroup");
+    group.label = kind === "gallery" ? "Sample gallery" : "Sample backdrops";
+    for (const item of items) {
+      const option = document.createElement("option");
+      option.value = `${valuePrefix}${item.reference}`;
+      option.textContent = `${item.label}${item.tone ? ` · ${item.tone}` : ""} · ${item.width}×${item.height}`;
+      option.title = item.alt;
+      group.append(option);
+    }
+    select.append(group);
+  }
+}
+
+/** Media fields: text for one value, a JSON-array editor for `multiple`, and a sample picker for images. */
+function createMediaControl(field: NormalizedField): HTMLElement {
+  const multiple = isMultipleMediaField(field);
+  const wrapper = document.createElement("div");
+  wrapper.className = "media-control";
+  const current = fieldValue(field);
+  let input: HTMLInputElement | HTMLTextAreaElement;
+  if (multiple) {
+    const textarea = document.createElement("textarea");
+    textarea.className = "control-textarea media-array";
+    textarea.rows = 3;
+    textarea.spellcheck = false;
+    const list = Array.isArray(current) ? current : typeof current === "string" && current ? [current] : [];
+    textarea.value = JSON.stringify(list, null, 1);
+    textarea.setAttribute("aria-label", `${field.label} JSON array`);
+    textarea.addEventListener("input", () => {
+      const parsed = parseMediaArrayText(textarea.value);
+      textarea.classList.toggle("is-error", !parsed);
+      textarea.setAttribute("aria-invalid", parsed ? "false" : "true");
+      if (parsed) commitFieldValue(field.id, parsed);
+    });
+    input = textarea;
+  } else {
+    input = createTextInput(field);
+  }
+  input.id = `field-${field.id}`;
+  wrapper.append(input);
+  if (field.type === "image-input" && sampleMediaList().length > 0) {
+    const picker = document.createElement("select");
+    picker.className = "control-select sample-picker";
+    picker.setAttribute("aria-label", `${field.label} sample image`);
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = multiple ? "Add a sample image…" : "Use a sample image…";
+    picker.append(placeholder);
+    sampleOptionGroups(picker, ["gallery", "backdrop"]);
+    picker.addEventListener("change", () => {
+      if (!picker.value) return;
+      const next = applySampleChoice(fieldValue(field), picker.value, multiple);
+      commitFieldValue(field.id, next, true);
+      input.value = multiple ? JSON.stringify(next, null, 1) : String(next);
+      input.classList.remove("is-error");
+      picker.value = "";
+    });
+    wrapper.append(picker);
+  }
+  return wrapper;
+}
+
+function fillSampleImages(): void {
+  const project = state.project;
+  if (!project) return;
+  const gallery = sampleMediaList().filter((item) => item.kind === "gallery").map((item) => item.reference);
+  const patch = fillEmptyImageFields(project.fields, state.fieldValues, gallery);
+  if (Object.keys(patch).length === 0) {
+    showToast("No empty image fields to fill");
+    return;
+  }
+  state.fieldValues = {...state.fieldValues, ...structuredClone(patch)};
+  state.manualOverrides = {...state.manualOverrides, ...structuredClone(patch)};
+  void state.bridge?.updateFields(patch).catch((error) => logEvent("error", `Field update failed: ${safeMessage(error)}`));
+  renderInspector();
+  logEvent("success", `Filled ${Object.keys(patch).join(", ")} with built-in sample images (temporary override).`);
+}
+
 function createFieldControl(field: NormalizedField): HTMLElement {
   switch (field.type) {
     case "number": return createTextInput(field, "number");
@@ -750,10 +848,10 @@ function createFieldControl(field: NormalizedField): HTMLElement {
     case "button": return createButtonControl(field);
     case "text":
     case "font":
-    case "googlefont":
+    case "googlefont": return createTextInput(field);
     case "image-input":
     case "video-input":
-    case "sound-input": return createTextInput(field);
+    case "sound-input": return createMediaControl(field);
     default: return createUnsupportedControl(field);
   }
 }
@@ -813,6 +911,15 @@ function renderInspector(): void {
   if (!project) return;
 
   elements.inspectorNote.textContent = `${project.fields.length} controls generated from ${project.widget.files.fields}. Unsupported values remain editable as raw JSON.`;
+  if (project.fields.some((field) => field.type === "image-input") && sampleMediaList().length > 0) {
+    const fill = document.createElement("button");
+    fill.type = "button";
+    fill.className = "secondary-button fill-samples";
+    fill.textContent = "Fill empty image fields";
+    fill.title = "Use built-in sample images for image fields that are empty. Empty values stay empty unless you ask.";
+    fill.addEventListener("click", fillSampleImages);
+    elements.fieldForm.append(fill);
+  }
   const visibleFields = project.fields.filter((field) => field.type !== "hidden");
   const groups = new Map<string, NormalizedField[]>();
   for (const field of visibleFields) {
@@ -1390,10 +1497,16 @@ function bindStaticEvents(): void {
   elements.viewportHeight.addEventListener("change", updateViewport);
 
   elements.backgroundMode.addEventListener("change", () => {
-    const value = elements.backgroundMode.value;
-    if (value === "checker" || value === "charcoal" || value === "white" || value === "transparent" || value === "image" || value === "custom") {
-      state.backgroundMode = value;
-      elements.backgroundColorWrap.hidden = value !== "custom";
+    const choice = parseBackgroundSelectValue(elements.backgroundMode.value, sampleMediaList());
+    const mode = choice?.mode;
+    if (mode === "checker" || mode === "charcoal" || mode === "white" || mode === "transparent" || mode === "image" || mode === "custom") {
+      state.backgroundMode = mode;
+      if (mode === "image") {
+        state.backgroundImage = choice?.image ?? state.sceneBackgroundImage;
+        const sample = sampleMediaList().find((item) => item.reference === state.backgroundImage);
+        if (sample?.color) state.backgroundColor = sample.color;
+      }
+      elements.backgroundColorWrap.hidden = mode !== "custom";
       applyStageBackground();
     }
   });
@@ -1424,6 +1537,9 @@ async function bootstrap(): Promise<void> {
     const response = await fetch("/__sws/api/project", {headers: {Accept: "application/json"}});
     if (!response.ok) throw new Error(`Project endpoint returned HTTP ${response.status}.`);
     state.project = await response.json() as ProjectPayload;
+    state.project.sampleMedia ??= [];
+    sampleOptionGroups(elements.backgroundMode, ["backdrop", "gallery"], "sample:");
+    if (state.project.sampleMediaError) logEvent("warn", `Built-in sample media unavailable: ${state.project.sampleMediaError}`);
     initializeSelection();
     renderProjectHeader();
     renderCatalog();

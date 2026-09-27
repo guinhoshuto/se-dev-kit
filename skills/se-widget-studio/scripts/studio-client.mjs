@@ -13,6 +13,10 @@ const ARTIFACT_LIMIT = 100 * 1024 * 1024;
 const UPLOAD_LIMIT = 10 * 1024 * 1024;
 const JOB_LIMIT_MS = 10 * 60_000;
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
+const SAMPLE_SCHEME = 'sws-sample:';
+// The Studio repository's sample-media manifest, reached when the skill runs from a checkout or a linked skill
+// directory (Node resolves the entry point's real path). A copied skill has none and relies on the server check.
+const SAMPLE_MANIFEST = resolve(dirname(fileURLToPath(import.meta.url)), '../../../sample-media/manifest.json');
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
 function fail(message) {throw new Error(message);}
@@ -129,6 +133,55 @@ export async function buildSnapshot(widgetRoot, options = {}) {
   return snapshot;
 }
 
+/** Every whole string that claims the sample scheme, in first-seen order, without duplicates. */
+export function collectSampleReferences(value) {
+  const found = new Set();
+  const visit = (input, depth) => {
+    if (depth > 64) return;
+    if (typeof input === 'string') {if (input.startsWith(SAMPLE_SCHEME)) found.add(input);}
+    else if (Array.isArray(input)) for (const item of input) visit(item, depth + 1);
+    else if (input && typeof input === 'object') for (const item of Object.values(input)) visit(item, depth + 1);
+  };
+  visit(value, 0);
+  return [...found];
+}
+
+async function localSampleReferences(manifestPath) {
+  let text;
+  try {text = await readFile(manifestPath, 'utf8');} catch (error) {if (error?.code === 'ENOENT') return undefined; throw error;}
+  let manifest;
+  try {manifest = JSON.parse(text);} catch {fail(`Local sample media manifest is not valid JSON: ${manifestPath}`);}
+  check(Array.isArray(manifest?.items), `Local sample media manifest has no items: ${manifestPath}`);
+  return manifest.items.map(item => item?.reference).filter(reference => typeof reference === 'string');
+}
+
+/**
+ * Refuses sws-sample: references before any mutation: first offline against the Studio checkout's manifest
+ * (when present), then against the list the selected deployment serves. An older deployment has no list and
+ * would block the revision with an unrelated path error or pass gallery arrays through unresolved.
+ */
+export async function checkSampleMedia(origin, snapshot, {action = 'created', manifestPath = SAMPLE_MANIFEST} = {}) {
+  const references = collectSampleReferences(snapshot);
+  if (references.length === 0) return [];
+  const local = await localSampleReferences(manifestPath);
+  if (local) {
+    const unknown = references.filter(reference => !local.includes(reference));
+    check(unknown.length === 0, `Unknown sample media reference(s): ${unknown.join(', ')}. Valid references: ${local.join(', ')}. Nothing was ${action}.`);
+  }
+  const url = new URL('/api/v1/sample-media', origin);
+  const response = await fetch(url, {redirect: 'manual', signal: AbortSignal.timeout(60_000)});
+  const bytes = await boundedBody(response, JSON_LIMIT);
+  if (response.status === 404) fail(`The Studio at ${origin} does not support sws-sample: references: GET /api/v1/sample-media returned HTTP 404, so this deployment predates built-in sample media. Deploy a Studio version that ships sample-media/ or select one with --origin, and tell the user; do not upload or generate images as a workaround. Nothing was ${action}.`);
+  check(response.status === 200, `The Studio at ${origin} could not list its sample media (HTTP ${response.status}). Nothing was ${action}.`);
+  let data;
+  try {data = JSON.parse(bytes.toString('utf8'));} catch {fail(`The Studio at ${origin} returned an invalid sample media list. Nothing was ${action}.`);}
+  check(data?.schemaVersion === 1 && Array.isArray(data.items), `The Studio at ${origin} returned an invalid sample media list. Nothing was ${action}.`);
+  const served = data.items.map(item => item?.reference).filter(reference => typeof reference === 'string');
+  const missing = references.filter(reference => !served.includes(reference));
+  check(missing.length === 0, `The Studio at ${origin} does not serve these sample references: ${missing.join(', ')}. It serves: ${served.join(', ')}. Nothing was ${action}.`);
+  return references;
+}
+
 async function boundedBody(response, limit) {
   const declared = Number(response.headers.get('content-length'));
   check(!Number.isFinite(declared) || declared <= limit, 'Response exceeds the allowed byte count.');
@@ -194,6 +247,7 @@ async function importWidget(flags) {
   if (flags['--access-out']) await requireAbsent(flags['--access-out'], 'Access output');
   const {snapshot, localAssets} = await buildImportDefinition(required(flags, '--widget-root'), {catalog: flags['--catalog'], name: flags['--name']});
   check(localAssets.length <= 128 && localAssets.reduce((total, asset) => total + asset.bytes.length, 0) <= 100 * 1024 * 1024, 'Local asset upload exceeds the hosted revision limits.');
+  await checkSampleMedia(origin, snapshot);
   const result = await api(origin, '/api/v1/projects', {method: 'POST', body: snapshot, headers: process.env.STUDIO_CREATE_KEY ? {'X-Studio-Key': process.env.STUDIO_CREATE_KEY} : {}});
   const created = expect(result, [201], 'Project creation');
   check(ID.test(created.projectId) && ID.test(created.revisionId) && typeof created.token === 'string' && /^[a-zA-Z0-9_-]{24,256}$/.test(created.token) && created.editorUrl === `/p/${created.projectId}#key=${created.token}`, 'Project creation returned an invalid access contract.');
@@ -202,19 +256,22 @@ async function importWidget(flags) {
     token: created.token, editorUrl: created.editorUrl, createdAt: new Date().toISOString()
   };
   const accessFile = await writePrivate(flags['--access-out'] ?? resolve(homedir(), '.se-widget-studio', `access-${created.projectId}.json`), access);
-  let status = created.status; let revisionId = created.revisionId;
+  let status = created.status; let revisionId = created.revisionId; let diagnostics;
   try {
     if (localAssets.length) {
       const uploaded = [];
       for (const asset of localAssets) uploaded.push(await uploadLocalAsset(access, asset));
       const current = await projectView(access);
       const completed = expect(await api(origin, `/api/v1/projects/${created.projectId}`, {method: 'PUT', token: created.token, headers: {'If-Match': current.etag}, body: {...snapshot, assets: [...(snapshot.assets ?? []), ...uploaded]}}), [200], 'Asset-backed project replacement');
-      status = completed.revision.status; revisionId = completed.revision.id;
+      status = completed.revision.status; revisionId = completed.revision.id; diagnostics = completed.revision.diagnostics;
     }
   } catch (error) {
     throw new Error(`Project ${created.projectId} was created and its private access was saved at ${accessFile}, but local asset finalization failed. ${error instanceof Error ? error.message : ''}`);
   }
-  console.log(JSON.stringify({status, projectId: created.projectId, revisionId, accessFile, uploadedAssets: localAssets.length, editorAvailable: true}));
+  // A blocked revision is still a created project: show why, so it is fixed with pull/push instead of a new import.
+  if (status === 'blocked' && !localAssets.length) diagnostics = (await projectView(access).catch(() => undefined))?.revision?.diagnostics;
+  const blocked = status === 'blocked' && Array.isArray(diagnostics) ? {diagnostics} : {};
+  console.log(JSON.stringify({status, projectId: created.projectId, revisionId, accessFile, uploadedAssets: localAssets.length, editorAvailable: true, ...blocked}));
 }
 
 async function uploadLocalAsset(access, asset) {
@@ -270,6 +327,7 @@ async function push(flags) {
   check(draft.schemaVersion === 1 && draft.purpose === 'se-widget-studio-draft', 'Draft has an unsupported format.');
   check(draft.origin === access.origin && draft.projectId === access.projectId && ID.test(draft.revisionId), 'Draft belongs to a different project or origin.');
   check(typeof draft.etag === 'string' && draft.etag.length > 0 && draft.snapshot && typeof draft.snapshot === 'object', 'Draft is missing its snapshot or concurrency metadata.');
+  await checkSampleMedia(access.origin, draft.snapshot, {action: 'pushed'});
   const result = await api(access.origin, `/api/v1/projects/${access.projectId}`, {method: 'PUT', token: access.token, headers: {'If-Match': draft.etag}, body: draft.snapshot});
   if (result.status === 409) fail('Push conflict (HTTP 409). Pull a fresh draft and reconcile instead of overwriting the newer revision.');
   const view = expect(result, [200], 'Project replacement');
@@ -362,6 +420,7 @@ Usage:
 The default origin is ${DEFAULT_ORIGIN}. Set SE_WIDGET_STUDIO_URL or pass --origin to select another deployment.
 Creation reads STUDIO_CREATE_KEY from the environment when configured. Capabilities are never printed.
 Import reads but never modifies production widget files. Pull/push use complete snapshots and optimistic concurrency.
+Import and push check sws-sample: references against the selected deployment before any change; a blocked import prints its diagnostics.
 Run refuses an existing output directory, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.`);
 }
 

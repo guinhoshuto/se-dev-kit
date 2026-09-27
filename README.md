@@ -12,6 +12,7 @@ The Next.js application lives at this repository's root. Consumer widgets remain
 - Saves immutable revisions and rejects stale full replacements instead of overwriting another editor's work.
 - Runs deterministic browser scenarios and recipes for screenshots, thumbnails, contact sheets, and short silent videos.
 - Uses the same shared engine for the web application, local CLI, and automated jobs.
+- Ships built-in synthetic sample images, so a widget can be previewed, tested, and rendered without creating or uploading media.
 
 There are no user accounts and no external database. In production, private Vercel Blob stores projects, revisions, uploads, and final artifacts; Workflows orchestrate jobs; short-lived Sandboxes run the browser/media worker. The editing link is a secret capability, not a public sharing link.
 
@@ -60,6 +61,10 @@ The repository uses `playwright-core`. Normal startup, tests, and rendering neve
 
 The [API reference](docs/API.md) includes runnable import examples, schemas, uploads, previews, history, limits, and error handling. A `201` response may contain a `blocked` revision: inspect its diagnostics before attempting a preview or job.
 
+## Sample media
+
+[`sample-media/`](sample-media/README.md) holds 8 gallery images (1600x900) and 6 stage backdrops (2000x2000), all synthetic. Reference one in catalog data as the whole string `sws-sample:<file>`, for example `"image": "sws-sample:gallery/neon-city.jpg"`, an array for `multiple` image fields, or `"background": {"id": "aurora", "image": "sws-sample:backdrops/aurora-mesh.jpg"}`. The local CLI, the hosted preview, and hosted jobs resolve the same verified files; nothing is copied into the widget. Empty image fields stay empty unless you choose a sample or press **Fill empty image fields** in an editor, because StreamElements shows them empty too. The list of references, alt text, and backdrop tones is in [`sample-media/manifest.json`](sample-media/manifest.json).
+
 ## Safety and scope
 
 Editing capabilities travel in an initial URL fragment and authorized request headers, not query parameters. Keep them out of Git, screenshots, logs, prompts, and widget data. Anyone holding a capability can read and edit that project. There is currently no account recovery, capability rotation, or project deletion API.
@@ -76,7 +81,10 @@ This is a partial local simulation, not a guarantee of real StreamElements or OB
 npm run typecheck
 npm test
 npm run build
+npm run verify:bundle
 ```
+
+`verify:bundle` checks that the traced sample media list, import, preview, job, and workflow functions and the npm package contain every file in `sample-media/manifest.json`.
 
 For the production-browser workflow, keep this server running in one terminal:
 

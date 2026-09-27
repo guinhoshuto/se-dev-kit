@@ -20,6 +20,59 @@ interface FrameRuntimeOptions {
   readySelector?: string;
   timeoutMs: number;
   assetMap?: Record<string, string>;
+  /** Absolute base such as `http://127.0.0.1:1234/__sws/sample/`; sample references map below it. */
+  sampleMediaBaseUrl?: string;
+}
+
+/**
+ * Mirrors SAMPLE_REFERENCE_PATTERN in studio-ui/sample-media.ts. The runtime is served on its own,
+ * so it cannot import that module; a unit test keeps both sources identical.
+ */
+export const FRAME_SAMPLE_REFERENCE_PATTERN = /^sws-sample:([a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*\.(?:jpg|png|webp|gif))$/;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Replaces exact asset strings, and sample references when a base URL is configured, inside
+ * arrays and plain objects. Anything else, including Date or Map instances from adapters, is
+ * returned by identity, and unchanged containers keep their identity.
+ */
+export function mapRuntimeAssets<T>(value: T, assetMap?: Record<string, string>, sampleMediaBaseUrl?: string): T {
+  if (!assetMap && !sampleMediaBaseUrl) return value;
+  const rewrite = (input: unknown): unknown => {
+    if (typeof input === "string") {
+      if (assetMap && Object.hasOwn(assetMap, input)) return assetMap[input];
+      if (sampleMediaBaseUrl) {
+        const file = FRAME_SAMPLE_REFERENCE_PATTERN.exec(input)?.[1];
+        if (file) return `${sampleMediaBaseUrl}${file}`;
+      }
+      return input;
+    }
+    if (Array.isArray(input)) {
+      let changed = false;
+      const next = input.map((item) => {
+        const mapped = rewrite(item);
+        if (mapped !== item) changed = true;
+        return mapped;
+      });
+      return changed ? next : input;
+    }
+    if (isPlainObject(input)) {
+      let changed = false;
+      const entries = Object.entries(input).map(([key, item]) => {
+        const mapped = rewrite(item);
+        if (mapped !== item) changed = true;
+        return [key, mapped] as const;
+      });
+      return changed ? Object.fromEntries(entries) : input;
+    }
+    return input;
+  };
+  return rewrite(value) as T;
 }
 
 interface BridgeEnvelope {
@@ -233,16 +286,7 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
   let runtimeState: RuntimeState | null = null;
   let adapter: BrowserAdapter = {};
   let initialized = false;
-  const mapAssets = <T>(value: T): T => {
-    if (!options.assetMap) return value;
-    const rewrite = (input: unknown): unknown => {
-      if (typeof input === "string") return options.assetMap?.[input] ?? input;
-      if (Array.isArray(input)) return input.map(rewrite);
-      if (input && typeof input === "object") return Object.fromEntries(Object.entries(input).map(([key, nested]) => [key, rewrite(nested)]));
-      return input;
-    };
-    return rewrite(value) as T;
-  };
+  const mapAssets = <T>(value: T): T => mapRuntimeAssets(value, options.assetMap, options.sampleMediaBaseUrl);
   const nativeConsole = {
     log: console.log.bind(console),
     info: console.info.bind(console),

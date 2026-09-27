@@ -7,6 +7,7 @@ import type {CaptureVariant, MarketplacePreset, RecipeDefinition} from "../types
 import {StudioError} from "../shared/errors.js";
 import {assertSafeId} from "../shared/ids.js";
 import {jsonObjectSchema} from "./schemas.js";
+import {sampleMediaFile} from "../studio-ui/sample-media.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const presetSchema = z
@@ -79,6 +80,9 @@ export async function loadMarketplacePreset(id: string): Promise<MarketplacePres
 }
 
 function isOpaqueBackground(variant: CaptureVariant): boolean {
+  // A built-in JPEG sample has no alpha channel and is drawn with background-size: cover.
+  const sampleFile = variant.background.image ? sampleMediaFile(variant.background.image) : undefined;
+  if (sampleFile?.endsWith(".jpg")) return true;
   const color = variant.background.color?.trim().toLowerCase();
   if (!color || color === "transparent") return false;
   if (/^#[\da-f]{8}$/i.test(color)) return color.slice(-2) === "ff";

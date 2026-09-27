@@ -35,6 +35,7 @@ import {detectMediaTooling, encodeFrameSequence, type MediaTooling} from "./medi
 import {atomicWriteFile, createAtomicTarget, preflightOutputTargets} from "./output.js";
 import {findExecutable, runExecutable} from "../validation/tools.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
+import {sampleMediaHashes as sampleMediaHashesFor} from "../config/sample-media.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -71,11 +72,13 @@ export interface RenderResult {
   artifacts: string[];
 }
 
-interface InputSnapshot {
+export interface InputSnapshot {
   digest: string;
   inputHashes: JsonObject;
   sourceHashes: JsonObject;
   assetHashes: JsonObject;
+  /** Built-in `sws-sample:` media used by any catalog, hashed from the verified bytes the server serves. */
+  sampleMediaHashes: JsonObject;
 }
 
 interface RenderWorkload {
@@ -141,7 +144,8 @@ async function describeArtifact(
   };
 }
 
-async function captureInputSnapshot(project: ResolvedProject, recipe: RecipeDefinition): Promise<InputSnapshot> {
+/** Exported for provenance tests; renders call it before and after every variant. */
+export async function captureInputSnapshot(project: ResolvedProject, recipe: RecipeDefinition): Promise<InputSnapshot> {
   const inputHashes: JsonObject = {};
   for (const [kind, filePath] of Object.entries(project.files)) inputHashes[kind] = await hashFile(filePath);
   if (project.configPath) inputHashes.config = await hashFile(project.configPath);
@@ -172,8 +176,24 @@ async function captureInputSnapshot(project: ResolvedProject, recipe: RecipeDefi
     assetHashes[key] = await hashFile(asset.filePath);
   }
   inputHashes.assets = hashJson(assetHashes);
-  const digest = hashJson({inputHashes, sourceHashes, assetHashes});
-  return {digest, inputHashes, sourceHashes, assetHashes};
+  const sampleMediaHashes: JsonObject = await sampleMediaHashesFor({
+    fieldDefaults: project.fieldDefaults,
+    channel: project.config.channel ?? {},
+    themes: project.themes.map((item) => item.value),
+    fixtures: project.fixtures.map((item) => item.value),
+    scenes: project.scenes.map((item) => item.value),
+    scenarios: project.scenarios.map((item) => item.value),
+    recipes: project.recipes.map((item) => item.value),
+    recipe
+  });
+  // The key is added only when samples are used, so digests of sample-free projects are unchanged.
+  const digest = hashJson({
+    inputHashes,
+    sourceHashes,
+    assetHashes,
+    ...(Object.keys(sampleMediaHashes).length > 0 ? {sampleMediaHashes} : {})
+  });
+  return {digest, inputHashes, sourceHashes, assetHashes, sampleMediaHashes};
 }
 
 async function assertInputsUnchanged(project: ResolvedProject, recipe: RecipeDefinition, expected: InputSnapshot): Promise<void> {
@@ -740,7 +760,8 @@ export async function renderRecipe(
         inputDigest: inputSnapshot.digest,
         inputHashes: inputSnapshot.inputHashes,
         sourceHashes: inputSnapshot.sourceHashes,
-        assetHashes: inputSnapshot.assetHashes
+        assetHashes: inputSnapshot.assetHashes,
+        sampleMediaHashes: inputSnapshot.sampleMediaHashes
       },
       recipe,
       marketplacePreset: marketplacePreset ?? null,

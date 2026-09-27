@@ -19,6 +19,61 @@ FIELDS defaults → theme → fixture → scene → temporary preview override
 
 Never put background, crop, zoom, or output dimensions in `fieldData` unless they are genuine widget FIELDS.
 
+## Sample media
+
+Never generate, download, draw, or upload images just to test a widget. The Studio ships synthetic sample images, and every mode (hosted preview, hosted jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
+
+| Gallery reference (1600x900, landscape) | Shows |
+|---|---|
+| `sws-sample:gallery/synthwave-sunset.jpg` | Synthwave sun over purple mountains and a magenta grid |
+| `sws-sample:gallery/neon-city.jpg` | Purple night skyline with neon towers and a full moon |
+| `sws-sample:gallery/mountain-dawn.jpg` | Pastel lavender valley at dawn with a lake and pines |
+| `sws-sample:gallery/cozy-desk.jpg` | Illustrated night desk setup with monitor, keyboard, and lamp |
+| `sws-sample:gallery/space-nebula.jpg` | Ringed pink planet, small moon, and blue-magenta nebula |
+| `sws-sample:gallery/pixel-forest.jpg` | Bright pixel-art platformer with coins, gems, and a chest |
+| `sws-sample:gallery/ocean-moon.jpg` | Teal night ocean with a large cream moon |
+| `sws-sample:gallery/abstract-glass.jpg` | Frosted glass shapes over blurred orange, pink, and blue light |
+
+| Backdrop reference (2000x2000, drawn with cover) | Tone | Pair with `color` | Shows |
+|---|---|---|---|
+| `sws-sample:backdrops/aurora-mesh.jpg` | dark | `#2e2b52` | Violet and mint aurora over an indigo night sky |
+| `sws-sample:backdrops/candy-pop.jpg` | light | `#f98d9d` | Yellow-pink-purple gradient with confetti shapes |
+| `sws-sample:backdrops/midnight-grid.jpg` | dark | `#0d1624` | Very dark navy with a faint perspective grid |
+| `sws-sample:backdrops/noir-warm.jpg` | dark | `#10100e` | Near-black with a warm golden spotlight |
+| `sws-sample:backdrops/prism-sky.jpg` | light | `#e2f9e9` | Bright aqua-mint-lemon gradient; good for dark text or white cards |
+| `sws-sample:backdrops/sunset-mesh.jpg` | medium | `#a44085` | Coral-to-magenta-to-indigo mesh gradient |
+
+Pick a backdrop by contrast: a light or white-text widget on a `dark` backdrop, a dark-text widget, or one with white cards, on a `light` one. Alt text and exact metadata are in `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json` from a checkout or linked skill) and in `GET /api/v1/sample-media` on a deployment that supports samples.
+
+```json
+{
+  "themes": [{"schemaVersion": 1, "id": "photo", "name": "Photo", "fieldData": {"image": "sws-sample:gallery/neon-city.jpg"}}],
+  "scenes": [
+    {
+      "schemaVersion": 1,
+      "id": "gallery-on-aurora",
+      "name": "Gallery on aurora",
+      "fieldData": {"galleryImages": ["sws-sample:gallery/synthwave-sunset.jpg", "sws-sample:gallery/ocean-moon.jpg", "sws-sample:gallery/pixel-forest.jpg"]},
+      "background": {"id": "aurora", "image": "sws-sample:backdrops/aurora-mesh.jpg", "color": "#2e2b52"}
+    }
+  ],
+  "recipes": [
+    {"schemaVersion": 1, "id": "backdrops", "name": "Backdrops", "scenes": ["gallery-on-aurora"], "matrix": {"backgrounds": [{"id": "prism", "image": "sws-sample:backdrops/prism-sky.jpg", "color": "#e2f9e9"}]}}
+  ]
+}
+```
+
+Rules:
+
+- Only a whole string counts. It works as a media value in theme, fixture, scene, scenario `updateFields`, channel, and event data; as an array element of an `image-input` with `multiple: true`; and as `background.image` of a scene or a recipe matrix background.
+- Unknown references fail `validate` (`SAMPLE_MEDIA_UNKNOWN`), block hosted import, and make the skill client refuse `import`/`push` before any change. Never put references in widget HTML or CSS or in FIELDS `value`/`default`, because StreamElements cannot resolve them. Hosted import rejects them there; local `validate` does not, so do not rely on it to catch this.
+- Do not declare samples under `assets`, and never copy them into the widget directory. They cost no upload or revision asset quota. In the hosted interactive preview, captured assets and the samples the selected scene shows share one 3 MiB budget, and the whole response, background image included, must stay under 4,000,000 bytes as base64: plan for well under 3 MB of raw media per previewed scene.
+- Widgets receive an absolute URL: a same-origin `http:` URL in the local CLI and hosted jobs, a verified `data:image/` URL in the hosted interactive preview. Code that resolves media with `new URL(value, location.href)` works unchanged when it also accepts `data:image/` URLs; code that keeps only `http:`, `https:`, or `blob:` shows the image in jobs and the local CLI but not in the hosted preview, as with any captured asset.
+- Do not fill empty media fields silently. StreamElements shows an empty field as empty, so keep at least one scene with the media fields empty when the widget has an empty state, and put samples in the scenes that show media. The editors' **Fill empty image fields** button is an explicit, temporary choice.
+- `video-input` and `sound-input` have no samples yet, and there are no avatar, emote, transparent, animated, or portrait samples. Leave those fields empty or ask the user; do not generate replacements.
+
+## Hosted assets
+
 For hosted import, list local binary dependencies explicitly as `{path, file, contentType}`. `file` is relative to the production widget root and is consumed only by the skill helper; the server stores the resulting private upload ID. Never use broad directory globs or include credentials, source maps, development configuration, or unrelated repository files.
 
 ## Compact example

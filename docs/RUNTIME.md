@@ -69,9 +69,11 @@ Config files run as trusted Node.js modules. Adapters run as trusted browser mod
 
 The server starts with the four configured production files, follows static local references from HTML/CSS/JavaScript, and adds explicit `widget.assets` globs. Every resulting file is checked with `realpath`, must remain inside the widget root, must not be a dotfile or output, and must use a supported web asset type. Requests only look up this precomputed map.
 
+Built-in sample media use a separate frame-origin route, `/__sws/sample/<file>`, that looks up the verified `sample-media/manifest.json` of the Studio package by exact name and serves bytes checked against their SHA-256 at load. It never consults the widget allowlist and returns 404 for the manifest, the README, and every unlisted path. The frame runtime replaces a whole `sws-sample:<file>` string in field data, channel, recents, field updates, and events with the absolute URL of that route, so widgets that resolve media with `new URL(value, location.href)` receive a same-origin `http:` URL. The catalog loads on first use; widgets without sample references do not depend on it.
+
 The configured production JavaScript file is removed from both fragment and full-document HTML before the in-memory frame is assembled, then loaded exactly once after the runtime is installed. Other inline scripts remain part of the production HTML and may run during parsing; widgets that depend on Studio state should keep runtime code in the configured JavaScript file.
 
-Automated contexts abort every non-loopback HTTP request and every WebSocket. A blocked stylesheet, font, image, media file, or other request is reported as a runtime error instead of silently producing degraded final media. Capture backgrounds must be a local allowlisted widget asset or a data URL and are decoded before readiness.
+Automated contexts abort every non-loopback HTTP request and every WebSocket. A blocked stylesheet, font, image, media file, or other request is reported as a runtime error instead of silently producing degraded final media. Capture backgrounds must be a local allowlisted widget asset, a data URL, or a known `sws-sample:` reference, and are decoded before readiness. Unknown sample references fail with `SAMPLE_MEDIA_NOT_FOUND`; any other scheme is still blocked.
 
 ## Known boundary
 

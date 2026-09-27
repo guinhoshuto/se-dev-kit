@@ -35,7 +35,7 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
     const html=await previewHtml(prepared,target,options);const state=previewState(prepared.snapshot,options);
     const backgroundImage=await previewBackground(prepared,target,options);
     const response={html,state,backgroundImage,sessionId:options.sessionId,nonce:options.nonce};
-    if(Buffer.byteLength(JSON.stringify(response))>4_000_000)throw new HttpError(413,'Preview response exceeds 4 MB. Reduce source or preview assets.');
+    if(Buffer.byteLength(JSON.stringify(response))>4_000_000)throw new HttpError(413,'Preview response exceeds 4 MB. Reduce source, preview assets, the sample media this scene uses, or the background image; server-side jobs are not limited by it.');
     return json(response);
   }catch(error){if(error instanceof HttpError)throw error;throw new HttpError(422,error instanceof Error?error.message:'Preview preparation failed.');}
 });}

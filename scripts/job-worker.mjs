@@ -3,13 +3,16 @@ import {resolve, relative, isAbsolute} from 'node:path';
 import {createHash} from 'node:crypto';
 import {renderRecipe, planRecipe, singleSceneRecipe} from '../dist/capture/renderer.js';
 import {runScenarios, runBrowserSmoke} from '../dist/scenarios/runner.js';
+import {assertSampleMediaPins} from '../dist/config/sample-media.js';
 
 // Trusted process entry point. Input is data; no submitted Node module is imported.
 const [inputPath, resultPath] = process.argv.slice(2);
 if (!inputPath || !resultPath) throw new Error('Worker input and result paths are required.');
-const {job, project} = JSON.parse(await readFile(inputPath, 'utf8'));
+const {job, project, sampleMedia} = JSON.parse(await readFile(inputPath, 'utf8'));
 const result = {ok: false, artifacts: [], progress: '', error: undefined};
 try {
+  // Samples the revision pinned must still have identical bytes in this build (append-only catalog).
+  await assertSampleMediaPins(sampleMedia);
   await mkdir(project.outputRoot, {recursive: true});
   const artifactPaths = [];
   if (job.kind === 'test') {
