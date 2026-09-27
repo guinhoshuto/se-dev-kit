@@ -9,6 +9,8 @@ declare global {
       getState: () => RuntimeState | null;
       emit: (listener: string, event: JsonValue) => void;
       settle: () => Promise<FontReport>;
+      /** What a settle is waiting for right now; captures read it to explain FONT_SETTLE_TIMEOUT. */
+      fontState: () => FontWaitState;
     };
   }
 }
@@ -252,6 +254,69 @@ interface StylesheetLoad {
 }
 
 const stylesheetLoads = new Map<HTMLLinkElement, StylesheetLoad>();
+
+/** A snapshot of what settle() waits on, for timeout messages. */
+export interface FontWaitState {
+  phase: string;
+  pendingStylesheets: string[];
+  fontsStatus: string;
+  loadingFaces: string[];
+}
+let settlePhase = "idle";
+
+export function fontWaitState(): FontWaitState {
+  const loadingFaces: string[] = [];
+  if (document.fonts) {
+    for (const face of document.fonts) {
+      if (face.status === "loading" && loadingFaces.length < 20) loadingFaces.push(`${unquoteFamily(face.family)} ${face.weight} ${face.style}`);
+    }
+  }
+  return {
+    phase: settlePhase,
+    pendingStylesheets: Array.from(stylesheetLoads.values(), (load) => load.href).slice(0, 20),
+    fontsStatus: document.fonts?.status ?? "unsupported",
+    loadingFaces
+  };
+}
+
+/**
+ * Resource Timing entries seen per URL. A Google Fonts stylesheet whose fetch has finished but whose
+ * element never fires `load` or `error` (engines differ on 4xx and non-CSS answers under request
+ * interception) must not hold settle() forever: a few tasks after its entry, the wait ends as
+ * `settled`, and the capture's request log decides whether it failed, as for a static link.
+ */
+/** Resource Timing entries seen per URL: each finished fetch adds one. */
+const finishedFetches = new Map<string, number>();
+const fetchWaiters = new Map<string, Set<{after: number; wake: () => void}>>();
+const FETCH_EVENT_GRACE_TASKS = 64;
+
+function watchFinishedFetches(): void {
+  if (typeof PerformanceObserver === "undefined") return;
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const count = (finishedFetches.get(entry.name) ?? 0) + 1;
+        finishedFetches.set(entry.name, count);
+        for (const waiter of Array.from(fetchWaiters.get(entry.name) ?? [])) {
+          if (count <= waiter.after) continue;
+          fetchWaiters.get(entry.name)?.delete(waiter);
+          waiter.wake();
+        }
+      }
+    }).observe({type: "resource", buffered: true});
+  } catch {
+    // No Resource Timing: element events only.
+  }
+}
+
+/** Calls `wake` once a fetch of `href` that finishes after this call is recorded (a new one, not an earlier fetch of the same URL). */
+function whenFetchFinished(href: string, wake: () => void): () => void {
+  let waiters = fetchWaiters.get(href);
+  if (!waiters) fetchWaiters.set(href, (waiters = new Set()));
+  const waiter = {after: finishedFetches.get(href) ?? 0, wake};
+  waiters.add(waiter);
+  return () => waiters!.delete(waiter);
+}
 /**
  * Every Google Fonts stylesheet the frame has seen, and how it ended. `settled`: it finished before
  * the runtime watched it, with an outcome the frame cannot read (Chromium gives failed and
@@ -343,12 +408,22 @@ function trackStylesheet(link: HTMLLinkElement, reassigned = false): void {
   markGoogleStylesheet(href, "pending");
   let settle: StylesheetLoad["settle"] = () => undefined;
   const promise = new Promise<void>((resolve, reject) => {
+    let stopWatchingFetch = () => undefined as void;
+    let finished = false;
     const cleanup = () => {
+      finished = true;
+      stopWatchingFetch();
       link.removeEventListener("load", loaded);
       link.removeEventListener("error", failed);
     };
-    const finish = (outcome: "load" | "error" | "superseded") => {
+    const finish = (outcome: "load" | "error" | "superseded" | "settled") => {
+      if (finished) return;
       cleanup();
+      if (outcome === "settled") {
+        markGoogleStylesheet(href, "settled");
+        resolve();
+        return;
+      }
       if (outcome === "error") {
         // A Google Fonts stylesheet that fails leaves its families in fallback, which settle() reports.
         if (isGoogleFontsUrl(href)) {
@@ -363,15 +438,24 @@ function trackStylesheet(link: HTMLLinkElement, reassigned = false): void {
       resolve();
     };
     const loaded = () => {
-      // A late load event can belong to a superseded href; keep waiting for the current one.
+      // A late load event can belong to a superseded href (its sheet is still the old one); keep
+      // waiting for the current one. A load without any sheet has nothing older to belong to.
       const current = linkSheet(link);
-      if (!current || sheetHref(current) !== href) return;
+      if (current && sheetHref(current) !== href) return;
       finish("load");
     };
     const failed = () => finish("error");
     settle = finish;
     link.addEventListener("load", loaded);
     link.addEventListener("error", failed);
+    if (isGoogleFontsUrl(href)) {
+      stopWatchingFetch = whenFetchFinished(href, () => {
+        void (async () => {
+          for (let task = 0; task < FETCH_EVENT_GRACE_TASKS && !finished; task += 1) await nextTask();
+          finish("settled");
+        })();
+      });
+    }
   });
   promise.catch(() => undefined);
   stylesheetLoads.set(link, {href, promise, settle});
@@ -388,6 +472,7 @@ export function settleTrackedStylesheet(link: HTMLLinkElement, outcome: "load" |
 export function watchStylesheets(): void {
   if (watchingStylesheets) return;
   watchingStylesheets = true;
+  watchFinishedFetches();
   document.addEventListener("load", dedupeNativeLoad, true);
   document.addEventListener("error", dedupeNativeLoad, true);
   watchFontErrors();
@@ -761,21 +846,29 @@ async function settleUntilQuiet(options: SettleOptions): Promise<FontReport> {
   let wanted = new Map<string, WantedFace>();
   for (let round = 0; round < 8; round += 1) {
     const awaited = new Set(Array.from(stylesheetLoads.values(), (load) => load.promise));
+    settlePhase = `round ${round + 1}: stylesheets`;
     await waitForStylesheets();
     forceLayout();
+    settlePhase = `round ${round + 1}: document.fonts.ready`;
     if (document.fonts) await document.fonts.ready;
-    if (options.light) return fontReport(wanted, true);
+    if (options.light) {
+      settlePhase = "idle";
+      return fontReport(wanted, true);
+    }
     const previous = wanted.size;
     wanted = collectWantedFaces(options.sampleText ?? "");
+    settlePhase = `round ${round + 1}: fonts.load (${Array.from(wanted.values(), (face) => `${face.family} ${face.weight} ${face.style}`).slice(0, 12).join(", ")})`;
     await Promise.all(Array.from(wanted.values(), loadWantedFace));
     await nextTask();
     forceLayout();
+    settlePhase = `round ${round + 1}: document.fonts.ready after loads`;
     if (document.fonts) await document.fonts.ready;
     const newStylesheet = Array.from(stylesheetLoads.values()).some((load) => !awaited.has(load.promise));
     const fontsLoading = document.fonts ? document.fonts.status !== "loaded" : false;
     if (!newStylesheet && !fontsLoading && round > 0 && wanted.size <= previous) break;
     if (!newStylesheet && !fontsLoading && wanted.size === 0) break;
   }
+  settlePhase = "idle";
   return fontReport(wanted, true);
 }
 
@@ -978,7 +1071,8 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
   window.__SE_WIDGET_STUDIO__ = {
     getState: () => (runtimeState ? structuredClone(runtimeState) : null),
     emit: emitAndAnnounce,
-    settle: () => runSettle(false)
+    settle: () => runSettle(false),
+    fontState: fontWaitState
   };
 
   const initialize = async (state: RuntimeState, clockManaged: boolean) => {

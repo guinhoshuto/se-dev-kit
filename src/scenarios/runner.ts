@@ -75,12 +75,47 @@ function settlingStarted(events: {type: string}[]): boolean {
   return settling;
 }
 
-function settleTimeout(deadlineMs: number): StudioError {
+function settleTimeout(deadlineMs: number, detail = ""): StudioError {
   return new StudioError(
     "FONT_SETTLE_TIMEOUT",
-    `Widget fonts and stylesheets did not settle within ${deadlineMs}ms of real time.`,
+    `Widget fonts and stylesheets did not settle within ${deadlineMs}ms of real time.${detail ? ` ${detail}` : ""}`,
     "A stylesheet or font the widget requested never finished loading."
   );
+}
+
+interface FrameFontState {
+  phase: string;
+  pendingStylesheets: string[];
+  fontsStatus: string;
+  loadingFaces: string[];
+}
+
+/**
+ * What the widget frame's settle() was still waiting for, and the Google Fonts requests the
+ * browser had not finished, so a FONT_SETTLE_TIMEOUT from an environment that cannot be
+ * reproduced locally (the hosted Sandbox) names its cause. Never throws.
+ */
+export async function describePendingFonts(page: Page, issues?: Pick<BrowserIssueLog, "pendingFonts">): Promise<string> {
+  const parts: string[] = [];
+  const frame = page.frames().find((candidate) => candidate !== page.mainFrame() && candidate.url().includes("/__sws/frame/"));
+  const state = frame
+    ? await Promise.race([
+        frame
+          .evaluate(() => (window as unknown as {__SE_WIDGET_STUDIO__?: {fontState?: () => unknown}}).__SE_WIDGET_STUDIO__?.fontState?.())
+          .catch(() => undefined),
+        new Promise<undefined>((resolvePromise) => setTimeout(() => resolvePromise(undefined), 1_000))
+      ]) as FrameFontState | undefined
+    : undefined;
+  if (state) {
+    parts.push(`Settle phase: ${state.phase}.`);
+    if (state.pendingStylesheets.length) parts.push(`Stylesheets without load or error: ${state.pendingStylesheets.join(", ")}.`);
+    parts.push(`document.fonts.status: ${state.fontsStatus}.`);
+    if (state.loadingFaces.length) parts.push(`Faces still loading: ${state.loadingFaces.join("; ")}.`);
+  } else {
+    parts.push("The frame did not report its font state.");
+  }
+  if (issues?.pendingFonts.size) parts.push(`Google Fonts requests without a response: ${Array.from(issues.pendingFonts).slice(0, 10).join(", ")}.`);
+  return parts.join(" ");
 }
 
 /**
@@ -106,7 +141,7 @@ async function withRealDeadline<T>(task: Promise<T>, deadlineMs: number, onTimeo
 
 async function commandTimeout(page: Page, label: string, deadlineMs: number): Promise<Error> {
   const events = await frameEvents(page).catch(() => []);
-  if (settlingStarted(events)) return settleTimeout(deadlineMs);
+  if (settlingStarted(events)) return settleTimeout(deadlineMs, await describePendingFonts(page));
   return new StudioError("CAPTURE_COMMAND_TIMEOUT", `Widget command ${label} did not finish within ${deadlineMs}ms of real time.`);
 }
 
@@ -114,7 +149,8 @@ async function captureHostLoadWithClock(
   page: Page,
   payload: unknown,
   timeoutMs: number,
-  readySelector: string | undefined
+  readySelector: string | undefined,
+  issues?: Pick<BrowserIssueLog, "pendingFonts">
 ): Promise<void> {
   let settled = false;
   let failure: unknown;
@@ -132,7 +168,7 @@ async function captureHostLoadWithClock(
     if (settled) break;
     const events = await frameEvents(page);
     if (Date.now() > deadline) {
-      if (settlingStarted(events)) throw settleTimeout(timeoutMs + 5_000);
+      if (settlingStarted(events)) throw settleTimeout(timeoutMs + 5_000, await describePendingFonts(page, issues));
       throw new StudioError("CAPTURE_READY_TIMEOUT", `Widget capture host timed out after ${timeoutMs + 5_000}ms.`);
     }
     assetsReady = events.some((event) => event.type === "frame:assets-ready");
@@ -200,7 +236,7 @@ export async function captureHostSettle(page: Page, realDeadlineMs = SETTLE_DEAD
     const captureWindow = window as unknown as {__SWS_CAPTURE__: {settle: (value: boolean) => Promise<FontReport>}};
     return captureWindow.__SWS_CAPTURE__.settle(lightSettle);
   }, light);
-  return withRealDeadline(task, realDeadlineMs, async () => settleTimeout(realDeadlineMs));
+  return withRealDeadline(task, realDeadlineMs, async () => settleTimeout(realDeadlineMs, await describePendingFonts(page)));
 }
 
 /** Settles, then turns Google Fonts failures seen so far into FONT_UNAVAILABLE or FONT_UNSUPPORTED; returns warnings. */
@@ -296,7 +332,7 @@ export async function openScene(
     background: await backgroundForBrowser(resolved.background, server),
     readyTimeoutMs,
     docKey
-  }, readyTimeoutMs, project.config.widget.ready?.selector);
+  }, readyTimeoutMs, project.config.widget.ready?.selector, issues);
   await page.clock.setSystemTime(captureTime);
   await sampleFrameAnimations(page, 0);
   const getFrame = () => {

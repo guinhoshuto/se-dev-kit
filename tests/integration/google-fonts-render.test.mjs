@@ -337,3 +337,135 @@ test("a render served from the package makes zero external attempts, preconnect 
     await sink.close();
   }
 });
+
+// Production, 2026-09-27 (job 27cbf594): the verify-hosted --fonts widget timed out in the first
+// settle of pass 2 on the Sandbox's Chromium 139, which the local Chromes (154, 149) do not
+// reproduce. Its one new shape was a JS-inserted Google link answered with a recorded 400.
+// The runtime no longer depends on each engine's events for such a link, and a timeout names what
+// it waited for.
+
+/** A route that answers from the package, except `hang` family stylesheets, which never get an answer. */
+function hangingRoute(fonts, hang) {
+  return async (url) => (url.includes(`family=${hang}`) ? new Promise(() => {}) : fonts.route(url));
+}
+
+test("the verify-hosted --fonts shape: static link, setFont() at load, and a JS link to a refused family, completes with a warning", {timeout: 120_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const missing = css2("Missing Family");
+  const widget = await fontWidget(t, {
+    html: `<link rel="stylesheet" href="${css2("Unbounded")}"><link id="gf" rel="stylesheet" href="${css2("Unbounded")}"><h1 id="t">Studio</h1><p style="font-family:'Missing Family'">Missing</p>`,
+    css: TITLE_CSS,
+    js: `${SET_FONT_JS}\nwindow.addEventListener("onWidgetLoad", () => { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = ${JSON.stringify(missing)}; document.head.append(link); });`,
+    fields: {font: {type: "googleFont", label: "Font", value: "Studio Display"}}
+  });
+  const pkg = await fontPackage(t, {refused: [missing]});
+  const manifest = await render(context, widget, await pkg.load());
+  assert.equal(manifest.status, "final");
+  assert.ok(manifest.fonts.served.some((entry) => entry.url === missing && entry.status === 400));
+  assert.ok(manifest.fonts.issues.some((issue) => issue.startsWith("upstream-4xx:") && issue.includes('"Missing Family"')), manifest.fonts.issues.join("; "));
+  assert.equal(manifest.artifacts[0].fonts.families.find((entry) => entry.family === "Studio Display")?.status, "loaded");
+});
+
+async function openWithShortReady(t, context, widgetOptions, openOptions) {
+  const widget = await fontWidget(t, widgetOptions);
+  widget.project.config.widget.ready = {timeoutMs: 2_000};
+  const {launchStudioBrowser} = await import("../../dist/capture/browser.js");
+  const {browser} = await launchStudioBrowser({browserPath: context.browserPath});
+  const server = await startStudioServer(widget.project, {port: 0, watch: false});
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+  });
+  const started = Date.now();
+  const opened = await openScene(widget.project, server, browser, widget.project.scenes[0].value, openOptions);
+  t.after(() => opened.context.close());
+  return {opened, elapsed: Date.now() - started};
+}
+
+test("a Google stylesheet whose fetch finished but whose element fires neither load nor error does not hold settle", {timeout: 120_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const missing = css2("Missing Family");
+  const pkg = await fontPackage(t, {refused: [missing]});
+  // Stands in for an engine that fires no event for this answer: the widget's own capture
+  // listener on window swallows both, before the runtime's listeners see them.
+  const {opened, elapsed} = await openWithShortReady(t, context, {
+    html: '<h1 style="font-family:\'Missing Family\'">Studio</h1>',
+    css: TITLE_CSS,
+    js: `for (const type of ["load", "error"]) window.addEventListener(type, (event) => { if (event.target?.id === "silent") event.stopImmediatePropagation(); }, true);
+window.addEventListener("onWidgetLoad", () => { const link = document.createElement("link"); link.id = "silent"; link.rel = "stylesheet"; link.href = ${JSON.stringify(missing)}; document.head.append(link); });`
+  }, {fonts: await pkg.load()});
+  assert.ok(elapsed < 6_000, `opened in ${elapsed} ms`);
+  const report = await captureHostSettle(opened.page, 3_000);
+  assert.equal(report.families.find((entry) => entry.family === "Missing Family")?.status, "fallback");
+  // Ended as `settled`, never as failed: the frame cannot know the outcome, so it does not claim one.
+  assert.deepEqual(report.failedStylesheets, []);
+  assert.ok(opened.issues.fonts.some(({url, status}) => url === missing && status === 400), "the request log still has the 400, so the capture reports it");
+});
+
+test("a load event while the link has no sheet ends its wait", {timeout: 120_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const fonts = await (await fontPackage(t)).load();
+  const {elapsed} = await openWithShortReady(t, context, {
+    html: "<h1>Studio</h1>",
+    css: TITLE_CSS,
+    // The request never gets an answer, so only the load event can end the wait; the sheet is still
+    // null. It is dispatched after the runtime's MutationObserver has started tracking the link.
+    js: `window.addEventListener("onWidgetLoad", () => { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = ${JSON.stringify(css2("Hanging"))}; document.head.append(link); queueMicrotask(() => link.dispatchEvent(new Event("load"))); });`
+  }, {fontRoute: hangingRoute(fonts, "Hanging")});
+  assert.ok(elapsed < 6_000, `opened in ${elapsed} ms`);
+});
+
+test("FONT_SETTLE_TIMEOUT names the settle phase, the stylesheet it waited for, and the request without a response", {timeout: 120_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const fonts = await (await fontPackage(t)).load();
+  await assert.rejects(openWithShortReady(t, context, {
+    html: "<h1>Studio</h1>",
+    css: TITLE_CSS,
+    js: `window.addEventListener("onWidgetLoad", () => { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = ${JSON.stringify(css2("Hanging"))}; document.head.append(link); });`
+  }, {fontRoute: hangingRoute(fonts, "Hanging")}), (error) => {
+    assert.equal(error.code, "FONT_SETTLE_TIMEOUT");
+    assert.match(error.message, /within 7000ms of real time\. Settle phase: round 1: stylesheets\./);
+    assert.match(error.message, /Stylesheets without load or error: https:\/\/fonts\.googleapis\.com\/css2\?family=Hanging\./);
+    assert.match(error.message, /Google Fonts requests without a response: https:\/\/fonts\.googleapis\.com\/css2\?family=Hanging\./);
+    return true;
+  });
+});
+
+test("switching back to a family fetched earlier shows it again at once (the fetch fallback does not cut the wait short)", {timeout: 120_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const fonts = await (await fontPackage(t)).load();
+  // Studio Display is slow, so the wait for it outlives the first Unbounded fetch by far.
+  const route = async (url) => {
+    if (url === css2("Studio Display")) await new Promise((resolve) => setTimeout(resolve, 800));
+    return fonts.route(url);
+  };
+  const google = await fontWidget(t, {html: `<link id="gf" rel="stylesheet" href="${css2("Unbounded")}"><h1 id="t">Studio</h1>`, css: TITLE_CSS, js: SET_FONT_JS, fields: FONT_FIELD});
+  const reference = await fontWidget(t, {html: "<h1 id=\"t\" style=\"font-family:'Unbounded'\">Studio</h1>", css: `${LOCAL_FACES_CSS}${TITLE_CSS}`});
+  const {launchStudioBrowser} = await import("../../dist/capture/browser.js");
+  const {browser} = await launchStudioBrowser({browserPath: context.browserPath});
+  const googleServer = await startStudioServer(google.project, {port: 0, watch: false});
+  const referenceServer = await startStudioServer(reference.project, {port: 0, watch: false});
+  const stage = async (opened) => sha256(await opened.page.locator("#capture-stage").screenshot());
+  try {
+    const expectedOpened = await openScene(reference.project, referenceServer, browser, reference.project.scenes[0].value);
+    const expected = await stage(expectedOpened);
+    await expectedOpened.context.close();
+    const opened = await openScene(google.project, googleServer, browser, google.project.scenes[0].value, {fontRoute: route});
+    try {
+      await captureHostUpdateFields(opened.page, {font: "Studio Display"});
+      await captureHostUpdateFields(opened.page, {font: "Unbounded"});
+      assert.equal(await stage(opened), expected, "the frame after the update shows Unbounded again");
+    } finally {
+      await opened.context.close();
+    }
+  } finally {
+    await browser.close();
+    await googleServer.close();
+    await referenceServer.close();
+  }
+});

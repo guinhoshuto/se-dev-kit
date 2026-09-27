@@ -187,12 +187,18 @@ export interface BrowserIssueLog {
   warnings: string[];
   /** Google Fonts failures, kept apart from `errors` so they become font codes instead of a generic runtime error. */
   fonts: FontRequestIssue[];
+  /** Google Fonts requests the page made that have not finished or failed yet (for timeout messages). */
+  pendingFonts: Set<string>;
 }
 
 const CSP_REFUSAL = /^Refused to load the (?:stylesheet|font) '([^']+)'/;
 
 export function observePage(page: Page): BrowserIssueLog {
-  const log: BrowserIssueLog = {errors: [], warnings: [], fonts: []};
+  const log: BrowserIssueLog = {errors: [], warnings: [], fonts: [], pendingFonts: new Set()};
+  page.on("request", (request) => {
+    if (isGoogleFontsRequestUrl(request.url())) log.pendingFonts.add(request.url());
+  });
+  page.on("requestfinished", (request) => log.pendingFonts.delete(request.url()));
   const noteFont = (issue: FontRequestIssue) => {
     if (!log.fonts.some((known) => known.url === issue.url && known.status === issue.status)) log.fonts.push(issue);
   };
@@ -210,6 +216,7 @@ export function observePage(page: Page): BrowserIssueLog {
     if (message.type() === "warning") log.warnings.push(`console.warn: ${text}`);
   });
   page.on("requestfailed", (request) => {
+    log.pendingFonts.delete(request.url());
     const failure = request.failure()?.errorText ?? "request failed";
     if (isGoogleFontsRequestUrl(request.url())) {
       noteFont({url: request.url(), detail: failure});
