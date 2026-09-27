@@ -325,6 +325,40 @@ export interface RuntimeState {
   fixedTime: string;
 }
 
+/**
+ * Why a font face used by the widget is shown in a fallback typeface. `stylesheet-blocked`: the
+ * Google Fonts stylesheet that declares it failed or was refused; `upstream-4xx`: Google refused
+ * the family; `not-in-cache`: a render had no cached copy; `face-error`: a font file failed;
+ * `timeout`: the preview's font budget ran out; `partial`: only some subsets are available.
+ */
+export type FontFallbackReason = "stylesheet-blocked" | "upstream-4xx" | "not-in-cache" | "face-error" | "timeout" | "partial";
+
+/** One family, weight and style the widget uses, from its DOM, its canvas text, or a Google Fonts URL it loaded. */
+export interface FontReportEntry {
+  family: string;
+  /** Computed weight such as `400` or `700`. */
+  weight: string;
+  style: "normal" | "italic";
+  status: "loaded" | "fallback";
+  reason?: FontFallbackReason;
+  sources: ("dom" | "canvas" | "google")[];
+  /** The Google Fonts stylesheet that requests this family, when there is one. */
+  url?: string;
+}
+
+/** What `settle()` in the widget frame found. */
+export interface FontReport {
+  families: FontReportEntry[];
+  /** A face finished loading after canvas text was last drawn with a fallback; one more frame redraws it. */
+  redrawNeeded: boolean;
+  /** Google Fonts stylesheets that failed to load, with the frame's reason. */
+  failedStylesheets: {href: string; reason: FontFallbackReason}[];
+  /** Font loading errors and content-security-policy refusals seen in the frame. */
+  issues: string[];
+  /** False when the preview's font budget expired before every face settled. */
+  complete: boolean;
+}
+
 export interface Diagnostic {
   status: "ok" | "warning" | "error";
   code: string;
@@ -359,6 +393,10 @@ export interface CaptureManifestEntry {
   frameSequence?: JsonObject;
   /** Set when frame removal after a validated encode failed; the frames and frames.json may remain in part. */
   framesDiscardError?: string;
+  /** The still's fonts: each family loaded or in fallback, Google refusals, and `redrawMs` for canvas text. */
+  fonts?: JsonObject;
+  /** The video's fonts, as last settled after an event. */
+  videoFonts?: JsonObject;
   parameters: JsonObject;
   hashes: JsonObject;
   files?: JsonObject;

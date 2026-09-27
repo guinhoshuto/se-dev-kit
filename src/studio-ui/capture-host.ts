@@ -1,4 +1,5 @@
 import {FrameBridge, type FrameEvent} from "./bridge.js";
+import type {FontReport} from "../types.js";
 
 interface CaptureLoadOptions {
   state: {
@@ -77,20 +78,30 @@ class CaptureController {
       this.iframe,
       this.frameOrigin,
       options.state,
-      (event) => this.events.push(event),
+      (event) => {
+        // Command acknowledgements for host:settle run once per video frame; their reports return to the caller.
+        if ((event.type === "frame:fonts" || event.type === "frame:settling") && typeof (event.payload as {requestId?: unknown} | undefined)?.requestId === "string") return;
+        this.events.push(event);
+      },
       true
     );
     await this.bridge.start((options.readyTimeoutMs ?? 10_000) + 2_000, options.docKey);
   }
 
-  dispatch(listener: string, event: unknown): Promise<void> {
+  dispatch(listener: string, event: unknown): Promise<FontReport | undefined> {
     if (!this.bridge) throw new Error("Capture host is not loaded.");
     return this.bridge.dispatch(listener, event);
   }
 
-  updateFields(fieldData: Record<string, unknown>): Promise<void> {
+  updateFields(fieldData: Record<string, unknown>): Promise<FontReport | undefined> {
     if (!this.bridge) throw new Error("Capture host is not loaded.");
     return this.bridge.updateFields(fieldData);
+  }
+
+  /** The Node caller keeps the real deadline; this window's timers stop while the clock is paused. */
+  settle(light = false): Promise<FontReport> {
+    if (!this.bridge) throw new Error("Capture host is not loaded.");
+    return this.bridge.settle(light, 3_600_000);
   }
 
   getEvents(): FrameEvent[] {

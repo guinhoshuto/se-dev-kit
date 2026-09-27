@@ -3,6 +3,7 @@ import {constants} from "node:fs";
 import {platform} from "node:os";
 import {chromium, type Browser, type BrowserContext, type Page} from "playwright-core";
 import {StudioError} from "../shared/errors.js";
+import {isGoogleFontsHost} from "../runtime/google-fonts-url.js";
 
 export interface BrowserDetection {
   executablePath?: string;
@@ -79,11 +80,34 @@ export async function launchStudioBrowser(options: {
   return {browser, detection};
 }
 
+/** A Google Fonts answer the trusted process fulfills itself; nothing is fetched from the network. */
+export interface FontRouteAnswer {
+  status: number;
+  contentType: string;
+  body: Buffer;
+}
+
+/**
+ * Answers a GET to `fonts.googleapis.com` or `fonts.gstatic.com` from trusted local data, or
+ * returns `undefined` to keep it blocked. It is only ever used with `route.fulfill`: requests are
+ * never continued or fetched. Hosted renders plug the font cache in here.
+ */
+export type FontRoute = (url: string) => Promise<FontRouteAnswer | undefined>;
+
+export function isGoogleFontsRequestUrl(url: string): boolean {
+  try {
+    return isGoogleFontsHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export async function createIsolatedContext(options: {
   browser: Browser;
   allowedOrigins: string[];
   viewport: {width: number; height: number};
   deviceScaleFactor?: number;
+  fontRoute?: FontRoute;
 }): Promise<BrowserContext> {
   const context = await options.browser.newContext({
     viewport: options.viewport,
@@ -102,6 +126,19 @@ export async function createIsolatedContext(options: {
       await route.continue();
       return;
     }
+    if (options.fontRoute && route.request().method() === "GET" && isGoogleFontsHost(url.hostname)) {
+      const answer = await options.fontRoute(url.href);
+      if (answer) {
+        // @font-face loads in CORS mode from the loopback frame origin.
+        await route.fulfill({
+          status: answer.status,
+          contentType: answer.contentType,
+          body: answer.body,
+          headers: {"access-control-allow-origin": "*", "cache-control": "public, max-age=31536000, immutable"}
+        });
+        return;
+      }
+    }
     await route.abort("blockedbyclient");
   });
   await context.routeWebSocket(/.*/, async (webSocket) => {
@@ -113,21 +150,52 @@ export async function createIsolatedContext(options: {
   return context;
 }
 
+/** A Google Fonts request that did not load: blocked or failed (`status` absent), or answered with an error status. */
+export interface FontRequestIssue {
+  url: string;
+  status?: number;
+  detail: string;
+}
+
 export interface BrowserIssueLog {
   errors: string[];
   warnings: string[];
+  /** Google Fonts failures, kept apart from `errors` so they become font codes instead of a generic runtime error. */
+  fonts: FontRequestIssue[];
 }
 
+const CSP_REFUSAL = /^Refused to load the (?:stylesheet|font) '([^']+)'/;
+
 export function observePage(page: Page): BrowserIssueLog {
-  const log: BrowserIssueLog = {errors: [], warnings: []};
+  const log: BrowserIssueLog = {errors: [], warnings: [], fonts: []};
+  const noteFont = (issue: FontRequestIssue) => {
+    if (!log.fonts.some((known) => known.url === issue.url && known.status === issue.status)) log.fonts.push(issue);
+  };
   page.on("pageerror", (error) => log.errors.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
-    if (message.type() === "error") log.errors.push(`console.error: ${message.text()}`);
-    if (message.type() === "warning") log.warnings.push(`console.warn: ${message.text()}`);
+    const text = message.text();
+    // "Failed to load resource … 400" omits the URL; it is in the message location instead.
+    const refused = CSP_REFUSAL.exec(text)?.[1];
+    if (refused && isGoogleFontsRequestUrl(refused)) {
+      noteFont({url: refused, detail: "refused by the content security policy"});
+      return;
+    }
+    if (isGoogleFontsRequestUrl(message.location().url)) return;
+    if (message.type() === "error") log.errors.push(`console.error: ${text}`);
+    if (message.type() === "warning") log.warnings.push(`console.warn: ${text}`);
   });
   page.on("requestfailed", (request) => {
     const failure = request.failure()?.errorText ?? "request failed";
+    if (isGoogleFontsRequestUrl(request.url())) {
+      noteFont({url: request.url(), detail: failure});
+      return;
+    }
     log.errors.push(`requestfailed: ${request.url()} (${failure})`);
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 400 && isGoogleFontsRequestUrl(response.url())) {
+      noteFont({url: response.url(), status: response.status(), detail: `HTTP ${response.status()}`});
+    }
   });
   return log;
 }

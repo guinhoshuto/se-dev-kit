@@ -1,5 +1,6 @@
-import type {JsonObject, JsonValue, RuntimeState} from "../types.js";
+import type {FontFallbackReason, FontReport, FontReportEntry, JsonObject, JsonValue, RuntimeState} from "../types.js";
 import {BRIDGE_PROTOCOL, BRIDGE_VERSION} from "../version.js";
+import {familiesFromUrl, isGoogleFontsHost} from "./google-fonts-url.js";
 
 declare global {
   interface Window {
@@ -7,6 +8,7 @@ declare global {
     __SE_WIDGET_STUDIO__: {
       getState: () => RuntimeState | null;
       emit: (listener: string, event: JsonValue) => void;
+      settle: () => Promise<FontReport>;
     };
   }
 }
@@ -74,6 +76,9 @@ export function mapRuntimeAssets<T>(value: T, assetMap?: Record<string, string>,
   };
   return rewrite(value) as T;
 }
+
+/** The editor preview's font wait, below the default 10 s readiness timeout. */
+const PREVIEW_FONT_BUDGET_MS = 6_000;
 
 interface BridgeEnvelope {
   protocol: typeof BRIDGE_PROTOCOL;
@@ -186,9 +191,626 @@ async function waitForDocument(): Promise<void> {
   await new Promise<void>((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), {once: true}));
 }
 
-async function waitForLoadedAssets(): Promise<void> {
-  await (async () => {
+// ---------------------------------------------------------------------------------------------
+// Stylesheet and font readiness.
+//
+// Native accessors are saved when this module is evaluated, before any widget code runs and
+// before any shim replaces them (the preview broker planned for Google Fonts patches `href`).
+// Nothing here yields through timers or requestAnimationFrame: captures pause the clock, so
+// waits use MessageChannel tasks, which the virtual clock does not control.
+// ---------------------------------------------------------------------------------------------
+
+function nativeGetter<Receiver, Value>(prototype: object | undefined, property: string): ((this: Receiver) => Value) | undefined {
+  if (!prototype) return undefined;
+  return Object.getOwnPropertyDescriptor(prototype, property)?.get as ((this: Receiver) => Value) | undefined;
+}
+
+const nativeLinkHref = nativeGetter<HTMLLinkElement, string>(
+  typeof HTMLLinkElement === "undefined" ? undefined : HTMLLinkElement.prototype,
+  "href"
+);
+const nativeLinkSheet = nativeGetter<HTMLLinkElement, CSSStyleSheet | null>(
+  typeof HTMLLinkElement === "undefined" ? undefined : HTMLLinkElement.prototype,
+  "sheet"
+);
+const nativeSheetHref = nativeGetter<StyleSheet, string | null>(
+  typeof StyleSheet === "undefined" ? undefined : StyleSheet.prototype,
+  "href"
+);
+const NativeMessageChannel = typeof MessageChannel === "undefined" ? undefined : MessageChannel;
+
+const linkHref = (link: HTMLLinkElement): string => (nativeLinkHref ? nativeLinkHref.call(link) : link.href);
+const linkSheet = (link: HTMLLinkElement): CSSStyleSheet | null => (nativeLinkSheet ? nativeLinkSheet.call(link) : link.sheet);
+const sheetHref = (sheet: StyleSheet): string | null => (nativeSheetHref ? nativeSheetHref.call(sheet) : sheet.href);
+
+/** Resolves on the next task, outside the virtual clock. */
+function nextTask(): Promise<void> {
+  if (!NativeMessageChannel) return Promise.resolve();
+  return new Promise((resolve) => {
+    const channel = new NativeMessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+
+function isGoogleFontsUrl(href: string): boolean {
+  try {
+    return isGoogleFontsHost(new URL(href, document.baseURI).hostname);
+  } catch {
+    return false;
+  }
+}
+
+interface StylesheetLoad {
+  href: string;
+  promise: Promise<void>;
+  /** Ends the wait as if the element fired `load` or `error`; `superseded` when a newer href replaces it. */
+  settle: (outcome: "load" | "error" | "superseded") => void;
+}
+
+const stylesheetLoads = new Map<HTMLLinkElement, StylesheetLoad>();
+/**
+ * Every Google Fonts stylesheet the frame has seen, and how it ended. `settled`: it finished before
+ * the runtime watched it, with an outcome the frame cannot read (Chromium gives failed and
+ * cross-origin links the same opaque sheet).
+ */
+const googleStylesheets = new Map<string, {state: "pending" | "settled" | "loaded" | "failed"; reason?: FontFallbackReason}>();
+/** A synthetic event for a re-assigned href, and whether it was already dispatched. */
+const syntheticLoads = new WeakMap<HTMLLinkElement, {href: string; type: "load" | "error"; dispatched: boolean}>();
+/** The last native `load` or `error` of each link, and for which href. */
+const linkOutcomes = new WeakMap<HTMLLinkElement, {href: string; type: "load" | "error"}>();
+const fontIssues: string[] = [];
+let watchingStylesheets = false;
+
+function noteFontIssue(message: string): void {
+  if (fontIssues.length < 20 && !fontIssues.includes(message)) fontIssues.push(message);
+}
+
+function markGoogleStylesheet(href: string, state: "pending" | "settled" | "loaded" | "failed", reason?: FontFallbackReason): void {
+  if (!isGoogleFontsUrl(href)) return;
+  const known = googleStylesheets.get(href);
+  if (state === "pending" && known && known.state !== "pending") return;
+  googleStylesheets.set(href, reason ? {state, reason} : {state});
+}
+
+function isStylesheetLink(node: Node): node is HTMLLinkElement {
+  return (
+    node instanceof HTMLLinkElement &&
+    /(?:^|\s)stylesheet(?:\s|$)/i.test(node.rel) &&
+    Boolean(node.getAttribute("href")) &&
+    !node.disabled &&
+    (!node.type || /^text\/css$/i.test(node.type))
+  );
+}
+
+/**
+ * Re-assigning the URL of the sheet that is already applied fires `load` in a plain browser, but
+ * not under request interception (Playwright routes). The runtime dispatches one synthetic event
+ * (the link's last outcome for that href, `load` when unknown) in a later task instead, and
+ * `dedupeNativeLoad` drops a native one that arrives afterwards, so the widget sees exactly one
+ * event either way.
+ */
+function queueSyntheticLoad(link: HTMLLinkElement, href: string): void {
+  const last = linkOutcomes.get(link);
+  const entry = {href, type: last?.href === href ? last.type : ("load" as const), dispatched: false};
+  syntheticLoads.set(link, entry);
+  void nextTask().then(() => {
+    if (syntheticLoads.get(link) !== entry) return;
+    entry.dispatched = true;
+    link.dispatchEvent(new Event(entry.type));
+  });
+}
+
+function dedupeNativeLoad(event: Event): void {
+  const link = event.target;
+  if (!event.isTrusted || !(link instanceof HTMLLinkElement)) return;
+  const href = linkHref(link);
+  linkOutcomes.set(link, {href, type: event.type === "error" ? "error" : "load"});
+  const entry = syntheticLoads.get(link);
+  if (!entry) return;
+  syntheticLoads.delete(link);
+  // A native event before the synthetic one cancels it; one after it is the duplicate.
+  if (entry.dispatched && entry.href === href) event.stopImmediatePropagation();
+}
+
+function forgetStylesheet(link: HTMLLinkElement): void {
+  stylesheetLoads.get(link)?.settle("superseded");
+  stylesheetLoads.delete(link);
+}
+
+// A replaced href keeps the previous sheet until the new one loads, so `link.sheet` cannot reveal a
+// pending swap (for example a widget switching Google Fonts at runtime). Track each swap until its
+// load or error event instead; a newer href supersedes an older pending one on the same element.
+function trackStylesheet(link: HTMLLinkElement, reassigned = false): void {
+  syntheticLoads.delete(link);
+  if (!isStylesheetLink(link)) {
+    forgetStylesheet(link);
+    return;
+  }
+  stylesheetLoads.get(link)?.settle("superseded");
+  const href = linkHref(link);
+  const sheet = linkSheet(link);
+  // Only a re-assignment can leave the current sheet in place: an inserted link always loads, and
+  // Chromium attaches a sheet with the link's href at once, even to one that is about to fail.
+  if (reassigned && sheet && sheetHref(sheet) === href) {
+    stylesheetLoads.delete(link);
+    if (reassigned) queueSyntheticLoad(link, href);
+    return;
+  }
+  markGoogleStylesheet(href, "pending");
+  let settle: StylesheetLoad["settle"] = () => undefined;
+  const promise = new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      link.removeEventListener("load", loaded);
+      link.removeEventListener("error", failed);
+    };
+    const finish = (outcome: "load" | "error" | "superseded") => {
+      cleanup();
+      if (outcome === "error") {
+        // A Google Fonts stylesheet that fails leaves its families in fallback, which settle() reports.
+        if (isGoogleFontsUrl(href)) {
+          markGoogleStylesheet(href, "failed", "stylesheet-blocked");
+          resolve();
+        } else {
+          reject(new Error(`Stylesheet failed to load: ${href}`));
+        }
+        return;
+      }
+      if (outcome === "load") markGoogleStylesheet(href, "loaded");
+      resolve();
+    };
+    const loaded = () => {
+      // A late load event can belong to a superseded href; keep waiting for the current one.
+      const current = linkSheet(link);
+      if (!current || sheetHref(current) !== href) return;
+      finish("load");
+    };
+    const failed = () => finish("error");
+    settle = finish;
+    link.addEventListener("load", loaded);
+    link.addEventListener("error", failed);
+  });
+  promise.catch(() => undefined);
+  stylesheetLoads.set(link, {href, promise, settle});
+}
+
+/**
+ * Ends the tracked wait for `link` from outside its own events, for a runtime that loads the sheet
+ * on the widget's behalf (the Google Fonts preview broker).
+ */
+export function settleTrackedStylesheet(link: HTMLLinkElement, outcome: "load" | "error"): void {
+  stylesheetLoads.get(link)?.settle(outcome);
+}
+
+export function watchStylesheets(): void {
+  if (watchingStylesheets) return;
+  watchingStylesheets = true;
+  document.addEventListener("load", dedupeNativeLoad, true);
+  document.addEventListener("error", dedupeNativeLoad, true);
+  watchFontErrors();
+  for (const link of Array.from(document.querySelectorAll("link"))) {
+    if (!isStylesheetLink(link)) continue;
+    // Parser-inserted stylesheets whose media matches block module scripts, and this runtime runs as
+    // a module after them, so they have finished; whether they failed is not readable here (the
+    // capture's request log has it). A link that did not block scripts may still be loading.
+    if (!link.media || matchMedia(link.media).matches) markGoogleStylesheet(linkHref(link), "settled");
+    else trackStylesheet(link);
+  }
+  const linksIn = (node: Node): HTMLLinkElement[] =>
+    node instanceof HTMLLinkElement ? [node] : node instanceof Element ? Array.from(node.querySelectorAll("link")) : [];
+  new MutationObserver((records) => {
+    const inserted = new Set(records.flatMap((record) => Array.from(record.addedNodes).flatMap(linksIn)));
+    for (const record of records) {
+      if (record.type === "attributes" && record.target instanceof HTMLLinkElement) trackStylesheet(record.target, !inserted.has(record.target));
+      for (const node of Array.from(record.removedNodes)) {
+        if (node instanceof HTMLLinkElement) forgetStylesheet(node);
+        else if (node instanceof Element) for (const link of Array.from(node.querySelectorAll("link"))) forgetStylesheet(link);
+      }
+      for (const node of Array.from(record.addedNodes)) {
+        if (node instanceof HTMLLinkElement) trackStylesheet(node);
+        else if (node instanceof Element) for (const link of Array.from(node.querySelectorAll("link"))) trackStylesheet(link);
+      }
+    }
+  }).observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ["href", "rel"]});
+}
+
+export async function waitForStylesheets(): Promise<void> {
+  let awaited: Promise<void>[] = [];
+  do {
+    awaited = Array.from(stylesheetLoads.values(), (load) => load.promise);
+    await Promise.all(awaited);
+  } while (Array.from(stylesheetLoads.values()).some((load) => !awaited.includes(load.promise)));
+}
+
+function forceLayout(): void {
+  // Web fonts from a just-loaded sheet only start loading once layout uses them.
+  void document.body?.offsetHeight;
+}
+
+const MAX_SAMPLE_CHARACTERS = 200;
+const MAX_TEXT_NODES = 2000;
+const MAX_REPORTED_FACES = 64;
+const DEFAULT_SAMPLE_TEXT = "BESbswy";
+const GENERIC_FAMILIES = new Set([
+  "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif",
+  "ui-monospace", "ui-rounded", "math", "emoji", "fangsong", "inherit", "initial", "unset", "revert"
+]);
+
+function mergeSample(current: string, text: string): string {
+  let merged = current;
+  for (const character of text) {
+    if (merged.length >= MAX_SAMPLE_CHARACTERS) break;
+    if (character.trim() !== "" && !merged.includes(character)) merged += character;
+  }
+  return merged;
+}
+
+function unquoteFamily(name: string): string {
+  const trimmed = name.trim();
+  return /^(["']).*\1$/.test(trimmed) ? trimmed.slice(1, -1).replace(/\\(.)/g, "$1") : trimmed.replace(/\s+/g, " ");
+}
+
+function familyList(value: string): string[] {
+  const families: string[] = [];
+  let current = "";
+  let quote = "";
+  for (const character of value) {
+    if (quote) {
+      current += character;
+      if (character === quote) quote = "";
+    } else if (character === '"' || character === "'") {
+      current += character;
+      quote = character;
+    } else if (character === ",") {
+      families.push(unquoteFamily(current));
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+  if (current.trim() !== "") families.push(unquoteFamily(current));
+  return families.filter((family) => family !== "");
+}
+
+function normalizedWeight(value: string): string {
+  if (value === "bold" || value === "bolder") return "700";
+  if (value === "normal" || value === "lighter" || value === "") return "400";
+  return /^\d+(?:\.\d+)?$/.test(value) ? String(Math.round(Number(value))) : "400";
+}
+
+function normalizedStyle(value: string): "normal" | "italic" {
+  return /^(?:italic|oblique)/.test(value) ? "italic" : "normal";
+}
+
+/** Splits a canvas `ctx.font` value into its family list, weight and style. */
+function parseCanvasFont(font: string): {families: string[]; weight: string; style: "normal" | "italic"} | undefined {
+  const match = /^(.*?)(?:^|\s)(\d*\.?\d+)(?:px|pt|em|rem|%)(?:\/\S+)?\s+(.+)$/.exec(font.trim());
+  if (!match) return undefined;
+  const tokens = (match[1] ?? "").split(/\s+/).filter(Boolean);
+  const weight = tokens.find((token) => /^(?:bold|bolder|lighter|\d{3})$/.test(token)) ?? "400";
+  const style = tokens.some((token) => token === "italic" || token === "oblique") ? "italic" : "normal";
+  return {families: familyList(match[3] ?? ""), weight: normalizedWeight(weight), style};
+}
+
+function quoteFamily(family: string): string {
+  return `"${family.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function faceFont(family: string, weight: string, style: string): string {
+  return `${style} ${weight} 16px ${quoteFamily(family)}`;
+}
+
+function declaredFaces(family: string): FontFace[] {
+  const wanted = family.toLowerCase();
+  const faces: FontFace[] = [];
+  if (document.fonts) for (const face of document.fonts) if (unquoteFamily(face.family).toLowerCase() === wanted) faces.push(face);
+  return faces;
+}
+
+function checkFont(font: string, text: string): boolean {
+  try {
+    return !document.fonts || document.fonts.check(font, text || DEFAULT_SAMPLE_TEXT);
+  } catch {
+    return true;
+  }
+}
+
+/** Families requested by the Google Fonts stylesheets the frame has seen, with the URL of each. */
+function googleFamilies(): Map<string, {name: string; url: string; variants: {weight: string; style: "normal" | "italic"}[]}> {
+  const families = new Map<string, {name: string; url: string; variants: {weight: string; style: "normal" | "italic"}[]}>();
+  for (const href of googleStylesheets.keys()) {
+    for (const family of familiesFromUrl(href)) {
+      const key = family.name.toLowerCase();
+      if (families.has(key) || family.name === "") continue;
+      families.set(key, {
+        name: family.name,
+        url: href,
+        variants: family.variants.map((variant) => {
+          const [low, high] = variant.weight;
+          return {weight: String(low <= 400 && 400 <= high ? 400 : Math.round(low)), style: variant.italic ? "italic" : "normal"};
+        })
+      });
+    }
+  }
+  return families;
+}
+
+let webFamilyCache: {key: string; names: Set<string>} | undefined;
+
+/** Lowercased names of every web font family: declared faces and Google Fonts URL families. */
+function webFamilyNames(): Set<string> {
+  const key = `${document.fonts?.size ?? 0}|${googleStylesheets.size}`;
+  if (webFamilyCache?.key === key) return webFamilyCache.names;
+  const names = new Set<string>(googleFamilies().keys());
+  if (document.fonts) for (const face of document.fonts) names.add(unquoteFamily(face.family).toLowerCase());
+  webFamilyCache = {key, names};
+  return names;
+}
+
+/** Google Fonts stylesheets pulled in through `@import` in readable sheets. */
+function noteImportedGoogleStylesheets(): void {
+  const visit = (sheet: CSSStyleSheet, depth: number) => {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      return;
+    }
+    for (const rule of Array.from(rules)) {
+      if (!(rule instanceof CSSImportRule)) continue;
+      markGoogleStylesheet(new URL(rule.href, sheet.href ?? document.baseURI).href, "pending");
+      if (rule.styleSheet && depth < 4) visit(rule.styleSheet, depth + 1);
+    }
+  };
+  for (const sheet of Array.from(document.styleSheets)) visit(sheet, 0);
+}
+
+interface CanvasFontUse {
+  text: string;
+  /** Once a web font face is ready for this font, draws stop checking. */
+  ready: boolean;
+  /** The last draw with this font happened before a web font face was ready for it. */
+  staleDraw: boolean;
+}
+
+const canvasFonts = new Map<string, CanvasFontUse>();
+
+/**
+ * Whether the web font face behind a canvas `font` is ready for `text`; `undefined` when no family
+ * in it is a known web font (yet: its stylesheet may still be on its way).
+ */
+function canvasWebFontReady(font: string, text: string): boolean | undefined {
+  const parsed = parseCanvasFont(font);
+  if (!parsed) return undefined;
+  const known = webFamilyNames();
+  const family = parsed.families.find((name) => !GENERIC_FAMILIES.has(name.toLowerCase()) && known.has(name.toLowerCase()));
+  if (!family) return undefined;
+  // A Google family whose stylesheet has not arrived has no faces, and check() would call it ready.
+  if (declaredFaces(family).length === 0) return false;
+  return checkFont(font, text);
+}
+
+function recordCanvasText(font: unknown, text: unknown, drawn: boolean): void {
+  if (typeof font !== "string") return;
+  let use = canvasFonts.get(font);
+  if (!use) {
+    if (canvasFonts.size >= 256) return;
+    use = {text: "", ready: false, staleDraw: false};
+    canvasFonts.set(font, use);
+  }
+  use.text = mergeSample(use.text, String(text));
+  if (!drawn) return;
+  if (!use.ready) use.ready = canvasWebFontReady(font, use.text) === true;
+  use.staleDraw = !use.ready;
+}
+
+let canvasWrapped = false;
+
+/** Records `(ctx.font, text)` for every canvas text call, so settle() can load those faces too. */
+function wrapCanvasText(): void {
+  if (canvasWrapped) return;
+  canvasWrapped = true;
+  const prototypes = [
+    typeof CanvasRenderingContext2D === "undefined" ? undefined : CanvasRenderingContext2D.prototype,
+    typeof OffscreenCanvasRenderingContext2D === "undefined" ? undefined : OffscreenCanvasRenderingContext2D.prototype
+  ];
+  for (const prototype of prototypes) {
+    if (!prototype) continue;
+    for (const name of ["fillText", "strokeText", "measureText"] as const) {
+      const native = (prototype as unknown as Record<string, unknown>)[name];
+      if (typeof native !== "function") continue;
+      const drawn = name !== "measureText";
+      Object.defineProperty(prototype, name, {
+        configurable: true,
+        writable: true,
+        value: function (this: {font: string}, ...args: unknown[]) {
+          try {
+            recordCanvasText(this.font, args[0], drawn);
+          } catch {
+            // Recording never changes what the widget draws.
+          }
+          return Reflect.apply(native as (...values: unknown[]) => unknown, this, args);
+        }
+      });
+    }
+  }
+}
+
+interface WantedFace {
+  family: string;
+  weight: string;
+  style: "normal" | "italic";
+  text: string;
+  sources: Set<"dom" | "canvas" | "google">;
+  url?: string;
+}
+
+function collectWantedFaces(sampleText: string): Map<string, WantedFace> {
+  noteImportedGoogleStylesheets();
+  const google = googleFamilies();
+  const known = webFamilyNames();
+  const wanted = new Map<string, WantedFace>();
+  const want = (families: string[], weight: string, style: "normal" | "italic", text: string, source: "dom" | "canvas" | "google") => {
+    const family = families.find((name) => !GENERIC_FAMILIES.has(name.toLowerCase()) && known.has(name.toLowerCase()));
+    if (!family || wanted.size >= MAX_REPORTED_FACES) return;
+    const key = `${family.toLowerCase()}|${weight}|${style}`;
+    const face = wanted.get(key) ?? {family, weight, style, text: "", sources: new Set()};
+    face.text = mergeSample(face.text, text);
+    face.sources.add(source);
+    const url = google.get(family.toLowerCase())?.url;
+    if (url) face.url = url;
+    wanted.set(key, face);
+  };
+  const useStyle = (style: CSSStyleDeclaration, text: string) =>
+    want(familyList(style.fontFamily), normalizedWeight(style.fontWeight), normalizedStyle(style.fontStyle), text, "dom");
+
+  let budget = MAX_TEXT_NODES;
+  const visit = (root: Node) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node && budget > 0; node = walker.nextNode()) {
+      budget -= 1;
+      if (node.nodeType === Node.TEXT_NODE) {
+        const parent = node.parentElement;
+        const text = (node as Text).data;
+        if (parent && text.trim() !== "" && !/^(?:SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(parent.tagName)) useStyle(getComputedStyle(parent), text);
+        continue;
+      }
+      const element = node as Element;
+      for (const pseudo of ["::before", "::after"]) {
+        const style = getComputedStyle(element, pseudo);
+        const content = style.content;
+        if (!content || content === "none" || content === "normal") continue;
+        const text = Array.from(content.matchAll(/"((?:[^"\\]|\\.)*)"/g), (match) => match[1] ?? "").join("");
+        if (text.trim() !== "") useStyle(style, text);
+      }
+      if ((element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) && element.value.trim() !== "") {
+        useStyle(getComputedStyle(element), element.value);
+      }
+      if (element.shadowRoot) visit(element.shadowRoot);
+    }
+  };
+  if (document.documentElement) visit(document.documentElement);
+
+  for (const [font, use] of canvasFonts) {
+    const parsed = parseCanvasFont(font);
+    if (parsed) want(parsed.families, parsed.weight, parsed.style, use.text, "canvas");
+  }
+  // Families a Google Fonts URL requests are loaded ahead of use: a canvas widget may draw them
+  // in its next frame, after calling fonts.load before the stylesheet arrived.
+  let domText = "";
+  for (const face of wanted.values()) domText = mergeSample(domText, face.text);
+  const text = mergeSample(mergeSample(sampleText, domText), DEFAULT_SAMPLE_TEXT);
+  for (const family of google.values()) for (const variant of family.variants) want([family.name], variant.weight, variant.style, text, "google");
+  return wanted;
+}
+
+async function loadWantedFace(face: WantedFace): Promise<void> {
+  if (!document.fonts) return;
+  try {
+    await document.fonts.load(faceFont(face.family, face.weight, face.style), face.text || DEFAULT_SAMPLE_TEXT);
+  } catch {
+    // A failed face is reported from its status.
+  }
+}
+
+function faceEntry(face: WantedFace, complete: boolean): FontReportEntry {
+  const base = {
+    family: face.family,
+    weight: face.weight,
+    style: face.style,
+    sources: Array.from(face.sources).sort(),
+    ...(face.url ? {url: face.url} : {})
+  };
+  const faces = declaredFaces(face.family);
+  if (faces.length === 0) {
+    const stylesheet = face.url ? googleStylesheets.get(face.url) : undefined;
+    const reason: FontFallbackReason = stylesheet?.state === "pending" && !complete ? "timeout" : stylesheet?.reason ?? "stylesheet-blocked";
+    return {...base, status: "fallback", reason};
+  }
+  const anyLoaded = faces.some((item) => item.status === "loaded");
+  const anyError = faces.some((item) => item.status === "error");
+  if (checkFont(faceFont(face.family, face.weight, face.style), face.text) && (anyLoaded || !anyError)) return {...base, status: "loaded"};
+  return {...base, status: "fallback", reason: anyError ? "face-error" : "timeout"};
+}
+
+function fontReport(wanted: Map<string, WantedFace>, complete: boolean): FontReport {
+  const families = Array.from(wanted.values(), (face) => faceEntry(face, complete)).sort((left, right) =>
+    `${left.family}|${left.weight}|${left.style}`.localeCompare(`${right.family}|${right.weight}|${right.style}`)
+  );
+  let redrawNeeded = false;
+  for (const [font, use] of canvasFonts) if (use.staleDraw && canvasWebFontReady(font, use.text) === true) redrawNeeded = true;
+  const failedStylesheets = Array.from(googleStylesheets, ([href, state]) => ({href, state}))
+    .filter(({state}) => state.state === "failed")
+    .map(({href, state}) => ({href, reason: state.reason ?? "stylesheet-blocked"}));
+  return {families, redrawNeeded, failedStylesheets, issues: [...fontIssues], complete};
+}
+
+export interface SettleOptions {
+  /** Stylesheets, layout and `document.fonts.ready` only, without collecting families. */
+  light?: boolean;
+  /** Text to load Google Fonts families with, besides the text on the page (for example field values). */
+  sampleText?: string;
+  /** Real-time budget, for pages whose timers are real (the editor preview). Captures keep it in Node. */
+  budgetMs?: number;
+}
+
+async function settleUntilQuiet(options: SettleOptions): Promise<FontReport> {
+  let wanted = new Map<string, WantedFace>();
+  for (let round = 0; round < 8; round += 1) {
+    const awaited = new Set(Array.from(stylesheetLoads.values(), (load) => load.promise));
+    await waitForStylesheets();
+    forceLayout();
     if (document.fonts) await document.fonts.ready;
+    if (options.light) return fontReport(wanted, true);
+    const previous = wanted.size;
+    wanted = collectWantedFaces(options.sampleText ?? "");
+    await Promise.all(Array.from(wanted.values(), loadWantedFace));
+    await nextTask();
+    forceLayout();
+    if (document.fonts) await document.fonts.ready;
+    const newStylesheet = Array.from(stylesheetLoads.values()).some((load) => !awaited.has(load.promise));
+    const fontsLoading = document.fonts ? document.fonts.status !== "loaded" : false;
+    if (!newStylesheet && !fontsLoading && round > 0 && wanted.size <= previous) break;
+    if (!newStylesheet && !fontsLoading && wanted.size === 0) break;
+  }
+  return fontReport(wanted, true);
+}
+
+/**
+ * Waits until stylesheets, layout and fonts are quiet, loads every face the widget uses (DOM text,
+ * canvas text and Google Fonts URLs), and reports each family as loaded or in fallback.
+ */
+export async function settle(options: SettleOptions = {}): Promise<FontReport> {
+  const work = settleUntilQuiet(options);
+  if (options.budgetMs === undefined) return work;
+  let timer = 0;
+  const expired = new Promise<"expired">((resolve) => {
+    timer = window.setTimeout(() => resolve("expired"), options.budgetMs);
+  });
+  const result = await Promise.race([work, expired]).finally(() => window.clearTimeout(timer));
+  if (result !== "expired") return result;
+  work.catch(() => undefined);
+  return fontReport(options.light ? new Map() : collectWantedFaces(options.sampleText ?? ""), false);
+}
+
+function watchFontErrors(): void {
+  document.fonts?.addEventListener("loadingerror", (event) => {
+    for (const face of (event as FontFaceSetLoadEvent).fontfaces) noteFontIssue(`Font face failed to load: ${unquoteFamily(face.family)} ${face.weight} ${face.style}`);
+  });
+  document.addEventListener("securitypolicyviolation", (event) => {
+    const blocked = event.blockedURI;
+    if (!isGoogleFontsUrl(blocked)) return;
+    if (event.effectiveDirective.startsWith("style-src")) markGoogleStylesheet(blocked, "failed", "stylesheet-blocked");
+    noteFontIssue(`Content security policy refused ${blocked} (${event.effectiveDirective}).`);
+  });
+}
+
+async function waitForLoadedAssets(settleFonts: () => Promise<FontReport>): Promise<FontReport> {
+  const report = await settleFonts();
+  await (async () => {
     await Promise.all(
       Array.from(document.images).map(async (image) => {
         if (image.complete) {
@@ -226,8 +848,8 @@ async function waitForLoadedAssets(): Promise<void> {
       image.onerror = () => reject(new Error("CSS background image failed to load."));
       image.src = url;
     })));
-    if (document.fonts) for (const face of document.fonts) if (face.status === "error") throw new Error("A font failed to load.");
   })();
+  return report;
 }
 
 async function waitForSelector(selector: string, timeoutMs: number): Promise<void> {
@@ -319,21 +941,44 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
     send("frame:unhandled-rejection", {message: printable(event.reason)});
   });
 
-  const emit = async (listener: string, event: JsonValue, requestId?: string) => {
+  const emit = async (listener: string, event: JsonValue) => {
     const transformed = mapAssets(adapter.beforeDispatch ? await adapter.beforeDispatch({listener, event}) : event);
     window.dispatchEvent(
       new CustomEvent("onEventReceived", {
         detail: {listener, event: structuredClone(transformed)}
       })
     );
-    send("frame:event-dispatched", {listener, ...(requestId ? {requestId} : {})});
+  };
+  const emitAndAnnounce = (listener: string, event: JsonValue) => {
+    void emit(listener, event).then(() => send("frame:event-dispatched", {listener}));
   };
 
-  window.SE_API = createSeApi((listener, event) => void emit(listener, event));
+  // Captures manage the clock and keep the settle deadline in Node; the editor preview has real
+  // timers and its own font budget, below the widget's readiness timeout.
+  let fontBudgetMs: number | undefined;
+  const fontSampleText = () =>
+    Object.values(runtimeState?.fieldData ?? {})
+      .filter((value): value is string => typeof value === "string" && !/^(?:[a-z][a-z\d+.-]*:|\/)/i.test(value))
+      .join(" ");
+  const runSettle = async (light: boolean, requestId?: string): Promise<FontReport> => {
+    if (!light) send("frame:settling", requestId ? {requestId} : undefined);
+    const report = await settle({
+      light,
+      sampleText: fontSampleText(),
+      ...(fontBudgetMs !== undefined ? {budgetMs: fontBudgetMs} : {})
+    });
+    if (!light || requestId) send("frame:fonts", {report, ...(requestId ? {requestId} : {})});
+    return report;
+  };
+
+  wrapCanvasText();
+
+  window.SE_API = createSeApi(emitAndAnnounce);
 
   window.__SE_WIDGET_STUDIO__ = {
     getState: () => (runtimeState ? structuredClone(runtimeState) : null),
-    emit: (listener, event) => void emit(listener, event)
+    emit: emitAndAnnounce,
+    settle: () => runSettle(false)
   };
 
   const initialize = async (state: RuntimeState, clockManaged: boolean) => {
@@ -346,8 +991,12 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
       adapter = imported.default ?? {};
     }
     if (adapter.beforeLoad) runtimeState = await adapter.beforeLoad(runtimeState);
-    if (!clockManaged) installFixedDate(runtimeState.fixedTime);
+    if (!clockManaged) {
+      installFixedDate(runtimeState.fixedTime);
+      fontBudgetMs = Math.max(0, Math.min(PREVIEW_FONT_BUDGET_MS, options.timeoutMs - 1_000));
+    }
     await waitForDocument();
+    watchStylesheets();
     for (const script of Array.from(document.querySelectorAll<HTMLScriptElement>('script[type="application/x-sws-classic"]'))) {
       if (script.dataset.swsSrc) await withTimeout(loadClassicScript(script.dataset.swsSrc), options.timeoutMs, "Dependency script");
       else {
@@ -369,7 +1018,7 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
     );
     send("frame:widget-load-dispatched");
     if (adapter.afterLoad) await adapter.afterLoad({state: runtimeState});
-    await withTimeout(waitForLoadedAssets(), options.timeoutMs, "Asset readiness");
+    await withTimeout(waitForLoadedAssets(() => runSettle(false)), options.timeoutMs, "Asset readiness");
     send("frame:assets-ready");
     if (options.readySelector) await waitForSelector(options.readySelector, options.timeoutMs);
     send("frame:widget-ready");
@@ -390,7 +1039,10 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
             break;
           case "host:emit": {
             const payload = envelope.payload as {listener: string; event: JsonValue; requestId?: string};
-            await emit(payload.listener, payload.event, payload.requestId);
+            await emit(payload.listener, payload.event);
+            // Acknowledged once fonts the handler asked for have settled, with the report.
+            const fonts = await runSettle(false);
+            send("frame:event-dispatched", {listener: payload.listener, fonts, ...(payload.requestId ? {requestId: payload.requestId} : {})});
             break;
           }
           case "host:update-fields": {
@@ -400,7 +1052,13 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
             window.dispatchEvent(
               new CustomEvent("onWidgetUpdate", {detail: {fieldData: structuredClone(runtimeState.fieldData)}})
             );
-            send("frame:fields-updated", {requestId: payload.requestId});
+            const fonts = await runSettle(false);
+            send("frame:fields-updated", {requestId: payload.requestId, fonts});
+            break;
+          }
+          case "host:settle": {
+            const payload = envelope.payload as {light?: boolean; requestId?: string} | undefined;
+            await runSettle(payload?.light === true, typeof payload?.requestId === "string" ? payload.requestId : undefined);
             break;
           }
           case "host:ping":

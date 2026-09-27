@@ -5,6 +5,7 @@ import type {Browser, Page, PageScreenshotOptions} from "playwright-core";
 import type {
   CaptureManifestEntry,
   CaptureVariant,
+  FontReport,
   JsonObject,
   RecipeDefinition,
   ResolvedProject,
@@ -20,15 +21,20 @@ import {startStudioServer} from "../server/server.js";
 import {buildAssetMap} from "../server/assets.js";
 import {
   captureHostDispatch,
+  captureHostSettle,
   captureHostUpdateFields,
   frameEvents,
   openScene,
-  sampleFrameAnimations
+  sampleFrameAnimations,
+  settleAndCheckFonts,
+  SETTLE_DEADLINE_MS,
+  type OpenSceneResult
 } from "../scenarios/runner.js";
 import {compileVariantTutorial, EMULATE_MENU, tutorialCamera} from "../tutorial/variant.js";
 import type {TutorialTimeline} from "../tutorial/timeline.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
-import {launchStudioBrowser} from "./browser.js";
+import {launchStudioBrowser, type FontRoute} from "./browser.js";
+import {checkFonts} from "./fonts.js";
 import {hashFile, hashJson, sha256} from "./hash.js";
 import {assertRecipeMatrixCardinality, expandRecipe} from "./matrix.js";
 import {detectMediaTooling, encodeFrameSequence, type MediaTooling} from "./media.js";
@@ -78,6 +84,39 @@ export interface RenderOptions {
   allowLowDisk?: boolean;
   /** Replaces `statfs` from `node:fs/promises` when measuring free space; for tests. */
   statfs?: StatfsFunction;
+  /** Answers Google Fonts requests with `route.fulfill` from trusted data; without it they stay blocked. */
+  fontRoute?: FontRoute;
+}
+
+/** Fonts as the manifest records them for one artifact. */
+interface ArtifactFonts {
+  families: FontReport["families"];
+  warnings: string[];
+  /** Virtual time added to a still so canvas text drawn in fallback could redraw with its face. */
+  redrawMs: number;
+}
+
+function manifestFonts(fonts: ArtifactFonts | undefined): JsonObject | undefined {
+  if (!fonts || (fonts.families.length === 0 && fonts.warnings.length === 0 && fonts.redrawMs === 0)) return undefined;
+  return JSON.parse(JSON.stringify(fonts)) as JsonObject;
+}
+
+/**
+ * Settles fonts before a still. When canvas text was drawn before its face loaded, advances the
+ * clock one 16 ms frame at a time, up to three times, so the widget's next frame redraws it.
+ */
+async function settleStill(opened: OpenSceneResult): Promise<ArtifactFonts> {
+  const warnings = new Set<string>();
+  let {report, warnings: found} = await settleAndCheckFonts(opened);
+  found.forEach((warning) => warnings.add(warning));
+  let redrawMs = 0;
+  for (let attempt = 0; attempt < 3 && report.redrawNeeded; attempt += 1) {
+    await opened.page.clock.runFor(16);
+    redrawMs += 16;
+    ({report, warnings: found} = await settleAndCheckFonts(opened));
+    found.forEach((warning) => warnings.add(warning));
+  }
+  return {families: report.families, warnings: [...warnings], redrawMs};
 }
 
 export interface RenderPlan {
@@ -443,7 +482,9 @@ async function renderVideoFrames(options: {
   recipeDirectory: string;
   temporaryFiles: TemporaryFiles;
   onFrame: (written: number) => void;
+  fontRoute?: FontRoute;
 }): Promise<{
+  fonts: ArtifactFonts;
   framesDirectory: string;
   framesManifest: string;
   frameFiles: string[];
@@ -459,10 +500,20 @@ async function renderVideoFrames(options: {
     options.server,
     options.browser,
     options.variant.scene,
-    tutorial
-      ? {host: "tutorial", camera: tutorialCamera(tutorial), background: {id: "tutorial-editor", color: "transparent"}}
-      : {}
+    {
+      ...(tutorial
+        ? {host: "tutorial" as const, camera: tutorialCamera(tutorial), background: {id: "tutorial-editor", color: "transparent"}}
+        : {}),
+      ...(options.fontRoute ? {fontRoute: options.fontRoute} : {})
+    }
   );
+  const fontWarnings = new Set<string>();
+  let fontFamilies: FontReport["families"] = [];
+  // Font failures fail the frame where they happen, not the end of the video.
+  const noteFonts = (report: FontReport | undefined, full: boolean) => {
+    for (const warning of checkFonts(opened.issues.fonts, report).warnings) fontWarnings.add(warning);
+    if (report && full) fontFamilies = report.families;
+  };
   const framesDirectory = resolve(options.recipeDirectory, options.variant.id, "frames");
   const frameCount = videoFrameCount(options.video);
   const frames: {file: string; timestampMs: number; sha256: string}[] = [];
@@ -478,6 +529,7 @@ async function renderVideoFrames(options: {
     ...(tutorial?.widget ?? [])
   ].sort((left, right) => left.atMs - right.atMs);
   try {
+    noteFonts(await captureHostSettle(opened.page), true);
     if (tutorial) {
       const setup: unknown = {
         timeline: tutorial,
@@ -497,10 +549,12 @@ async function renderVideoFrames(options: {
         const delta = timelineEvent.atMs - currentTime;
         if (delta > 0) await opened.page.clock.fastForward(delta);
         await sampleFrameAnimations(opened.page, timelineEvent.atMs);
+        // Both commands settle fonts in the frame before they are acknowledged, so the rAF of the
+        // next frame already draws with the faces the event asked for.
         if (timelineEvent.kind === "fields") {
-          await captureHostUpdateFields(opened.page, timelineEvent.fieldData);
+          noteFonts(await captureHostUpdateFields(opened.page, timelineEvent.fieldData), true);
         } else {
-          await captureHostDispatch(opened.page, timelineEvent.listener, timelineEvent.event);
+          noteFonts(await captureHostDispatch(opened.page, timelineEvent.listener, timelineEvent.event), true);
         }
         await sampleFrameAnimations(opened.page, timelineEvent.atMs);
         await opened.page.clock.fastForward(1);
@@ -512,6 +566,8 @@ async function renderVideoFrames(options: {
         currentTime = timestampMs;
       }
       await sampleFrameAnimations(opened.page, timestampMs);
+      // A light settle catches stylesheet swaps made by timers; it costs next to nothing when idle.
+      noteFonts(await captureHostSettle(opened.page, SETTLE_DEADLINE_MS, true), false);
       if (tutorial) {
         await opened.page.evaluate(
           (time) => (window as unknown as {__SWS_TUTORIAL__: {render: (value: number) => void}}).__SWS_TUTORIAL__.render(time),
@@ -553,7 +609,14 @@ async function renderVideoFrames(options: {
   };
   const sequenceText = `${stableStringify(sequence, 2)}\n`;
   await atomicWriteFile(options.outputRoot, framesManifest, sequenceText, options.temporaryFiles);
-  return {framesDirectory, framesManifest, frameFiles: frames.map((frame) => frame.file), sequence, sequenceText};
+  return {
+    fonts: {families: fontFamilies, warnings: [...fontWarnings], redrawMs: 0},
+    framesDirectory,
+    framesManifest,
+    frameFiles: frames.map((frame) => frame.file),
+    sequence,
+    sequenceText
+  };
 }
 
 /** Deletes an earlier run's manifest.json when it is a regular file inside the output root; anything else stays. */
@@ -739,11 +802,15 @@ export async function renderRecipe(
       let framesRetained = true;
       let framesDiscardError: string | undefined;
       let videoDimensions: {width: number; height: number} | undefined;
+      let stillFonts: ArtifactFonts | undefined;
+      let videoFonts: ArtifactFonts | undefined;
       if (recipe.outputs?.screenshots !== false) {
         progress.step = "screenshot";
-        const resolvedScene = await openScene(renderProject, server, browser, variant.scene);
+        const resolvedScene = await openScene(renderProject, server, browser, variant.scene, options.fontRoute ? {fontRoute: options.fontRoute} : {});
         try {
           await replayUntil(resolvedScene.page, variant, variant.scene.captureAtMs ?? 0);
+          // Between the replay and the screenshot: stylesheets, layout and every face in use.
+          stillFonts = await settleStill(resolvedScene);
           const runtimeErrors = (await frameEvents(resolvedScene.page)).filter(
             (event) => event.type === "frame:error" || event.type === "frame:unhandled-rejection"
           );
@@ -786,8 +853,10 @@ export async function renderRecipe(
           temporaryFiles,
           onFrame: (written) => {
             progress.framesWritten = written;
-          }
+          },
+          ...(options.fontRoute ? {fontRoute: options.fontRoute} : {})
         });
+        videoFonts = renderedFrames.fonts;
         framesPath = renderedFrames.framesDirectory;
         framesManifestPath = renderedFrames.framesManifest;
         framesManifestHash = sha256(renderedFrames.sequenceText);
@@ -868,6 +937,8 @@ export async function renderRecipe(
         frames: framesPath && framesRetained ? portable(outputRoot, framesPath) : null,
         ...(frameSequence ? {framesRetained, frameSequence} : {}),
         ...(framesDiscardError ? {framesDiscardError} : {}),
+        ...(manifestFonts(stillFonts) ? {fonts: manifestFonts(stillFonts)!} : {}),
+        ...(manifestFonts(videoFonts) ? {videoFonts: manifestFonts(videoFonts)!} : {}),
         parameters: JSON.parse(JSON.stringify({
           background: variant.background,
           viewport: variant.viewport,

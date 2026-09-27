@@ -1,6 +1,7 @@
 import type {Browser, BrowserContext, Frame, Page} from "playwright-core";
 import type {
   FixtureDefinition,
+  FontReport,
   ResolvedProject,
   ResolvedWidgetFiles,
   ScenarioDefinition,
@@ -10,7 +11,8 @@ import type {
 import {StudioError} from "../shared/errors.js";
 import {assetUrlPath} from "../server/assets.js";
 import {startStudioServer, type StudioServer} from "../server/server.js";
-import {createIsolatedContext, launchStudioBrowser, observePage, type BrowserIssueLog} from "../capture/browser.js";
+import {createIsolatedContext, launchStudioBrowser, observePage, type BrowserIssueLog, type FontRoute} from "../capture/browser.js";
+import {checkFonts} from "../capture/fonts.js";
 import {createDefaultScene, resolveSceneState, type ResolvedSceneState} from "./state.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
 import {claimsSampleMediaScheme} from "../studio-ui/sample-media.js";
@@ -58,6 +60,53 @@ async function captureHostLoad(page: Page, payload: unknown): Promise<void> {
   }, payload);
 }
 
+/** Real time a settle may take in a capture before it fails with FONT_SETTLE_TIMEOUT. */
+export const SETTLE_DEADLINE_MS = 20_000;
+
+function settlingStarted(events: {type: string}[]): boolean {
+  let settling = false;
+  for (const event of events) {
+    if (event.type === "frame:settling") settling = true;
+    else if (event.type === "frame:fonts") settling = false;
+  }
+  return settling;
+}
+
+function settleTimeout(deadlineMs: number): StudioError {
+  return new StudioError(
+    "FONT_SETTLE_TIMEOUT",
+    `Widget fonts and stylesheets did not settle within ${deadlineMs}ms of real time.`,
+    "A stylesheet or font the widget requested never finished loading."
+  );
+}
+
+/**
+ * Runs `task` against a real-time deadline kept in Node: the page's own timers stop while the
+ * capture clock is paused, so they cannot bound it.
+ */
+async function withRealDeadline<T>(task: Promise<T>, deadlineMs: number, onTimeout: () => Promise<Error>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<"expired">((resolvePromise) => {
+    timer = setTimeout(() => resolvePromise("expired"), deadlineMs);
+  });
+  try {
+    const result = await Promise.race([task, expired]);
+    if (result === "expired") {
+      task.catch(() => undefined);
+      throw await onTimeout();
+    }
+    return result as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function commandTimeout(page: Page, label: string, deadlineMs: number): Promise<Error> {
+  const events = await frameEvents(page).catch(() => []);
+  if (settlingStarted(events)) return settleTimeout(deadlineMs);
+  return new StudioError("CAPTURE_COMMAND_TIMEOUT", `Widget command ${label} did not finish within ${deadlineMs}ms of real time.`);
+}
+
 async function captureHostLoadWithClock(
   page: Page,
   payload: unknown,
@@ -78,10 +127,11 @@ async function captureHostLoadWithClock(
   while (!settled && !assetsReady) {
     await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
     if (settled) break;
+    const events = await frameEvents(page);
     if (Date.now() > deadline) {
+      if (settlingStarted(events)) throw settleTimeout(timeoutMs + 5_000);
       throw new StudioError("CAPTURE_READY_TIMEOUT", `Widget capture host timed out after ${timeoutMs + 5_000}ms.`);
     }
-    const events = await frameEvents(page);
     assetsReady = events.some((event) => event.type === "frame:assets-ready");
   }
   if (!settled && assetsReady && readySelector) {
@@ -104,25 +154,59 @@ async function captureHostLoadWithClock(
   if (failure) throw failure;
 }
 
-export async function captureHostDispatch(page: Page, listener: string, event: unknown): Promise<void> {
-  await page.evaluate(
+/** Dispatches an event; the frame acknowledges after the fonts it asked for settle, within a real deadline. */
+export async function captureHostDispatch(
+  page: Page,
+  listener: string,
+  event: unknown,
+  deadlineMs = SETTLE_DEADLINE_MS
+): Promise<FontReport | undefined> {
+  const task = page.evaluate(
     ({listener: listenerName, event: eventPayload}) => {
       const captureWindow = window as unknown as {
-        __SWS_CAPTURE__: {dispatch: (name: string, value: unknown) => Promise<void>};
+        __SWS_CAPTURE__: {dispatch: (name: string, value: unknown) => Promise<FontReport | undefined>};
       };
       return captureWindow.__SWS_CAPTURE__.dispatch(listenerName, eventPayload);
     },
     {listener, event}
   );
+  return withRealDeadline(task, deadlineMs, () => commandTimeout(page, "host:emit", deadlineMs));
 }
 
-export async function captureHostUpdateFields(page: Page, fieldData: Record<string, unknown>): Promise<void> {
-  await page.evaluate((values) => {
+export async function captureHostUpdateFields(
+  page: Page,
+  fieldData: Record<string, unknown>,
+  deadlineMs = SETTLE_DEADLINE_MS
+): Promise<FontReport | undefined> {
+  const task = page.evaluate((values) => {
     const captureWindow = window as unknown as {
-      __SWS_CAPTURE__: {updateFields: (fieldValues: Record<string, unknown>) => Promise<void>};
+      __SWS_CAPTURE__: {updateFields: (fieldValues: Record<string, unknown>) => Promise<FontReport | undefined>};
     };
     return captureWindow.__SWS_CAPTURE__.updateFields(values);
   }, fieldData);
+  return withRealDeadline(task, deadlineMs, () => commandTimeout(page, "host:update-fields", deadlineMs));
+}
+
+/**
+ * Runs settle() in the widget frame: stylesheets, layout, `document.fonts.ready` and, unless
+ * `light`, `fonts.load` for every family in use. Fails with FONT_SETTLE_TIMEOUT after
+ * `realDeadlineMs` of real time.
+ */
+export async function captureHostSettle(page: Page, realDeadlineMs = SETTLE_DEADLINE_MS, light = false): Promise<FontReport> {
+  const task = page.evaluate((lightSettle) => {
+    const captureWindow = window as unknown as {__SWS_CAPTURE__: {settle: (value: boolean) => Promise<FontReport>}};
+    return captureWindow.__SWS_CAPTURE__.settle(lightSettle);
+  }, light);
+  return withRealDeadline(task, realDeadlineMs, async () => settleTimeout(realDeadlineMs));
+}
+
+/** Settles, then turns Google Fonts failures seen so far into FONT_UNAVAILABLE or FONT_UNSUPPORTED; returns warnings. */
+export async function settleAndCheckFonts(
+  opened: Pick<OpenSceneResult, "page" | "issues">,
+  options: {light?: boolean; deadlineMs?: number} = {}
+): Promise<{report: FontReport; warnings: string[]}> {
+  const report = await captureHostSettle(opened.page, options.deadlineMs ?? SETTLE_DEADLINE_MS, options.light ?? false);
+  return {report, warnings: checkFonts(opened.issues.fonts, report).warnings};
 }
 
 export async function frameEvents(page: Page): Promise<{type: string; payload?: unknown}[]> {
@@ -157,6 +241,8 @@ export interface OpenSceneOptions {
   host?: "capture" | "tutorial";
   camera?: ResolvedSceneState["camera"];
   background?: ResolvedSceneState["background"];
+  /** Answers Google Fonts requests with `route.fulfill`; without it they stay blocked. */
+  fontRoute?: FontRoute;
 }
 
 export async function openScene(
@@ -175,7 +261,8 @@ export async function openScene(
     browser,
     allowedOrigins: [server.origin, server.frameOrigin],
     viewport: {width: resolved.output.width, height: resolved.output.height},
-    deviceScaleFactor: resolved.viewport.deviceScaleFactor ?? 1
+    deviceScaleFactor: resolved.viewport.deviceScaleFactor ?? 1,
+    ...(options.fontRoute ? {fontRoute: options.fontRoute} : {})
   });
   const page = await context.newPage();
   const issues = observePage(page);
@@ -275,9 +362,15 @@ async function runOneScenario(
 ): Promise<ScenarioResult> {
   const startedAt = Date.now();
   const errors: string[] = [];
+  const fontWarnings = new Set<string>();
   let opened: OpenSceneResult | undefined;
   try {
     opened = await openScene(project, server, browser, scenarioScene(project, scenario));
+    const scene = opened;
+    const settleFonts = async () => {
+      for (const warning of (await settleAndCheckFonts(scene)).warnings) fontWarnings.add(warning);
+    };
+    await settleFonts();
     await replayFixture(opened.page, opened.resolved.fixture);
     for (const step of scenario.steps) {
       switch (step.action) {
@@ -293,16 +386,19 @@ async function runOneScenario(
           await opened.page.clock.fastForward(step.ms);
           break;
         case "assert":
+          await settleFonts();
           await assertStep(opened.frame(), step);
           break;
       }
     }
+    await settleFonts();
     const runtimeErrors = (await frameEvents(opened.page))
       .filter((event) => event.type === "frame:error" || event.type === "frame:unhandled-rejection")
       .map((event) => JSON.stringify(event.payload));
     errors.push(...runtimeErrors, ...opened.issues.errors);
   } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
+    const code = error instanceof StudioError && error.code.startsWith("FONT_") ? `${error.code}: ` : "";
+    errors.push(`${code}${error instanceof Error ? error.message : String(error)}`);
   } finally {
     await opened?.context.close();
   }
@@ -312,7 +408,7 @@ async function runOneScenario(
     status: errors.length === 0 ? "passed" : "failed",
     durationMs: Date.now() - startedAt,
     errors,
-    warnings: opened?.issues.warnings ?? []
+    warnings: [...(opened?.issues.warnings ?? []), ...fontWarnings]
   };
 }
 

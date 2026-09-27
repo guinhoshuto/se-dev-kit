@@ -1,3 +1,5 @@
+import type {FontReport} from "../types.js";
+
 interface RuntimeState {
   sessionId: string;
   fieldData: Record<string, unknown>;
@@ -14,6 +16,10 @@ interface BridgeEnvelope {
   nonce: string;
   type: string;
   payload?: unknown;
+}
+
+function fontsOf(payload: unknown): FontReport | undefined {
+  return (payload as {fonts?: FontReport} | undefined)?.fonts;
 }
 
 export interface FrameEvent {
@@ -45,7 +51,7 @@ export class FrameBridge {
   #readyPromise: Promise<void>;
   #readyTimer?: number;
   #requestSequence = 0;
-  #pending = new Map<string, {type: string; resolve: () => void; reject: (reason: Error) => void; timer: number}>();
+  #pending = new Map<string, {type: string; resolve: (payload: unknown) => void; reject: (reason: Error) => void; timer: number}>();
   #messageHandler: (event: MessageEvent) => void;
 
   constructor(
@@ -108,9 +114,13 @@ export class FrameBridge {
     target.postMessage(envelope, this.frameOrigin);
   }
 
-  #command(type: string, acknowledgement: string, payload: Record<string, unknown>, timeoutMs = 10_000): Promise<void> {
+  /**
+   * Sends a command and resolves with the acknowledgement's payload. The timeout uses this window's
+   * timers, which a capture's paused clock never fires, so captures keep a real deadline in Node.
+   */
+  #command(type: string, acknowledgement: string, payload: Record<string, unknown>, timeoutMs = 10_000): Promise<unknown> {
     const requestId = `${this.sessionId}-${++this.#requestSequence}`;
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
       const timer = window.setTimeout(() => {
         this.#pending.delete(requestId);
         reject(new Error(`Widget command ${type} timed out after ${timeoutMs}ms.`));
@@ -126,13 +136,22 @@ export class FrameBridge {
     });
   }
 
-  dispatch(listener: string, event: unknown): Promise<void> {
-    return this.#command("host:emit", "frame:event-dispatched", {listener, event});
+  /** Resolves once the frame dispatched the event and its fonts settled, with the frame's font report. */
+  async dispatch(listener: string, event: unknown): Promise<FontReport | undefined> {
+    return fontsOf(await this.#command("host:emit", "frame:event-dispatched", {listener, event}));
   }
 
-  updateFields(fieldData: Record<string, unknown>): Promise<void> {
+  async updateFields(fieldData: Record<string, unknown>): Promise<FontReport | undefined> {
     this.#state.fieldData = {...this.#state.fieldData, ...structuredClone(fieldData)};
-    return this.#command("host:update-fields", "frame:fields-updated", {fieldData});
+    return fontsOf(await this.#command("host:update-fields", "frame:fields-updated", {fieldData}));
+  }
+
+  /** Waits for stylesheets, layout and fonts in the frame (`light`: without collecting families) and returns the report. */
+  async settle(light = false, timeoutMs = 10_000): Promise<FontReport> {
+    const payload = await this.#command("host:settle", "frame:fonts", {light}, timeoutMs);
+    const report = (payload as {report?: FontReport} | undefined)?.report;
+    if (!report) throw new Error("Widget frame answered host:settle without a font report.");
+    return report;
   }
 
   #receive(event: MessageEvent): void {
@@ -150,7 +169,7 @@ export class FrameBridge {
           const message = (envelope.payload as {message?: string}).message ?? "Widget command failed.";
           pending.reject(new Error(message));
         } else {
-          pending.resolve();
+          pending.resolve(envelope.payload);
         }
       }
     }

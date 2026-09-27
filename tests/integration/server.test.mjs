@@ -171,3 +171,24 @@ test("built-in sample media are served only by exact manifest lookup on the fram
     await server.close();
   }
 });
+
+test("the frame server serves the frame runtime modules from a fixed list, including the Google Fonts URL module", async () => {
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  try {
+    // frame.js imports ./google-fonts-url.js; without this route the frame runtime never boots.
+    for (const file of ["frame-bootstrap.js", "frame.js", "google-fonts-url.js"]) {
+      const response = await requestBuffer(`${server.frameOrigin}/__sws/runtime/${file}`);
+      assert.equal(response.status, 200, file);
+      assert.match(String(response.headers["content-type"]), /^text\/javascript/);
+      assert.deepEqual(response.body, await readFile(new URL(`../../dist/runtime/${file}`, import.meta.url)), file);
+    }
+    const frame = (await requestBuffer(`${server.frameOrigin}/__sws/runtime/frame.js`)).body.toString("utf8");
+    assert.match(frame, /from "\.\/google-fonts-url\.js"/);
+    for (const path of ["/__sws/runtime/frame.d.ts", "/__sws/runtime/frame.js.map", "/__sws/runtime/", "/__sws/runtime/frame"]) {
+      assert.equal((await requestBuffer(`${server.frameOrigin}${path}`)).status, 404, path);
+    }
+  } finally {
+    await server.close();
+  }
+});

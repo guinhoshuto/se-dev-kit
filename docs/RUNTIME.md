@@ -20,11 +20,11 @@ The frame document is assembled in memory. A production HTML fragment is wrapped
 3. Host sends `host:init` with synthetic state.
 4. Frame loads the optional browser adapter and real production JavaScript.
 5. Frame dispatches `onWidgetLoad`.
-6. Frame waits for `document.fonts.ready`, decoded images, and available video data, then announces `frame:assets-ready`.
+6. Frame runs `settle()` (stylesheets, forced layout, `document.fonts.ready`, and `fonts.load` for each family the DOM, canvas text, or a Google Fonts URL uses), sends the per-family report as `frame:fonts`, waits for decoded images and available video data, then announces `frame:assets-ready`.
 7. Frame waits for the configured selector and sends `frame:widget-ready`.
 8. The host may send events or field updates.
 
-Host event and field-update commands carry correlation ids. The frame acknowledges each command only after an asynchronous adapter hook and synchronous DOM event dispatch finish; scenarios then continue to their next action. Bridge startup and commands have bounded timeouts.
+Host event and field-update commands carry correlation ids. The frame acknowledges each command only after an asynchronous adapter hook, synchronous DOM event dispatch, and a `settle()` finish, and the acknowledgement carries the font report; scenarios then continue to their next action. `host:settle` (also `__SE_WIDGET_STUDIO__.settle()`) runs `settle()` on demand and answers with `frame:fonts`. The report lists each family, weight, and style as `loaded` or in fallback with a reason (`stylesheet-blocked`, `upstream-4xx`, `not-in-cache`, `face-error`, `timeout`, or `partial`), plus `redrawNeeded` when a face loaded after canvas text was last drawn. Bridge startup and commands have bounded timeouts; in captures the frame's timers are virtual, so the deadlines are kept in real time in Node. The editor preview has real timers and gives fonts a 6 s budget: a family still loading then is reported as fallback (`timeout`) and the status bar names it.
 
 Field edits dispatch `onWidgetUpdate`. Theme, fixture, or scene changes recreate the iframe to prevent duplicate listeners and stale DOM.
 
@@ -73,7 +73,7 @@ Built-in sample media use a separate frame-origin route, `/__sws/sample/<file>`,
 
 The configured production JavaScript file is removed from both fragment and full-document HTML before the in-memory frame is assembled, then loaded exactly once after the runtime is installed. Other inline scripts remain part of the production HTML and may run during parsing; widgets that depend on Studio state should keep runtime code in the configured JavaScript file.
 
-Automated contexts abort every non-loopback HTTP request and every WebSocket. A blocked stylesheet, font, image, media file, or other request is reported as a runtime error instead of silently producing degraded final media. Capture backgrounds must be a local allowlisted widget asset, a data URL, or a known `sws-sample:` reference, and are decoded before readiness. Unknown sample references fail with `SAMPLE_MEDIA_NOT_FOUND`; any other scheme is still blocked.
+Automated contexts abort every non-loopback HTTP request and every WebSocket. A blocked stylesheet, font, image, media file, or other request is reported as a runtime error instead of silently producing degraded final media. Google Fonts requests (`fonts.googleapis.com`, `fonts.gstatic.com`) are classified by URL instead: blocked or unavailable ones fail with `FONT_UNAVAILABLE`, naming the family and URL (the local CLI always blocks them and points to the hosted Studio), `/icon`, `text=` and other URLs outside the allowlist fail with `FONT_UNSUPPORTED`, and a family Google refuses with a 4xx is only an `upstream-4xx` warning, because StreamElements shows the fallback too. Capture backgrounds must be a local allowlisted widget asset, a data URL, or a known `sws-sample:` reference, and are decoded before readiness. Unknown sample references fail with `SAMPLE_MEDIA_NOT_FOUND`; any other scheme is still blocked.
 
 ## Known boundary
 

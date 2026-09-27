@@ -2,10 +2,17 @@
 
 import {useEffect, useRef, useState} from 'react';
 import type {WidgetSnapshot} from '../lib/model';
-import type {JsonObject, RuntimeState} from '../src/types';
+import type {FontReport, JsonObject, RuntimeState} from '../src/types';
 import {BRIDGE_PROTOCOL, BRIDGE_VERSION} from '../src/version';
 import {collectSampleMediaReferences} from '../src/studio-ui/sample-media';
 import {stageBackgroundImage} from './stage-style';
+
+/** `Archivo 700 in fallback (stylesheet-blocked)` for each face the frame reported in fallback. */
+function fontFallbackSummary(report: FontReport | undefined): string {
+  if (!report || !Array.isArray(report.families)) return '';
+  return report.families.filter(face => face?.status === 'fallback').slice(0, 4)
+    .map(face => `${String(face.family).slice(0, 80)} ${String(face.weight)}${face.style === 'italic' ? ' italic' : ''} in fallback (${String(face.reason ?? 'unknown')})`).join(', ');
+}
 
 interface PreviewResponse {html: string; state: RuntimeState; backgroundImage?: string; warnings?: string[]; sessionId: string; nonce: string}
 
@@ -54,7 +61,9 @@ export function WidgetPreview({projectId, token, snapshot, sceneId, themeId, fie
   useEffect(() => {
     if (!prepared) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
-    let started = false; let dispatched = false;
+    let started = false; let dispatched = false; let ready = false; let fonts = '';
+    // The frame's own font budget (6 s) ends first; a family still loading then is reported as fallback (timeout).
+    const readyStatus = () => fonts ? `Ready · ${fonts}` : 'Ready · isolated runtime';
     const deadline = setTimeout(() => {setStatus('Preview timeout'); setError('The widget did not become ready within its configured timeout.');}, (snapshot.widget.ready?.timeoutMs ?? 10000) + 5000);
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || event.origin !== 'null') return;
@@ -65,12 +74,18 @@ export function WidgetPreview({projectId, token, snapshot, sceneId, themeId, fie
         frame.current?.contentWindow?.postMessage({protocol: BRIDGE_PROTOCOL, version: BRIDGE_VERSION, sessionId: prepared.sessionId, nonce: prepared.nonce, type: 'host:init', payload: {state: prepared.state}}, '*');
       }
       if (message.type === 'frame:widget-ready') {
-        clearTimeout(deadline); setStatus('Ready · isolated runtime');
+        clearTimeout(deadline); ready = true; setStatus(readyStatus());
         if (!dispatched) {dispatched = true; for (const item of fixture?.events ?? []) timers.push(setTimeout(() => {
           frame.current?.contentWindow?.postMessage({protocol: BRIDGE_PROTOCOL, version: BRIDGE_VERSION, sessionId: prepared.sessionId, nonce: prepared.nonce, type: 'host:emit', payload: {listener: item.listener, event: item.event}}, '*');
         }, item.atMs));}
       }
       if (message.type === 'frame:error' || message.type === 'frame:unhandled-rejection') {clearTimeout(deadline); setStatus('Runtime error'); setError(String(message.payload?.message ?? 'Widget runtime error').slice(0, 2000));}
+      if (message.type === 'frame:fonts') {
+        const summary = fontFallbackSummary(message.payload?.report);
+        if (summary && summary !== fonts) setLog(previous => [...previous.slice(-19), `warn: ${summary.slice(0, 1000)}`]);
+        fonts = summary;
+        if (ready) setStatus(readyStatus());
+      }
       if (message.type === 'frame:console') setLog(previous => [...previous.slice(-19), `${message.payload?.level ?? 'log'}: ${String(message.payload?.message ?? '').slice(0, 1000)}`]);
     };
     window.addEventListener('message', receive);

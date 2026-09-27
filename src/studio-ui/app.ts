@@ -982,6 +982,8 @@ function runtimeContext(fixture: FixtureDefinition | null = findFixture(state.se
   };
 }
 
+let lastFontSummary = "";
+
 function handleFrameEvent(event: FrameEvent): void {
   const payload = isJsonObject(event.payload) ? event.payload : {};
   switch (event.type) {
@@ -1013,7 +1015,18 @@ function handleFrameEvent(event: FrameEvent): void {
     case "frame:widget-ready":
       setFrameStatus("ready", "Ready");
       break;
+    case "frame:fonts": {
+      const report = payload.report as {families?: {family: string; weight: string; style: string; status: string; reason?: string}[]} | undefined;
+      const summary = (report?.families ?? [])
+        .filter((face) => face.status === "fallback")
+        .map((face) => `${face.family} ${face.weight}${face.style === "italic" ? " italic" : ""} in fallback (${face.reason ?? "unknown"})`)
+        .join(", ");
+      if (summary && summary !== lastFontSummary) logEvent("warn", summary);
+      lastFontSummary = summary;
+      break;
+    }
     case "frame:fields-updated":
+    case "frame:settling":
     case "frame:booted":
       break;
     default:

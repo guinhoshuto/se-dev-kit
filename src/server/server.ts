@@ -45,6 +45,13 @@ export interface StudioServer {
 
 const MAX_FRAME_DOCUMENTS = 256;
 
+/** The compiled frame runtime modules the frame server serves; never a whole directory. */
+const FRAME_RUNTIME_FILES = new Map([
+  ["/__sws/runtime/frame-bootstrap.js", "frame-bootstrap.js"],
+  ["/__sws/runtime/frame.js", "frame.js"],
+  ["/__sws/runtime/google-fonts-url.js", "google-fonts-url.js"]
+]);
+
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const distributionRoot = resolve(moduleDirectory, "..");
 const uiAssets = new Map([
@@ -253,9 +260,9 @@ export async function startStudioServer(
         send(request, response, 200, "text/html; charset=utf-8", html, frameHeaders);
         return;
       }
-      if (pathname === "/__sws/runtime/frame-bootstrap.js" || pathname === "/__sws/runtime/frame.js") {
-        const fileName = pathname.endsWith("frame-bootstrap.js") ? "frame-bootstrap.js" : "frame.js";
-        const source = await readFile(resolve(distributionRoot, "runtime", fileName));
+      const runtimeFile = FRAME_RUNTIME_FILES.get(pathname);
+      if (runtimeFile) {
+        const source = await readFile(resolve(distributionRoot, "runtime", runtimeFile));
         send(request, response, 200, "text/javascript; charset=utf-8", source, frameHeaders);
         return;
       }
