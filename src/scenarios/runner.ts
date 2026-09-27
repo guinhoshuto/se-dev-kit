@@ -169,6 +169,8 @@ export async function openScene(
   const resolved = resolveSceneState(project, scene);
   if (options.camera) resolved.camera = options.camera;
   if (options.background) resolved.background = options.background;
+  // The frame document, CSS and JS are served with this scene's {{field}} values substituted.
+  const docKey = await server.registerFrameDocument(resolved.runtimeState.fieldData);
   const context = await createIsolatedContext({
     browser,
     allowedOrigins: [server.origin, server.frameOrigin],
@@ -191,7 +193,8 @@ export async function openScene(
     output: resolved.output,
     camera: resolved.camera,
     background: await backgroundForBrowser(resolved.background, server),
-    readyTimeoutMs
+    readyTimeoutMs,
+    docKey
   }, readyTimeoutMs, project.config.widget.ready?.selector);
   await page.clock.setSystemTime(captureTime);
   await sampleFrameAnimations(page, 0);

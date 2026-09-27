@@ -4,7 +4,13 @@ import {ConflictError,HttpError} from './errors';
 import {parseSnapshot,safeId} from './schema';
 import {mutateJson,readJson,writeJson} from './storage';
 import {prepareSnapshot} from './importer';
-import {copyFontLock} from './fonts';
+import {copyFontLock,prewarmGoogleFonts,staticGoogleFontUrls,type PrewarmOptions} from './fonts';
+import {FONT_CACHE_EPOCH,GOOGLE_FONTS_UA} from '../src/runtime/google-fonts-url';
+
+/** Injection for tests: the prewarm upstream and memory. Production passes nothing. */
+export interface RevisionOptions {fonts?:Pick<PrewarmOptions,'memory'|'lookup'|'transport'|'now'|'budgetLimits'>}
+/** The save request's `maxDuration` is 60 s; prewarm stops by 55 s and never takes more than 10 s. */
+const PREWARM_MAX_MS=10_000,SAVE_BUDGET_MS=55_000;
 
 const hash=(text:string)=>createHash('sha256').update(text).digest('hex');
 const projectKey=(id:string)=>`projects/${safeId(id)}/project.json`;
@@ -52,27 +58,32 @@ export async function expandUploads(store:ObjectStore,id:string,snapshot:WidgetS
   }
   return expanded;
 }
-async function makeRevision(store:ObjectStore,id:string,snapshot:WidgetSnapshot):Promise<Revision> {
+async function makeRevision(store:ObjectStore,id:string,snapshot:WidgetSnapshot,options:RevisionOptions={}):Promise<Revision> {
+  const started=Date.now();
   const revision:Revision={id:randomUUID(),projectId:id,createdAt:new Date().toISOString(),snapshot,status:'preparing',diagnostics:[]};
   try {
     revision.prepared=await prepareSnapshot(await expandUploads(store,id,snapshot),store,`projects/${id}/prepared/${revision.id}`);
+    // Prewarm runs only here, on save; the draft preview never reaches Google. Its failures are warnings.
+    const googleFonts={epoch:FONT_CACHE_EPOCH,userAgent:GOOGLE_FONTS_UA,static:staticGoogleFontUrls(snapshot,revision.prepared)};
+    revision.prepared.googleFonts=googleFonts;
+    revision.prepared.warnings.push(...await prewarmGoogleFonts(googleFonts.static,{...options.fonts,store,projectId:id,revisionId:revision.id,epoch:googleFonts.epoch,userAgent:googleFonts.userAgent,deadline:Math.min(Date.now()+PREWARM_MAX_MS,started+SAVE_BUDGET_MS)}));
     revision.status='ready';revision.diagnostics=revision.prepared.warnings;
   }catch(error){revision.status='blocked';revision.diagnostics=[error instanceof Error?error.message:'Dependency preparation failed.'];}
   await writeJson(store,revisionKey(id,revision.id),revision);return revision;
 }
-export async function createProject(store:ObjectStore,input:unknown):Promise<{project:ProjectRecord;revision:Revision;token:string;etag:string}> {
+export async function createProject(store:ObjectStore,input:unknown,options:RevisionOptions={}):Promise<{project:ProjectRecord;revision:Revision;token:string;etag:string}> {
   const snapshot=parseSnapshot(input);
   await dailyBudget(store,'projects');
   await mutateJson(store,'usage/projects.json',{count:0},v=>{if(v.count>=100)throw new HttpError(429,'The personal workspace is limited to 100 projects.');return {count:v.count+1};});
   const id=randomUUID(),token=randomBytes(32).toString('base64url');const now=new Date().toISOString();
-  const revision=await makeRevision(store,id,snapshot);
+  const revision=await makeRevision(store,id,snapshot,options);
   const project:ProjectRecord={id,name:snapshot.name,revisionId:revision.id,accessHash:hash(token),createdAt:now,updatedAt:now};
   const {etag}=await writeJson(store,projectKey(id),project);return {project,revision,token,etag};
 }
-export async function replaceProject(store:ObjectStore,id:string,token:string,expected:string|null,input:unknown):Promise<ProjectView> {
+export async function replaceProject(store:ObjectStore,id:string,token:string,expected:string|null,input:unknown,options:RevisionOptions={}):Promise<ProjectView> {
   const {project,etag}=await getProjectAuthorized(store,id,token);
   if(!expected)throw new HttpError(428,'If-Match is required for full replacement.');if(expected!==etag)throw new ConflictError();
-  const snapshot=parseSnapshot(input);const revision=await makeRevision(store,id,snapshot);
+  const snapshot=parseSnapshot(input);const revision=await makeRevision(store,id,snapshot,options);
   const next={...project,name:snapshot.name,revisionId:revision.id,updatedAt:new Date().toISOString()};
   const result=await writeJson(store,projectKey(id),next,{ifMatch:etag});return projectView(store,next,result.etag);
 }

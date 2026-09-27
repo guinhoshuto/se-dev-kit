@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **In progress. Stage 1 done (2026-09-27): `src/runtime/google-fonts-url.ts`, `src/fonts/css.ts` and their unit tests; the frame server route waits for the stage that makes `frame.ts` import the module. Stage 2 done (2026-09-27): amendment applied, bounded transport, `lib/fonts.ts` cache, budget and locks, with web tests on an injected upstream.** |
+| Status | **In progress. Stage 1 done (2026-09-27): `src/runtime/google-fonts-url.ts`, `src/fonts/css.ts` and their unit tests; the frame server route waits for the stage that makes `frame.ts` import the module. Stage 2 done (2026-09-27): amendment applied, bounded transport, `lib/fonts.ts` cache, budget and locks, with web tests on an injected upstream. Stage 3 done (2026-09-27): `{{field}}` substitution in memory for preview and capture, CSS sentinels at every `rewriteCss` call, non-blocking import, prewarm on save.** |
 | Decision | 2026-09-26, by the repository owner |
 | Written | 2026-09-27, against `main` at `ae5fd9a`. Every `file:line` below was rechecked against that commit. Uncommitted parallel work (sample media) was changing `lib/importer.ts`, `lib/jobs.ts`, `lib/model.ts`, `lib/preview.ts`, `src/capture/renderer.ts`, `src/runtime/frame.ts`, `src/scenarios/runner.ts`, `src/server/server.ts`, `src/tutorial/timeline.ts`, `components/widget-preview.tsx` and `scripts/job-worker.mjs` at the time, so recheck line numbers in those files before implementing. |
 | Gate | The `AGENTS.md` amendment in [section 6](#6-agentsmd-amendment-approved-2026-09-27) was **approved by the owner on 2026-09-27** and applied in the stage 2 change. |
@@ -244,6 +244,18 @@ Only stage 6 turns off capture into `_import/`, so no stage regresses what alrea
 - `npm run typecheck && npm test`.
 
 ### Stage 3: `{{field}}` placeholders as in StreamElements, non-blocking import, prewarm on save. 2 days
+
+**Status: done (2026-09-27).** No widget repository file is changed: substitution happens in memory, as in StreamElements. Where the code differs from the text below:
+
+- **Tests and fixtures.** Web tests live in `tests/web/placeholders.test.ts` and the capture checks in `tests/integration/placeholders.test.mjs` (a direct `openScene`, no recipe), not in `import.test.ts` and `capture.test.mjs`. At the owner's request, the fixtures in `tests/fixtures/placeholders/` are short excerpts of real store widgets (se-8bit chat CSS, se-custom-chat HTML and CSS, se-dreamychat and se-lava-lamp HTML), each headed with its source and commit, instead of synthetic patterns. Each new test was seen failing under its mutation (26 mutations).
+- **Sentinels.** `protectPlaceholders()` in `lib/importer.ts` is applied inside `rewriteCss` itself, which covers the four call sites at once. Besides `resolveReference` returning `{{…}}` references untouched, `rewriteCss` leaves a `url()` or `@import` that holds a placeholder byte-identical instead of re-quoting it.
+- **Values.** Numbers and booleans become their text, `null` becomes empty, objects and arrays become JSON (to confirm on StreamElements, section 9). Sample references become frame URLs in capture and `data:` URLs in the preview; captured media paths become `data:` URLs in the preview, the same mapping the runtime applies to `fieldData`.
+- **Refusals.** The preview re-runs the full list on the substituted HTML. The frame server refuses only what substitution introduced (local CLI source may carry inline handlers) and fails early: `registerFrameDocument()` builds the document once and throws `PLACEHOLDER_UNSAFE_HTML`, instead of a frame that never boots. The shared list is `refusedHtmlElement()` in `src/config/placeholders.ts`.
+- **Preview.** `inline()` passes through every absolute URL a substituted value produces, not only Google's, with a warning: the CSP blocks them. `previewDocument()` returns `{html, warnings}` (`previewHtml()` stays as a wrapper), the route returns `warnings`, and the editor lists them in the runtime console; the status bar waits for stage 4.
+- **Frame server.** When the widget links its own stylesheet, that link is pointed at `…?doc=<key>` and a fragment document no longer injects the configured stylesheet a second time. Missing-placeholder warnings in capture go to the server log only, not to the manifest.
+- **Prewarm.** It uses the `preview` budget bucket (the editor triggers it), writes into the new revision's lock, and also counts Google stylesheets the importer captured (`sourceUrl`). `prepared.googleFonts` (epoch, User-Agent, `static`) is pinned on every ready revision, even when `static` is empty. `createProject` and `replaceProject` take an optional injection for tests.
+- **Checked by hand on 2026-09-27**, on read-only copies: hosted import and preview of se-8bit chat, se-custom-chat, se-dreamychat (its CDN script left out, since import would download it) and se-lava-lamp all prepare as `ready`; local captures substitute every placeholder. se-custom-chat stops at `script.js:2`, `const aniLetter = {animatedLetters} ? true : false;`: single braces are not a placeholder, so the script throws `ReferenceError` (unless StreamElements also expands `{name}`, to confirm on StreamElements). Not fixed here.
+- Tests ran on Node 26.9, the only Node on the machine, outside `engines`. Integration files ran with `--test-concurrency=1`, one browser at a time.
 
 **Files**
 

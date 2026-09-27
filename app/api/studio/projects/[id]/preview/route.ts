@@ -4,7 +4,7 @@ import {expandUploads,getProjectAuthorized,getRevision} from '@/lib/projects';
 import {bearer,endpoint,json,readInput,requestOrigin} from '@/lib/http';
 import {parseSnapshot} from '@/lib/schema';
 import {prepareSnapshot} from '@/lib/importer';
-import {previewHtml,previewState,previewBackground} from '@/lib/preview';
+import {previewDocument,previewState,previewBackground} from '@/lib/preview';
 import {HttpError} from '@/lib/errors';
 import {z} from 'zod';
 import {jsonObjectSchema} from '@/src/config/schemas';
@@ -32,9 +32,10 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
     const target=isSaved?store:new DraftStore();
     const prepared=isSaved?revision.prepared:await prepareSnapshot(await expandUploads(store,id,supplied!),target,'draft');
     if(!prepared)throw new HttpError(422,'This revision has unresolved dependencies.');
-    const html=await previewHtml(prepared,target,options);const state=previewState(prepared.snapshot,options);
+    // The state comes first: the page substitutes {{field}} placeholders from it.
+    const state=previewState(prepared.snapshot,options);const {html,warnings}=await previewDocument(prepared,target,options);
     const backgroundImage=await previewBackground(prepared,target,options);
-    const response={html,state,backgroundImage,sessionId:options.sessionId,nonce:options.nonce};
+    const response={html,state,backgroundImage,warnings,sessionId:options.sessionId,nonce:options.nonce};
     if(Buffer.byteLength(JSON.stringify(response))>4_000_000)throw new HttpError(413,'Preview response exceeds 4 MB. Reduce source, preview assets, the sample media this scene uses, or the background image; server-side jobs are not limited by it.');
     return json(response);
   }catch(error){if(error instanceof HttpError)throw error;throw new HttpError(422,error instanceof Error?error.message:'Preview preparation failed.');}

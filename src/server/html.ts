@@ -1,6 +1,8 @@
 import {readFile} from "node:fs/promises";
 import {posix} from "node:path";
-import type {ResolvedProject} from "../types.js";
+import type {JsonObject, ResolvedProject} from "../types.js";
+import {StudioError} from "../shared/errors.js";
+import {introducedHtmlRefusals, substitutePlaceholders, substitutedHtmlError} from "../config/placeholders.js";
 import {assetUrlPath} from "./assets.js";
 
 interface FrameDocumentOptions {
@@ -8,6 +10,10 @@ interface FrameDocumentOptions {
   controlOrigin: string;
   sessionId: string;
   nonce: string;
+  /** Values for `{{field}}` placeholders, already mapped for the frame (samples as frame URLs). */
+  fieldData: JsonObject;
+  /** Registered document key; the configured CSS and JS are then requested with `?doc=<key>`. */
+  docKey?: string;
 }
 
 function escapeAttribute(value: string): string {
@@ -39,6 +45,28 @@ function hasConfiguredStylesheet(html: string, htmlDirectory: string, cssPath: s
   return false;
 }
 
+/** Configured CSS or JS URL, at its usual path so relative `url()` keeps resolving; `doc` selects the values. */
+export function substitutedFileUrl(frameOrigin: string, path: string, docKey?: string): string {
+  return `${frameOrigin}${assetUrlPath(path)}${docKey ? `?doc=${docKey}` : ""}`;
+}
+
+/**
+ * Points the widget's own link to the configured stylesheet at the substituted copy, and drops
+ * external links that are not stylesheets (`preconnect`, `dns-prefetch`, `preload`): they open
+ * sockets outside request routing. Hosted import drops them too.
+ */
+function rewriteLinks(html: string, htmlDirectory: string, cssPath: string, cssUrl: string, docKey: string | undefined): string {
+  return html.replace(/<link\b[^>]*>/gi, (tag: string) => {
+    const rel = /\brel\s*=\s*["']?([^"'>\s]+)/i.exec(tag)?.[1]?.toLowerCase();
+    const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+    if (rel !== "stylesheet") return href && /^(?:[a-z][a-z\d+.-]*:)?\/\//i.test(href.trim()) ? "" : tag;
+    if (docKey && href && normalizedReference(href, htmlDirectory) === cssPath) {
+      return tag.replace(/\bhref\s*=\s*["'][^"']+["']/i, `href="${escapeAttribute(cssUrl)}"`);
+    }
+    return tag;
+  });
+}
+
 function injectIntoHead(html: string, injection: string): string {
   if (/<head\b[^>]*>/i.test(html)) return html.replace(/<head\b[^>]*>/i, (head) => `${head}\n${injection}`);
   if (/<html\b[^>]*>/i.test(html)) return html.replace(/<html\b[^>]*>/i, (tag) => `${tag}\n<head>${injection}</head>`);
@@ -51,14 +79,17 @@ function injectBeforeBodyEnd(html: string, injection: string): string {
 }
 
 export async function renderFrameDocument(project: ResolvedProject, options: FrameDocumentOptions): Promise<string> {
-  const source = await readFile(project.files.html, "utf8");
+  const raw = await readFile(project.files.html, "utf8");
+  const source = substitutePlaceholders(raw, options.fieldData).text;
+  const introduced = introducedHtmlRefusals(raw, source);
+  if (introduced.length > 0) throw new StudioError("PLACEHOLDER_UNSAFE_HTML", substitutedHtmlError(introduced));
   const htmlPath = project.relativeFiles.html;
   const htmlDirectory = posix.dirname(htmlPath);
   const baseDirectory = htmlDirectory === "." ? "" : `${htmlDirectory}/`;
   const cssPath = project.relativeFiles.css;
   const scriptPath = project.relativeFiles.js;
-  const cssUrl = `${options.frameOrigin}${assetUrlPath(cssPath)}`;
-  const scriptUrl = `${options.frameOrigin}${assetUrlPath(scriptPath)}`;
+  const cssUrl = substitutedFileUrl(options.frameOrigin, cssPath, options.docKey);
+  const scriptUrl = substitutedFileUrl(options.frameOrigin, scriptPath, options.docKey);
   const adapterUrl = project.adapterPath
     ? `${options.frameOrigin}${assetUrlPath(posix.normalize(project.config.widget.adapter ?? ""))}`
     : undefined;
@@ -77,7 +108,8 @@ export async function renderFrameDocument(project: ResolvedProject, options: Fra
   const cssTag = `<link rel="stylesheet" href="${escapeAttribute(cssUrl)}">`;
   const bootstrapTag = `<script type="module" src="${escapeAttribute(bootstrapUrl)}"></script>`;
   const isDocument = /<!doctype\s+html|<html\b|<head\b|<body\b/i.test(source);
-  const sourceWithoutConfiguredScript = stripConfiguredScript(source, htmlDirectory, scriptPath);
+  const linksConfiguredStylesheet = hasConfiguredStylesheet(source, htmlDirectory, cssPath);
+  const sourceWithoutConfiguredScript = rewriteLinks(stripConfiguredScript(source, htmlDirectory, scriptPath), htmlDirectory, cssPath, cssUrl, options.docKey);
 
   if (!isDocument) {
     return `<!doctype html>
@@ -86,7 +118,7 @@ export async function renderFrameDocument(project: ResolvedProject, options: Fra
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   ${baseTag}
-  ${cssTag}
+  ${linksConfiguredStylesheet ? "" : cssTag}
 </head>
 <body>
 ${sourceWithoutConfiguredScript}
@@ -100,7 +132,7 @@ ${bootstrapTag}
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     baseTag,
-    ...(hasConfiguredStylesheet(document, htmlDirectory, cssPath) ? [] : [cssTag])
+    ...(linksConfiguredStylesheet ? [] : [cssTag])
   ].join("\n");
   document = injectIntoHead(document, headTags);
   document = injectBeforeBodyEnd(document, bootstrapTag);

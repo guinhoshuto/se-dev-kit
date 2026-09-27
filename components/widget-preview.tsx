@@ -7,7 +7,7 @@ import {BRIDGE_PROTOCOL, BRIDGE_VERSION} from '../src/version';
 import {collectSampleMediaReferences} from '../src/studio-ui/sample-media';
 import {stageBackgroundImage} from './stage-style';
 
-interface PreviewResponse {html: string; state: RuntimeState; backgroundImage?: string; sessionId: string; nonce: string}
+interface PreviewResponse {html: string; state: RuntimeState; backgroundImage?: string; warnings?: string[]; sessionId: string; nonce: string}
 
 export function WidgetPreview({projectId, token, snapshot, sceneId, themeId, fieldData, reload = 0, compact = false}: {projectId: string; token: string; snapshot: WidgetSnapshot; sceneId: string; themeId: string; fieldData: JsonObject; reload?: number; compact?: boolean}) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -39,7 +39,7 @@ export function WidgetPreview({projectId, token, snapshot, sceneId, themeId, fie
         const response = await fetch(`/api/studio/projects/${projectId}/preview`, {method: 'POST', headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'}, body: JSON.stringify({snapshot, sceneId: sceneId || undefined, themeId: themeId || undefined, fieldData}), signal: abort.signal});
         const data = await response.json();
         if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : data.error?.message || data.message || 'Preview preparation failed.');
-        if (!abort.signal.aborted) {setStatus('Starting isolated runtime…'); setPrepared(data as PreviewResponse);}
+        if (!abort.signal.aborted) {const preview = data as PreviewResponse; setStatus('Starting isolated runtime…'); setLog((preview.warnings ?? []).map(warning => `preview warning: ${warning.slice(0, 1000)}`)); setPrepared(preview);}
       } catch (cause) {if (!abort.signal.aborted) {setError(cause instanceof Error ? cause.message : 'Preview failed.'); setStatus('Preview blocked');}}
     })();
     return () => abort.abort();

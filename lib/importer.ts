@@ -11,6 +11,7 @@ import {inspectSensitive} from '../src/validation/privacy';
 import type {ObjectStore, PreparedSnapshot, StoredAsset, WidgetSnapshot} from './model';
 import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/studio-ui/sample-media';
 import {deployedSampleMedia, type SampleMediaSource} from './sample-media';
+import {hasPlaceholder, refusedHtmlElement} from '../src/config/placeholders';
 
 type Node = DefaultTreeAdapterMap['node'];
 type Element = DefaultTreeAdapterMap['element'];
@@ -182,22 +183,47 @@ export function textContent(node: Element): string { return node.childNodes.map(
 export function setText(node: Element, value: string): void { node.childNodes = [{nodeName: '#text', value, parentNode: node}]; }
 function remove(node: Element): void { if (node.parentNode) node.parentNode.childNodes = node.parentNode.childNodes.filter(child => child !== node); }
 
+/**
+ * Swaps each `{{field}}` for a sentinel that is a valid CSS identifier, so postcss parses widget CSS
+ * that uses unquoted placeholders (`gap: {{msgSpacing}}px`, `align-items: {{alignment}}`).
+ * `restore` puts the original placeholder text back, byte for byte.
+ */
+export function protectPlaceholders(css: string): {text: string; restore: (value: string) => string} {
+  let prefix = '__sws_tok';
+  while (css.includes(prefix)) prefix += 'x';
+  const tokens: string[] = [];
+  const text = css.replace(/\{\{\s*[\w.-]+\s*\}\}/g, match => `${prefix}_${tokens.push(match) - 1}__`);
+  const pattern = new RegExp(`${prefix}_(\\d+)__`, 'g');
+  return {text, restore: value => tokens.length ? value.replace(pattern, (match, index: string) => tokens[Number(index)] ?? match) : value};
+}
+
+/**
+ * Rewrites every `url()` and `@import` through `resolve`. References that still hold a `{{field}}`
+ * are left exactly as written: they are known only after substitution.
+ */
 export async function rewriteCss(css: string, resolve: (url: string) => Promise<string>): Promise<string> {
-  const tree = postcss.parse(css);
+  const {text, restore} = protectPlaceholders(css);
+  const tree = postcss.parse(text);
   const declarations: {value: string}[] = [];
   tree.walkDecls(declaration => { declarations.push(declaration); });
   const imports: {params: string}[] = [];
   tree.walkAtRules('import', rule => { imports.push(rule); });
   for (const declaration of declarations) {
     const matches = [...declaration.value.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s)]+))\s*\)/gi)];
-    for (const match of matches) declaration.value = declaration.value.replace(match[0], `url(${JSON.stringify(await resolve(match[1] ?? match[2] ?? match[3] ?? ''))})`);
+    for (const match of matches) {
+      const reference = restore(match[1] ?? match[2] ?? match[3] ?? '');
+      if (hasPlaceholder(reference)) continue;
+      declaration.value = declaration.value.replace(match[0], `url(${JSON.stringify(await resolve(reference))})`);
+    }
   }
   for (const rule of imports) {
     const match = /^(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^\s)]+))\s*\)?(.*)$/i.exec(rule.params);
     if (!match) throw new Error('Unsupported CSS import syntax.');
-    rule.params = `url(${JSON.stringify(await resolve(match[1] ?? match[2] ?? match[3] ?? ''))})${match[4] ?? ''}`;
+    const reference = restore(match[1] ?? match[2] ?? match[3] ?? '');
+    if (hasPlaceholder(reference)) continue;
+    rule.params = `url(${JSON.stringify(await resolve(reference))})${match[4] ?? ''}`;
   }
-  return tree.toString();
+  return restore(tree.toString());
 }
 
 /**
@@ -251,6 +277,8 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
   }
   const resolveReference = async (reference: string, base = '', destination = ''): Promise<string> => {
     if (!reference || reference.startsWith('#') || reference.startsWith('data:')) return reference;
+    // Known only after substitution, per preview or capture; neither downloaded nor treated as a local path.
+    if (hasPlaceholder(reference)) return reference;
     if (claimsSampleMediaScheme(reference)) throw new Error(`Sample media references are supported only in catalog values and scene backgrounds, not in widget HTML or CSS: ${reference}`);
     if (/^(?:blob:|javascript:|file:|http:)/i.test(reference)) throw new Error('Only captured project assets, data URLs, and public HTTPS imports are supported.');
     let path: string;
@@ -287,8 +315,8 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
   };
   const document = parse(snapshot.widget.html);
   for (const node of elements(document)) {
-    if (['base', 'iframe', 'object', 'embed'].includes(node.tagName) || (node.tagName === 'meta' && attribute(node, 'http-equiv'))) throw new Error(`Unsupported embedded or document-control element: ${node.tagName}`);
-    if (node.attrs.some(attr => attr.name.startsWith('on'))) throw new Error('Inline HTML event handlers are unsupported. Register listeners in widget JavaScript after runtime initialization.');
+    const refused = refusedHtmlElement(node.tagName, node.attrs);
+    if (refused) throw new Error(refused);
     if (attribute(node, 'srcset')) throw new Error('Responsive srcset imports are unsupported. Use a single captured src asset.');
     if (node.tagName === 'script') {
       const type = attribute(node, 'type')?.toLowerCase();

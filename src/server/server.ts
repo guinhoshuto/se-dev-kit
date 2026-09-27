@@ -1,10 +1,11 @@
+import {randomBytes} from "node:crypto";
 import {createServer, type IncomingMessage, type Server, type ServerResponse} from "node:http";
 import {readFile} from "node:fs/promises";
 import {basename, dirname, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 import chokidar, {type FSWatcher} from "chokidar";
 import type {AddressInfo} from "node:net";
-import type {ResolvedProject} from "../types.js";
+import type {JsonObject, JsonValue, ResolvedProject} from "../types.js";
 import {StudioError, toErrorMessage} from "../shared/errors.js";
 import {buildAssetMap, lookupAsset, type AssetEntry} from "./assets.js";
 import {renderCapturePage} from "./capture-page.js";
@@ -13,7 +14,8 @@ import {renderFrameDocument} from "./html.js";
 import {loadProject} from "../config/load.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
 import {loadSampleMediaCatalog, requireSampleMedia, sampleMediaSummaries, type SampleMediaCatalog} from "../config/sample-media.js";
-import {SAMPLE_REFERENCE_PATTERN, type SampleMediaSummary} from "../studio-ui/sample-media.js";
+import {SAMPLE_MEDIA_ROUTE, SAMPLE_REFERENCE_PATTERN, sampleMediaFile, type SampleMediaSummary} from "../studio-ui/sample-media.js";
+import {missingPlaceholderWarning, substitutePlaceholders} from "../config/placeholders.js";
 
 export interface StartServerOptions {
   host?: string;
@@ -31,8 +33,17 @@ export interface StudioServer {
   frameOrigin: string;
   /** Absolute frame-origin URL of a built-in sample; fails with SAMPLE_MEDIA_NOT_FOUND for unknown references. */
   sampleMediaUrl: (reference: string) => Promise<string>;
+  /**
+   * Registers the effective `fieldData` of one scene and returns the key the frame URL carries as
+   * `doc=<key>`. The frame document, the configured CSS and the configured JS are then served with
+   * `{{field}}` placeholders substituted from these values. Without a key, the defaults apply.
+   * Fails with PLACEHOLDER_UNSAFE_HTML when a value would add refused HTML.
+   */
+  registerFrameDocument: (fieldData: JsonObject) => Promise<string>;
   close: () => Promise<void>;
 }
+
+const MAX_FRAME_DOCUMENTS = 256;
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const distributionRoot = resolve(moduleDirectory, "..");
@@ -118,6 +129,16 @@ function publicProject(
   };
 }
 
+/** Placeholder values as the frame sees them: sample references become frame-origin URLs, as the runtime maps them. */
+function frameFieldValues(fieldData: JsonObject, frameOrigin: string): JsonObject {
+  const mapped: JsonObject = {};
+  for (const [key, value] of Object.entries(fieldData)) {
+    const file = typeof value === "string" ? sampleMediaFile(value) : undefined;
+    mapped[key] = file ? `${frameOrigin}${SAMPLE_MEDIA_ROUTE}${file}` : (value as JsonValue);
+  }
+  return mapped;
+}
+
 async function listen(server: Server, port: number, host: string): Promise<number> {
   await new Promise<void>((resolvePromise, reject) => {
     const onError = (error: Error) => reject(error);
@@ -189,6 +210,13 @@ export async function startStudioServer(
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   // Loaded on first use so widgets without sample references never depend on sample-media/.
   const sampleMedia = (): Promise<SampleMediaCatalog> => loadSampleMediaCatalog();
+  // In-memory only; oldest keys are dropped first. Values never leave this process except as page content.
+  const frameDocuments = new Map<string, JsonObject>();
+  /** `undefined` for an unknown key; the defaults when no key is given (the local dev UI). */
+  const frameValues = (docKey: string | null): JsonObject | undefined => {
+    if (docKey === null) return frameFieldValues(activeProject.fieldDefaults, frameOrigin);
+    return /^[a-f0-9]{32}$/.test(docKey) ? frameDocuments.get(docKey) : undefined;
+  };
 
   const frameServer = createServer((request, response) => {
     void (async () => {
@@ -208,7 +236,20 @@ export async function startStudioServer(
           send(request, response, 404, "text/plain; charset=utf-8", "Not Found\n", frameHeaders);
           return;
         }
-        const html = await renderFrameDocument(activeProject, {frameOrigin, controlOrigin, sessionId, nonce});
+        const docKey = requestUrl.searchParams.get("doc");
+        const fieldData = frameValues(docKey);
+        if (!fieldData) {
+          send(request, response, 404, "text/plain; charset=utf-8", "Not Found\n", frameHeaders);
+          return;
+        }
+        let html: string;
+        try {
+          html = await renderFrameDocument(activeProject, {frameOrigin, controlOrigin, sessionId, nonce, fieldData, ...(docKey ? {docKey} : {})});
+        } catch (error) {
+          if (!(error instanceof StudioError)) throw error;
+          send(request, response, 422, "text/plain; charset=utf-8", `${error.message}\n`, frameHeaders);
+          return;
+        }
         send(request, response, 200, "text/html; charset=utf-8", html, frameHeaders);
         return;
       }
@@ -253,6 +294,16 @@ export async function startStudioServer(
           return;
         }
         const source = await readFile(asset.filePath);
+        // Only the widget's own CSS and JS carry placeholders, as in StreamElements; same path, so relative url() still resolves.
+        if (asset.key === activeProject.relativeFiles.css || asset.key === activeProject.relativeFiles.js) {
+          const fieldData = frameValues(requestUrl.searchParams.get("doc"));
+          if (!fieldData) {
+            send(request, response, 404, "text/plain; charset=utf-8", "Not Found\n", frameHeaders);
+            return;
+          }
+          send(request, response, 200, asset.contentType, substitutePlaceholders(source.toString("utf8"), fieldData).text, frameHeaders);
+          return;
+        }
         send(request, response, 200, asset.contentType, source, frameHeaders);
         return;
       }
@@ -387,6 +438,26 @@ export async function startStudioServer(
     sampleMediaUrl: async (reference) => {
       const entry = requireSampleMedia(await sampleMedia(), reference);
       return `${frameOrigin}/__sws/sample/${entry.file}`;
+    },
+    registerFrameDocument: async (fieldData) => {
+      const values = frameFieldValues(fieldData, frameOrigin);
+      const project = activeProject;
+      const [html, css, js] = await Promise.all([project.files.html, project.files.css, project.files.js].map((file) => readFile(file, "utf8")));
+      // Build once so unsafe values fail here, with a clear error, instead of as a frame that never boots.
+      await renderFrameDocument(project, {frameOrigin, controlOrigin, sessionId: "0".repeat(24), nonce: "0".repeat(32), fieldData: values});
+      const relative = [project.relativeFiles.html, project.relativeFiles.css, project.relativeFiles.js];
+      [html, css, js].forEach((text, index) => {
+        const missing = substitutePlaceholders(text ?? "", values).missing;
+        if (missing.length > 0) options.onLog?.(missingPlaceholderWarning(relative[index] ?? "widget", missing));
+      });
+      const key = randomBytes(16).toString("hex");
+      frameDocuments.set(key, values);
+      while (frameDocuments.size > MAX_FRAME_DOCUMENTS) {
+        const oldest = frameDocuments.keys().next().value;
+        if (oldest === undefined) break;
+        frameDocuments.delete(oldest);
+      }
+      return key;
     },
     close: async () => {
       if (closed) return;

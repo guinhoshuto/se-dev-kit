@@ -1,0 +1,64 @@
+/* Excerpt of se-8bit/chat/widget.css (lines 1-57 and 79-84) at se-8bit 0cf6198, read-only copy for the placeholder tests. */
+@import url('https://fonts.googleapis.com/css?family={{fontFamily}}:400,700&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+.main-container {
+  position: absolute;
+  inset: 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: {{msgSpacing}}px;
+  font-family: '{{fontFamily}}', monospace;
+  font-size: {{fontSize}}px;
+  color: {{textColor}};
+  line-height: 1.6;
+  letter-spacing: 0.5px;
+}
+
+.message-row {
+  position: relative;
+  margin: 0 {{borderWidth}}px;
+  flex-shrink: 0;
+}
+
+.msg-card {
+  position: relative;
+  background: {{bgColor}};
+  border-top: {{borderWidth}}px solid {{borderColor}};
+  border-bottom: {{borderWidth}}px solid {{borderColor}};
+  box-shadow: {{hardShadow}};
+  padding: 8px 12px;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.msg-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -{{borderWidth}}px;
+  right: -{{borderWidth}}px;
+  border-left: {{borderWidth}}px solid {{borderColor}};
+  border-right: {{borderWidth}}px solid {{borderColor}};
+  pointer-events: none;
+}
+.emote {
+  height: {{emoteSize}}px;
+  vertical-align: middle;
+  image-rendering: {{emoteRendering}};
+  margin: 0 2px;
+}

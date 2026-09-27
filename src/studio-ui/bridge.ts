@@ -70,9 +70,11 @@ export class FrameBridge {
     window.addEventListener("message", this.#messageHandler);
   }
 
-  start(timeoutMs = 12_000): Promise<void> {
+  /** `docKey` selects the registered values the frame server substitutes into `{{field}}` placeholders. */
+  start(timeoutMs = 12_000, docKey?: string): Promise<void> {
     const source = new URL(`/__sws/frame/${this.sessionId}`, this.frameOrigin);
     source.searchParams.set("nonce", this.nonce);
+    if (docKey) source.searchParams.set("doc", docKey);
     this.iframe.src = source.href;
     this.#readyTimer = window.setTimeout(
       () => this.#rejectReady?.(new Error(`Widget bridge timed out after ${timeoutMs}ms.`)),

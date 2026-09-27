@@ -13,6 +13,8 @@ interface CaptureLoadOptions {
   camera: {scale: number; x: number; y: number; origin?: string};
   background: {color?: string; image?: string; checkerboard?: boolean};
   readyTimeoutMs?: number;
+  /** Key from StudioServer.registerFrameDocument for this scene's placeholder values. */
+  docKey?: string;
 }
 
 declare global {
@@ -78,7 +80,7 @@ class CaptureController {
       (event) => this.events.push(event),
       true
     );
-    await this.bridge.start((options.readyTimeoutMs ?? 10_000) + 2_000);
+    await this.bridge.start((options.readyTimeoutMs ?? 10_000) + 2_000, options.docKey);
   }
 
   dispatch(listener: string, event: unknown): Promise<void> {

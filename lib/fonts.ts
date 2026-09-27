@@ -2,10 +2,15 @@
 // cache, short-lived negative cache for upstream 4xx, daily budget, and per-revision font locks.
 // This is the only code allowed to reach Google (AGENTS.md). Widget code never calls it directly.
 import {createHash} from 'node:crypto';
-import type {ObjectStore} from './model';
+import {parse as parseHtml} from 'parse5';
+import postcss from 'postcss';
+import type {ObjectStore, PreparedSnapshot, WidgetSnapshot} from './model';
+import type {JsonObject} from '../src/types';
+import {substitutePlaceholders} from '../src/config/placeholders';
+import {previewState} from './preview';
 import {ConflictError} from './errors';
 import {ImmutableReadCache, mutateJson, readJson, writeJson} from './storage';
-import {fetchPublicAsset, PublicFetchError, type PublicLookup, type PublicTransport} from './importer';
+import {attribute, elements, fetchPublicAsset, protectPlaceholders, PublicFetchError, textContent, type PublicLookup, type PublicTransport} from './importer';
 import {safeId} from './schema';
 import {
   FONT_CACHE_EPOCH,
@@ -392,4 +397,97 @@ async function replayLockEntry(ctx: Context, entry: FontLockEntry, kind: GoogleF
     files = unique(validation.files.map(file => file.url));
   }
   return {status: 'ok', url: entry.url, kind, sha256: entry.sha256!, bytes: body.byteLength, contentType: entry.contentType!, body, source: 'lock', ...(files ? {files} : {})};
+}
+
+// ---------------------------------------------------------------------------------------------
+// Prewarm on save: the Google stylesheets a revision can be known to use without running it.
+
+/** Stylesheets resolved per save; the rest wait for the first job that needs them. */
+export const FONT_PREWARM_MAX_URLS = 8;
+
+const IMPORT_REFERENCE = /^(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^\s)'";]+))/i;
+/** `@import` references; placeholders a field did not fill are protected, and CSS a value broke is scanned instead. */
+const cssImports = (css: string): string[] => {
+  const {text, restore} = protectPlaceholders(css);
+  const found: string[] = [];
+  try {
+    postcss.parse(text).walkAtRules('import', rule => {
+      const match = IMPORT_REFERENCE.exec(rule.params);
+      const reference = match?.[1] ?? match?.[2] ?? match?.[3];
+      if (reference) found.push(restore(reference));
+    });
+  } catch {
+    for (const match of css.matchAll(/@import\s+((?:url\(\s*)?(?:"[^"]*"|'[^']*'|[^\s)'";]+))/gi)) {
+      const inner = IMPORT_REFERENCE.exec(match[1] ?? '');
+      const reference = inner?.[1] ?? inner?.[2] ?? inner?.[3];
+      if (reference) found.push(reference);
+    }
+  }
+  return found;
+};
+
+/**
+ * Canonical Google Fonts stylesheet URLs from static `<link rel="stylesheet">` and `@import` in the
+ * widget HTML and CSS, after `{{field}}` substitution with the defaults and with each theme and
+ * scene, plus stylesheets the importer captured. URLs that still hold a placeholder are skipped.
+ */
+export function staticGoogleFontUrls(source: WidgetSnapshot, prepared?: PreparedSnapshot): string[] {
+  const states: JsonObject[] = [];
+  const add = (options: {themeId?: string; sceneId?: string}) => { try { states.push(previewState(source, {sessionId: 'prewarm', ...options}).fieldData); } catch { /* a dangling theme or scene reference is reported elsewhere */ } };
+  add({});
+  for (const theme of source.themes) add({themeId: theme.id});
+  for (const scene of source.scenes) add({sceneId: scene.id});
+  const references: string[] = [];
+  for (const fieldData of states) {
+    const html = substitutePlaceholders(source.widget.html, fieldData).text;
+    for (const node of elements(parseHtml(html))) {
+      if (node.tagName === 'link' && attribute(node, 'rel')?.toLowerCase() === 'stylesheet') { const href = attribute(node, 'href'); if (href) references.push(href); }
+      if (node.tagName === 'style') references.push(...cssImports(textContent(node)));
+    }
+    references.push(...cssImports(substitutePlaceholders(source.widget.css, fieldData).text));
+  }
+  for (const asset of prepared?.assets ?? []) if (asset.sourceUrl) references.push(asset.sourceUrl);
+  const urls: string[] = [];
+  for (const reference of references) {
+    const canonical = canonicalGoogleFontsUrl(reference.trim());
+    if (canonical.ok && canonical.kind === 'css' && !urls.includes(canonical.url)) urls.push(canonical.url);
+  }
+  return urls;
+}
+
+export interface PrewarmOptions extends Pick<ResolveGoogleFontOptions, 'memory' | 'lookup' | 'transport' | 'now' | 'budgetLimits'> {
+  store: ObjectStore;
+  projectId: string;
+  revisionId: string;
+  epoch: string;
+  userAgent: string;
+  /** Absolute epoch milliseconds. Nothing starts after it. */
+  deadline: number;
+}
+
+/**
+ * Resolves up to FONT_PREWARM_MAX_URLS stylesheets into the cache and the revision's lock, in the
+ * `preview` budget bucket. Never throws: every failure is returned as a warning for `diagnostics`.
+ */
+export async function prewarmGoogleFonts(urls: readonly string[], options: PrewarmOptions): Promise<string[]> {
+  const warnings: string[] = [];
+  const selected = urls.slice(0, FONT_PREWARM_MAX_URLS);
+  if (urls.length > selected.length) warnings.push(`${urls.length - selected.length} more Google Fonts stylesheets were not prewarmed (${FONT_PREWARM_MAX_URLS} per save); jobs fetch them when needed.`);
+  if (Date.now() >= options.deadline) {
+    if (selected.length) warnings.push(`Google Fonts prewarm skipped ${selected.length} stylesheets: no time was left in this save.`);
+    return warnings;
+  }
+  const {store, projectId, revisionId, epoch, userAgent, deadline, ...inject} = options;
+  const outcomes = await Promise.all(selected.map(async url => {
+    try {
+      const result = await resolveGoogleFont(url, {...inject, store, bucket: 'preview', epoch, userAgent, deadline, lock: {projectId, revisionId}});
+      if (result.status === 'upstream-4xx') return `Google Fonts refused ${url} (HTTP ${result.httpStatus}); that text stays in a fallback font, as in StreamElements.`;
+      if (result.status === 'unavailable') return `Google Fonts prewarm could not cache ${url}: ${result.message} Jobs try again when they need it.`;
+      return undefined;
+    } catch (error) {
+      return `Google Fonts prewarm failed for ${url}: ${error instanceof Error ? error.message : 'unknown error'}. Jobs try again when they need it.`;
+    }
+  }));
+  for (const warning of outcomes) if (warning) warnings.push(warning);
+  return warnings;
 }
