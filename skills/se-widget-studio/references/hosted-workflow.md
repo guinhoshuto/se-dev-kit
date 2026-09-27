@@ -29,6 +29,16 @@ These skill-only `file` entries are uploaded through private reservations after 
 
 Creation is an external mutation. Confirm the intended widget root and target origin before running it. The command prints only safe identifiers and the access-file path. If the response is uncertain, do not import again; inspect the access file or service state first.
 
+### Widgets with a local Studio config
+
+A `se-widget-studio.config.mjs` cannot be passed as `--catalog`. Build a JSON catalog from it and keep that file with the widget's other Studio-only files, never among its production files:
+
+- Copy only `widget.viewport` and `widget.ready`. Drop `widget.root`, `widget.files`, `widget.assets`, and the top-level `output`; the helper or the strict hosted schema rejects them.
+- Expand each `{glob}` into an array of the matching JSON objects. Wrap a plain field-data file, such as a production theme preset, as `{"schemaVersion": 1, "id": "<file name without .json>", "name": "<name>", "fieldData": <file contents>}`, because local mode derives that ID from the file name and scenes refer to it.
+- Replace asset globs with one `{path, file, contentType}` entry per file, keeping `path` equal to the file's path relative to the widget root.
+- Rewrite local-only media values in `fieldData` from `/__sws/widget/<path>` to `<path>`; hosted import rejects absolute local paths. Hosted import rewrites only string media values, so check array-valued media fields (an `image-input` with `multiple: true`) in a test job before rendering.
+- Check the result against the per-revision limits below before importing; split it as described in "Plan a large batch" when it does not fit.
+
 ## Open and manipulate
 
 Open the fragment-based private editor without putting its capability in the shell command:
@@ -81,17 +91,22 @@ The output directory must not exist. The command never cleans or overwrites it. 
 
 Hosted mode is the default even for marketing batches. Plan them inside the boundaries below instead of switching to local mode:
 
-- Keep each video at 15 seconds or less (Etsy listing videos also accept 5–15 seconds) and each render recipe at four video variants or fewer; put further variants in further recipes.
-- Submit one job at a time per project and wait for its terminal status before the next one.
-- Use `scene:<id>` or `video:<id>` for a single still or video, and a recipe ID for a matrix.
+- Keep every video job within 900 frames in total: variants × round(durationMs × fps / 1000). At 30 fps that is two 15-second variants, three 10-second variants, or four 7.5-second variants. The hosted client has no dry run and the worker rejects an oversized recipe only after the job is accepted, so the failed job still counts against the daily limit. Compute the total before submitting and move further variants into further recipes.
+- Submit the first video job with a single variant to measure its runtime against the ten-minute budget.
+- When the catalog exceeds a per-revision limit, group recipes so that each group's scenes, themes, and assets fit one revision. Import once; for each later group, `pull`, replace the catalog arrays in `snapshot`, `push`, and run that group's jobs. Each job stays pinned to the revision it was submitted against. Prefer this to one project per group, because projects cannot be listed or deleted.
+- Count every planned job, tests included, against the 50-jobs-per-UTC-day limit before starting, and submit one job at a time per project.
+- `scene:<id>` renders one still of a catalog scene, and `video:<id>` always records a 5-second, 30 fps H.264 MP4 without alpha. Use a recipe for any other duration, a WebM, a transparent video, or a matrix.
 - Give every job its own new output directory.
 
 ## Current hosted boundaries
 
 - Complete JSON request/preview response: 4 MB.
+- A revision holds at most 48 themes, fixtures, scenes, scenarios, and recipes each, and at most 128 asset files and 100 MB of assets, 10 MB per file.
+- Interactive editor preview: at most 3 MB of captured assets in total. When a revision is too large to preview, preview a smaller revision; render jobs keep the 100 MB revision budget.
 - One active job per project, two globally; 50 jobs per UTC day.
-- Video: up to 15 seconds, 30 fps, and 900 frames per job.
+- Video: up to 15 seconds and 30 fps per variant, and 900 frames per job.
 - A render recipe has at most 48 variants, or four when video is enabled.
+- Job artifacts: at most 100 MB per file and 250 MB per job.
 - There is no account recovery, capability rotation, cancel endpoint, project listing, or delete endpoint.
 - The hosted runtime blocks external network access while the widget runs. Dependencies must be captured during preparation.
 
@@ -99,5 +114,13 @@ These are application limits, not guaranteed provider quota. Do not provision pa
 
 ## Known gaps
 
-- Import captures stylesheets, scripts, and `url()`/`@import` references written in the widget's HTML and CSS, including Google Fonts written there. Resources requested at runtime are not captured: a Google Fonts stylesheet swapped in by JavaScript (for example a `setFont()` driven by a `googleFont` field) or a script injected from a CDN fails, and text falls back to another font. Report this instead of editing the widget or vendoring fonts.
-- StreamElements `{{field}}` placeholders are not substituted. A placeholder inside an external URL is fetched literally, and an unquoted placeholder in CSS fails to parse; either blocks the revision. In HTML and JavaScript a placeholder stays as literal text.
+- Revision preparation captures stylesheets, scripts, images, and `url()`/`@import` references written in the widget's HTML and CSS, including a Google Fonts stylesheet written there with a literal family. Nothing the JavaScript requests at runtime is captured, and hosted previews and jobs have no network:
+  - A Google Fonts stylesheet assigned by JavaScript (for example a `setFont()` driven by a `googleFont` field) does not load, and the text falls back to another font. If the script rewrites the same `<link>` that carried the captured font, that font is lost too.
+  - A script injected from a CDN does not load, so whatever depends on it breaks.
+  
+  Treat every theme as affected until a hosted render shows the intended typeface. When this would change requested marketing media, stop before submitting render jobs, name the affected themes, and ask the user how to proceed; the local CLI blocks runtime network requests as well. Do not edit the widget or vendor fonts.
+- StreamElements `{{field}}` placeholders are not substituted; preparation treats them as literal text:
+  - In a resource reference (an HTML `src`, `poster`, `<script src>`, or `<link rel="stylesheet" href>`, or a CSS `url()`, quoted or not), a placeholder is resolved as a local asset and blocks the revision with `Missing asset`.
+  - Inside an external `https://` URL it is fetched literally, and the revision is blocked when the remote answers with an error (Google Fonts answers HTTP 400).
+  - An unquoted placeholder in a CSS declaration (`color: {{color}}`), including `<style>` and `style=""`, fails to parse and blocks the revision. Inside a quoted CSS string or a custom property value it stays literal.
+  - In HTML text, non-resource attributes, and JavaScript it stays literal; an unquoted placeholder in JavaScript (`const size = {{size}};`) is a syntax error when the widget script runs.

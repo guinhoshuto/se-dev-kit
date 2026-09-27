@@ -1,6 +1,6 @@
 ---
 name: se-widget-studio
-description: Upload, edit, preview, test, capture, and render StreamElements Custom Widgets with the hosted SE Widget Studio or its locked local CLI. Use for widget links, themes, fixtures, screenshots, contact sheets, and short videos; do not use it as a real StreamElements API client.
+description: Upload, edit, preview, test, capture, and render StreamElements Custom Widgets with the hosted SE Widget Studio, which is the default. Use for widget links, themes, fixtures, screenshots, contact sheets, marketing batches, and short videos; use the local CLI only to develop SE Widget Studio itself or when the user explicitly asks for a local render. Do not use it as a real StreamElements API client.
 ---
 
 # SE Widget Studio
@@ -10,7 +10,7 @@ Operate the shared Studio instead of building a widget-specific preview runtime.
 ## Choose the mode
 
 - Use **hosted mode** by default for every widget task: upload, editing links, saved projects, previews, smoke tests, screenshots, videos, and marketing assets. Read [references/hosted-workflow.md](references/hosted-workflow.md) before the first hosted mutation, including its limits and known gaps. Split a large batch as that reference describes instead of switching to local mode.
-- Use **local mode** only to develop or debug SE Widget Studio itself from a reviewed checkout, or when the user explicitly asks for a local render. Read [references/local-workflow.md](references/local-workflow.md).
+- Use **local mode** only to develop or debug SE Widget Studio itself, or when the user explicitly asks for a local render. Read [references/local-workflow.md](references/local-workflow.md), including its section on developing the Studio.
 - Read [references/catalog-authoring.md](references/catalog-authoring.md) when themes, fixtures, scenes, scenarios, recipes, crop, camera, matrix variants, or video settings must be created or changed.
 
 ## Preserve the source contract
@@ -26,7 +26,7 @@ Operate the shared Studio instead of building a widget-specific preview runtime.
 Use `scripts/studio-client.mjs`; it defaults to `https://se-dev-kit.vercel.app` and accepts `--origin` when the user selected another deployment.
 
 - Project capabilities and signed Blob URLs are secrets. Keep access bundles mode `0600`; never print, quote, attach, commit, or paste their contents.
-- Creation may read `STUDIO_CREATE_KEY` from the environment. Never request its value in chat or pass it as a command-line argument.
+- Creation may read `STUDIO_CREATE_KEY` from the environment. Never request its value in chat or pass it as a command-line argument. If creation returns HTTP 403, ask the user to set it in the environment that runs the helper, and do not retry until they confirm.
 - `pull` produces a capability-free draft with an opaque `etag`. Edit the complete `snapshot`, then `push`. A conflict must stop for reconciliation; never refetch and overwrite silently.
 - `run` requires a new output directory, polls one accepted job, downloads authorized artifacts without forwarding the bearer token to Blob, and verifies byte counts and SHA-256.
 - Open the private editor only when the user requests it, using `open-editor`; do not expose the fragment URL in a response or tool argument.
@@ -34,7 +34,7 @@ Use `scripts/studio-client.mjs`; it defaults to `https://se-dev-kit.vercel.app` 
 
 ## Local operation rules
 
-Invoke a pinned CLI, never an unpinned remote package: the consumer's locked dependency through `npm exec -- se-widget-studio` when the widget declares it, or a reviewed Studio checkout built with `npm run build:engine` and run as `node <checkout>/dist/cli/index.js`. Check current `--help`, then run `doctor` and `validate` before browser/media work. Dry-run recipe matrices before rendering. Never install a browser, FFmpeg, codecs, or fonts without explicit authorization. Require `--force` before replacing exact outputs, and never recursively clean a consumer directory.
+Invoke a pinned CLI, never an unpinned remote package: the consumer's locked dependency through `npm exec -- se-widget-studio` when the widget declares it, or a reviewed Studio checkout prepared with `npm ci && npm run build:engine` and run as `node <checkout>/dist/cli/index.js`. Check current `--help`, then run `doctor` and `validate` before browser/media work. Dry-run recipe matrices before rendering. Never install a browser, FFmpeg, codecs, or fonts without explicit authorization. Require `--force` before replacing exact outputs, and never recursively clean a consumer directory.
 
 ## Completion evidence
 
