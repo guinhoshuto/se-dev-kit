@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
+import {realpathSync} from 'node:fs';
 import {lstat, mkdir, readFile, realpath, writeFile} from 'node:fs/promises';
 import {homedir, platform} from 'node:os';
 import {basename, dirname, extname, isAbsolute, posix, relative, resolve} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath} from 'node:url';
 
 const DEFAULT_ORIGIN = 'https://se-dev-kit.vercel.app';
 const JSON_LIMIT = 4_000_000;
@@ -376,6 +377,17 @@ export async function main(argv = process.argv.slice(2)) {
   fail(`Unknown command ${command}. Run with --help.`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Node resolves symlinks for the ESM entry point, so import.meta.url is the real path while
+// argv[1] keeps the linked path an installed skill is invoked through. Compare real paths.
+function isEntryPoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   main().catch(error => {console.error(error instanceof Error ? error.message : 'Studio operation failed.'); process.exitCode = 1;});
 }

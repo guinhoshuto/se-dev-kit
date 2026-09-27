@@ -44,11 +44,13 @@ Linked installations stop working if the repository is moved or removed. Use the
 
 ## Verify
 
-Confirm that the installed entry point and hosted client are present:
+The installer runs the installed hosted client with `--help` and removes the installation if it does not print its usage. To check an existing installation, run the client through the installed path; it must print `Usage:`:
 
 ```bash
 test -f "${CODEX_HOME:-$HOME/.codex}/skills/se-widget-studio/SKILL.md"
-test -x "${CODEX_HOME:-$HOME/.codex}/skills/se-widget-studio/scripts/studio-client.mjs"
+node "${CODEX_HOME:-$HOME/.codex}/skills/se-widget-studio/scripts/studio-client.mjs" --help
 ```
+
+A file-existence check is not enough: the client must also run when it is reached through a linked skill directory.
 
 The skill uses the deployed Studio for hosted workflows and the repository package for local workflows. It never embeds consumer widget code in the skill itself.

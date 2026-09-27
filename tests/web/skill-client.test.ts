@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {createServer} from 'node:http';
-import {mkdtemp, mkdir, readFile, rm, stat, writeFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {promisify} from 'node:util';
@@ -100,4 +100,14 @@ test('hosted skill client exposes complete English command help', async () => {
   const {stdout} = await exec(process.execPath, [script, '--help']);
   for (const command of ['import', 'status', 'open-editor', 'pull', 'push', 'run']) assert.match(stdout, new RegExp(`\\b${command}\\b`));
   assert.match(stdout, /Capabilities are never printed/);
+});
+
+test('hosted skill client runs when invoked through a linked skill directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-link-'));
+  try {
+    const linked = join(root, 'se-widget-studio');
+    await symlink(resolve('skills/se-widget-studio'), linked, 'dir');
+    const {stdout} = await exec(process.execPath, [join(linked, 'scripts/studio-client.mjs'), '--help']);
+    assert.match(stdout, /^Usage:/m);
+  } finally {await rm(root, {recursive: true, force: true});}
 });

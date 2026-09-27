@@ -11,11 +11,14 @@ import {
   stat,
   symlink,
 } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir, platform } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
+const execFileAsync = promisify(execFile);
 const skillsRoot = dirname(fileURLToPath(import.meta.url));
 const skillNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -181,6 +184,24 @@ function defaultSkillsDirectory() {
   return join(homedir(), ".codex", "skills");
 }
 
+// Run the hosted client through the installed path, not the source path: a file that exists
+// but does nothing when reached through a link or copy would otherwise pass as installed.
+async function verifyInstalledSkill(target) {
+  const client = join(target, "scripts", "studio-client.mjs");
+  if (!(await pathExists(client))) {
+    return;
+  }
+  let stdout = "";
+  try {
+    ({ stdout } = await execFileAsync(process.execPath, [client, "--help"], { timeout: 15_000 }));
+  } catch {
+    throw new Error(`The installed hosted client failed to run: ${client}`);
+  }
+  if (!/^Usage:/m.test(stdout)) {
+    throw new Error(`The installed hosted client printed no usage: ${client}`);
+  }
+}
+
 async function installSkills({ link, selectedSkills, skillsDir }) {
   if (!isAbsolute(skillsDir)) {
     throw new Error("The skills directory must be an absolute path.");
@@ -233,6 +254,7 @@ async function installSkills({ link, selectedSkills, skillsDir }) {
       await rename(stagingPath, plan.target);
       staged.pop();
       installed.push(plan.target);
+      await verifyInstalledSkill(plan.target);
     }
   } catch (error) {
     await Promise.allSettled([
