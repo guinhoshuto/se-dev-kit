@@ -77,6 +77,15 @@ node "$SKILL_DIR/scripts/studio-client.mjs" run \
 
 The output directory must not exist. The command never cleans or overwrites it. It stops on a terminal job status, verifies every download against server metadata, and writes a capability-free `job.json` report beside the artifacts. A job has a ten-minute execution budget. Do not submit a replacement job merely because polling was interrupted; use `status` to find the accepted job first.
 
+## Plan a large batch
+
+Hosted mode is the default even for marketing batches. Plan them inside the boundaries below instead of switching to local mode:
+
+- Keep each video at 15 seconds or less (Etsy listing videos also accept 5–15 seconds) and each render recipe at four video variants or fewer; put further variants in further recipes.
+- Submit one job at a time per project and wait for its terminal status before the next one.
+- Use `scene:<id>` or `video:<id>` for a single still or video, and a recipe ID for a matrix.
+- Give every job its own new output directory.
+
 ## Current hosted boundaries
 
 - Complete JSON request/preview response: 4 MB.
@@ -87,3 +96,8 @@ The output directory must not exist. The command never cleans or overwrites it. 
 - The hosted runtime blocks external network access while the widget runs. Dependencies must be captured during preparation.
 
 These are application limits, not guaranteed provider quota. Do not provision paid capacity as an implicit retry.
+
+## Known gaps
+
+- Import captures stylesheets, scripts, and `url()`/`@import` references written in the widget's HTML and CSS, including Google Fonts written there. Resources requested at runtime are not captured: a Google Fonts stylesheet swapped in by JavaScript (for example a `setFont()` driven by a `googleFont` field) or a script injected from a CDN fails, and text falls back to another font. Report this instead of editing the widget or vendoring fonts.
+- StreamElements `{{field}}` placeholders are not substituted. A placeholder inside an external URL is fetched literally, and an unquoted placeholder in CSS fails to parse; either blocks the revision. In HTML and JavaScript a placeholder stays as literal text.

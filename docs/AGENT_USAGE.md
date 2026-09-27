@@ -30,7 +30,7 @@ The installer copies into `$CODEX_HOME/skills` or `~/.codex/skills` by default, 
 
 For hosted requests, the client can import either supported production layout, explicitly upload declared local assets, store the editing capability in a private mode-0600 access bundle, open the editor, pull/push complete revisions with optimistic concurrency, run tests/renders, and download hash-verified artifacts. It defaults to `https://se-dev-kit.vercel.app`; use `--origin` for a different reviewed deployment. No package installation is required for the hosted client beyond the supported Node.js runtime.
 
-For local requests, the skill still requires the exact package dependency and lockfile above.
+Hosted mode is the skill's default for widget work. Local requests are limited to developing SE Widget Studio itself or an explicitly requested local render; they use the exact package dependency above when the consumer declares it, or a reviewed Studio checkout built with `npm run build:engine` and run as `node <checkout>/dist/cli/index.js`.
 
 Before editing or capturing, agents should inspect repository instructions and the working tree, run `doctor` and `validate`, dry-run recipe matrices, and report exact output paths. `--allow-large-matrix` and `--allow-large-render` require deliberate workload review; agents must report the variant, frame, and target totals before using them. They must not install a browser, FFmpeg, codecs, or fonts without explicit user authorization.
 

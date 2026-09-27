@@ -9,8 +9,8 @@ Operate the shared Studio instead of building a widget-specific preview runtime.
 
 ## Choose the mode
 
-- Use **hosted mode** when the user asks to upload a widget, create or open an editing link, manipulate a saved project, run remote smoke tests, or generate downloadable images/videos. Read [references/hosted-workflow.md](references/hosted-workflow.md) before the first hosted mutation.
-- Use **local mode** when working inside a widget checkout, iterating without upload, validating a config, or rendering directly to a local output directory. Read [references/local-workflow.md](references/local-workflow.md).
+- Use **hosted mode** by default for every widget task: upload, editing links, saved projects, previews, smoke tests, screenshots, videos, and marketing assets. Read [references/hosted-workflow.md](references/hosted-workflow.md) before the first hosted mutation, including its limits and known gaps. Split a large batch as that reference describes instead of switching to local mode.
+- Use **local mode** only to develop or debug SE Widget Studio itself from a reviewed checkout, or when the user explicitly asks for a local render. Read [references/local-workflow.md](references/local-workflow.md).
 - Read [references/catalog-authoring.md](references/catalog-authoring.md) when themes, fixtures, scenes, scenarios, recipes, crop, camera, matrix variants, or video settings must be created or changed.
 
 ## Preserve the source contract
@@ -34,7 +34,7 @@ Use `scripts/studio-client.mjs`; it defaults to `https://se-dev-kit.vercel.app` 
 
 ## Local operation rules
 
-Use the installed, lockfile-pinned package through `npm exec -- se-widget-studio`; never run an unpinned remote package. Check current `--help`, then run `doctor` and `validate` before browser/media work. Dry-run recipe matrices before rendering. Never install a browser, FFmpeg, codecs, or fonts without explicit authorization. Require `--force` before replacing exact outputs, and never recursively clean a consumer directory.
+Invoke a pinned CLI, never an unpinned remote package: the consumer's locked dependency through `npm exec -- se-widget-studio` when the widget declares it, or a reviewed Studio checkout built with `npm run build:engine` and run as `node <checkout>/dist/cli/index.js`. Check current `--help`, then run `doctor` and `validate` before browser/media work. Dry-run recipe matrices before rendering. Never install a browser, FFmpeg, codecs, or fonts without explicit authorization. Require `--force` before replacing exact outputs, and never recursively clean a consumer directory.
 
 ## Completion evidence
 
