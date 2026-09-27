@@ -40,39 +40,124 @@ export function isPublicAddress(raw: string): boolean {
   return first !== 0x2002 && first !== 0x3fff && !(first === 0x2001 && (second <= 0x1ff || second === 0xdb8));
 }
 
-export async function fetchPublicAsset(input: string, redirects = 0, deadline = Date.now() + 20_000): Promise<{body: Buffer; contentType: string}> {
-  if (redirects > 4) throw new Error('Remote asset exceeded the redirect limit.');
-  const url = new URL(input);
-  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) throw new Error('Remote assets require public HTTPS URLs without credentials or custom ports.');
-  const hostname = url.hostname.replace(/^\[|\]$/g, '');
-  if (Date.now() >= deadline) throw new Error('Asset preparation exceeded its time budget.');
-  let dnsTimer: ReturnType<typeof setTimeout> | undefined;
-  const answers = isIP(hostname) ? [{address: hostname, family: isIP(hostname)}] : await Promise.race([lookup(hostname, {all: true}), new Promise<never>((_resolve, reject) => { dnsTimer = setTimeout(() => reject(new Error('Remote DNS lookup timed out.')), Math.min(5000, deadline - Date.now())); })]).finally(() => { if (dnsTimer) clearTimeout(dnsTimer); });
-  if (!answers.length || answers.some(answer => !isPublicAddress(answer.address))) throw new Error('Remote asset resolved to a private or special-use address.');
-  const pinned = answers[0]!;
-  return new Promise((resolve, reject) => {
-    const finish = (error?: Error, value?: {body: Buffer; contentType: string}) => { clearTimeout(deadlineTimer); if (error) reject(error); else if (value) resolve(value); };
-    const req = request(url, {method: 'GET', family: pinned.family, headers: {'User-Agent': 'SE-Widget-Studio/0.2', Accept: '*/*'}, lookup: (_host, _options, callback) => callback(null, pinned.address, pinned.family)}, response => {
-      const status = response.statusCode ?? 0;
-      if (status >= 300 && status < 400 && response.headers.location) {
-        response.destroy();
-        clearTimeout(deadlineTimer);
-        fetchPublicAsset(new URL(response.headers.location, url).href, redirects + 1, deadline).then(resolve, reject);
-        return;
-      }
-      if (status !== 200) { response.destroy(); finish(new Error(`Remote asset returned HTTP ${status}.`)); return; }
-      if (Number(response.headers['content-length'] ?? 0) > MAX_FILE_BYTES) { response.destroy(); finish(new Error('Remote asset exceeds the 10 MB per-file limit.')); return; }
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > MAX_FILE_BYTES) { response.destroy(new Error('Remote asset exceeds the 10 MB per-file limit.')); } else chunks.push(chunk); });
-      response.on('error', finish);
-      response.on('end', () => finish(undefined, {body: Buffer.concat(chunks), contentType: String(response.headers['content-type'] ?? 'application/octet-stream').split(';')[0]!}));
-    });
-    const deadlineTimer = setTimeout(() => req.destroy(new Error('Asset preparation exceeded its time budget.')), Math.max(1, deadline - Date.now()));
-    req.setTimeout(15_000, () => req.destroy(new Error('Remote asset timed out.')));
-    req.on('error', finish);
-    req.end();
+export interface PublicAddress {address: string; family: 4 | 6}
+/** Resolves a hostname to every address it has. Injectable so tests never touch DNS. */
+export type PublicLookup = (hostname: string) => Promise<PublicAddress[]>;
+export interface PublicTransportResponse {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  body: AsyncIterable<Uint8Array>;
+  close(): void;
+}
+/**
+ * One GET to one already-validated address. It must never resolve the hostname again, and it
+ * rejects only when no response arrived (connection-level failure), so the caller may try the
+ * next address. Injectable so tests never touch the network.
+ */
+export type PublicTransport = (request: {url: URL; address: PublicAddress; headers: Record<string, string>; signal: AbortSignal; idleTimeoutMs: number}) => Promise<PublicTransportResponse>;
+export interface FetchPublicAssetOptions {
+  /** Redirects followed before failing. Default 4. `0` makes every 3xx an error. */
+  maxRedirects?: number;
+  /** Absolute epoch milliseconds for the whole fetch, redirects and retries included. Default now + 20 s. */
+  deadline?: number;
+  /** Replaces the default request headers. Client headers are never forwarded. */
+  headers?: Record<string, string>;
+  /** Maximum body size. Default 10 MB. */
+  maxBytes?: number;
+  /** Exact lowercase hostnames allowed on every hop. Default: any public host. */
+  allowedHosts?: readonly string[];
+  /** Try IPv4 answers before IPv6 ones. */
+  preferIpv4?: boolean;
+  lookup?: PublicLookup;
+  transport?: PublicTransport;
+}
+export interface PublicAsset {body: Buffer; contentType: string; status: number; url: string; address: string}
+export type PublicFetchFailure = 'status' | 'redirect' | 'size' | 'truncated' | 'network' | 'deadline' | 'address' | 'url';
+/** Typed transport failure. `status` is set when upstream answered with a non-200 status. */
+export class PublicFetchError extends Error {
+  constructor(readonly kind: PublicFetchFailure, message: string, readonly status?: number) { super(message); this.name = 'PublicFetchError'; }
+}
+
+const DEFAULT_FETCH_HEADERS = {'User-Agent': 'SE-Widget-Studio/0.2', Accept: '*/*'};
+const IDLE_TIMEOUT_MS = 15_000;
+
+const systemLookup: PublicLookup = async hostname => (await lookup(hostname, {all: true})).map(answer => ({address: answer.address, family: answer.family === 6 ? 6 : 4}));
+
+const httpsTransport: PublicTransport = ({url, address, headers, signal, idleTimeoutMs}) => new Promise((resolve, reject) => {
+  const req = request(url, {method: 'GET', family: address.family, headers, signal, lookup: (_host, _options, callback) => callback(null, address.address, address.family)}, response => {
+    resolve({status: response.statusCode ?? 0, headers: response.headers, body: response, close: () => response.destroy()});
   });
+  req.setTimeout(idleTimeoutMs, () => req.destroy(new PublicFetchError('network', 'Remote asset timed out.')));
+  req.on('error', reject);
+  req.end();
+});
+
+const header = (headers: PublicTransportResponse['headers'], name: string): string | undefined => { const value = headers[name]; return Array.isArray(value) ? value[0] : value; };
+
+/**
+ * Bounded GET of a public HTTPS resource. Every DNS answer must be public; the validated addresses
+ * are tried in turn (a connection failure moves to the next one), and the one used is returned.
+ * `deadline` bounds the whole fetch; the 15 s socket timeout bounds inactivity.
+ */
+export async function fetchPublicAsset(input: string, options: FetchPublicAssetOptions = {}, redirects = 0): Promise<PublicAsset> {
+  const {maxRedirects = 4, deadline = Date.now() + 20_000, maxBytes = MAX_FILE_BYTES} = options;
+  const tooLarge = maxBytes === MAX_FILE_BYTES ? 'Remote asset exceeds the 10 MB per-file limit.' : `Remote asset exceeds the ${maxBytes}-byte limit.`;
+  if (redirects > maxRedirects) throw new PublicFetchError('redirect', maxRedirects === 0 ? 'Remote asset redirected; redirects are not allowed.' : 'Remote asset exceeded the redirect limit.');
+  const url = new URL(input);
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) throw new PublicFetchError('url', 'Remote assets require public HTTPS URLs without credentials or custom ports.');
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  if (options.allowedHosts && !options.allowedHosts.includes(hostname.toLowerCase())) throw new PublicFetchError('url', `Remote host ${hostname} is not allowed here.`);
+  if (Date.now() >= deadline) throw new PublicFetchError('deadline', 'Asset preparation exceeded its time budget.');
+  let dnsTimer: ReturnType<typeof setTimeout> | undefined;
+  const literal = isIP(hostname);
+  const answers: PublicAddress[] = literal ? [{address: hostname, family: literal === 6 ? 6 : 4}] : await Promise.race([(options.lookup ?? systemLookup)(hostname), new Promise<never>((_resolve, reject) => { dnsTimer = setTimeout(() => reject(new PublicFetchError('network', 'Remote DNS lookup timed out.')), Math.min(5000, deadline - Date.now())); })]).finally(() => { if (dnsTimer) clearTimeout(dnsTimer); });
+  if (!answers.length || answers.some(answer => !isPublicAddress(answer.address))) throw new PublicFetchError('address', 'Remote asset resolved to a private or special-use address.');
+  const ordered = options.preferIpv4 ? [...answers.filter(answer => answer.family === 4), ...answers.filter(answer => answer.family !== 4)] : answers;
+  const controller = new AbortController();
+  const deadlineError = new PublicFetchError('deadline', 'Asset preparation exceeded its time budget.');
+  const deadlineTimer = setTimeout(() => controller.abort(deadlineError), Math.max(1, deadline - Date.now()));
+  try {
+    let response: PublicTransportResponse | undefined;
+    let used: PublicAddress | undefined;
+    let lastError: unknown;
+    for (const address of ordered) {
+      if (controller.signal.aborted) break;
+      try { response = await (options.transport ?? httpsTransport)({url, address, headers: {...(options.headers ?? DEFAULT_FETCH_HEADERS)}, signal: controller.signal, idleTimeoutMs: IDLE_TIMEOUT_MS}); used = address; break; }
+      catch (error) { lastError = error; }
+    }
+    if (controller.signal.aborted) { response?.close(); throw deadlineError; }
+    if (!response || !used) throw lastError instanceof PublicFetchError ? lastError : new PublicFetchError('network', `Remote asset could not be reached: ${lastError instanceof Error ? lastError.message : 'connection failed'}.`);
+    const status = response.status;
+    const location = header(response.headers, 'location');
+    if (status >= 300 && status < 400 && location) {
+      response.close();
+      if (maxRedirects === 0) throw new PublicFetchError('redirect', 'Remote asset redirected; redirects are not allowed.', status);
+      clearTimeout(deadlineTimer);
+      return await fetchPublicAsset(new URL(location, url).href, {...options, deadline}, redirects + 1);
+    }
+    if (status !== 200) { response.close(); throw new PublicFetchError('status', `Remote asset returned HTTP ${status}.`, status); }
+    const declared = header(response.headers, 'content-length');
+    const expected = declared === undefined ? undefined : Number(declared);
+    if (expected !== undefined && expected > maxBytes) { response.close(); throw new PublicFetchError('size', tooLarge); }
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    try {
+      for await (const chunk of response.body) {
+        if (controller.signal.aborted) throw deadlineError;
+        bytes += chunk.byteLength;
+        if (bytes > maxBytes) throw new PublicFetchError('size', tooLarge);
+        chunks.push(Buffer.from(chunk));
+      }
+    } catch (error) {
+      response.close();
+      if (error instanceof PublicFetchError) throw error;
+      if (controller.signal.aborted) throw deadlineError;
+      throw new PublicFetchError('network', error instanceof Error ? error.message : 'Remote asset stream failed.');
+    }
+    if (controller.signal.aborted) throw deadlineError;
+    if (expected !== undefined && Number.isSafeInteger(expected) && bytes !== expected) throw new PublicFetchError('truncated', `Remote asset body has ${bytes} bytes but Content-Length declared ${expected}.`);
+    return {body: Buffer.concat(chunks), contentType: String(header(response.headers, 'content-type') ?? 'application/octet-stream').split(';')[0]!, status, url: url.href, address: used.address};
+  } finally { clearTimeout(deadlineTimer); }
 }
 
 export function assertSafeSnapshot(snapshot: WidgetSnapshot, overrides?: JsonValue): void {
@@ -157,7 +242,7 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
     if (asset.uploadId) throw new Error('Uploaded assets must be resolved before preparation.');
     if (asset.url !== undefined && asset.content !== undefined) throw new Error('An asset must use either a URL or content, not both.');
     if (asset.url) {
-      const fetched = await fetchPublicAsset(asset.url, 0, deadline);
+      const fetched = await fetchPublicAsset(asset.url, {deadline});
       add(asset.path, fetched.body, asset.contentType ?? fetched.contentType, asset.url);
     } else if (asset.content !== undefined) {
       if (asset.encoding === 'base64' && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.content)) throw new Error('Invalid base64 asset content.');
@@ -175,7 +260,7 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
       const existing = remotePaths.get(url);
       if (existing) path = existing;
       else {
-        const fetched = await fetchPublicAsset(url, 0, deadline);
+        const fetched = await fetchPublicAsset(url, {deadline});
         const originalExtension = posix.extname(new URL(url).pathname).toLowerCase();
         const extension = mimeTypes[originalExtension] ? originalExtension : Object.entries(mimeTypes).find(([, type]) => type === fetched.contentType)?.[0];
         if (!extension) throw new Error('Remote dependency has an unsupported content type.');

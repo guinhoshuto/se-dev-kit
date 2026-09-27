@@ -109,3 +109,39 @@ export async function mutateJson<T>(store:ObjectStore,key:string,initial:T,chang
   }
   throw new HttpError(503,'Concurrent requests exceeded the retry limit. Please retry.');
 }
+
+/**
+ * In-memory LRU with single-flight for write-once keys (content-addressed objects, font index
+ * entries). `BlobStore.get` always reads with `useCache: false`, so repeated reads of immutable
+ * objects would otherwise pay a Blob round trip each time. Only present objects are cached, since a
+ * missing key may be written later. Callers still verify content hashes on every read.
+ */
+export class ImmutableReadCache {
+  private readonly entries=new Map<string,Uint8Array>();
+  private readonly flights=new Map<string,Promise<Uint8Array|null>>();
+  private readonly stores=new WeakMap<ObjectStore,number>();
+  private nextStore=0;
+  private size=0;
+  constructor(readonly maxBytes=64*1024*1024,readonly maxEntries=512) {}
+  private id(store:ObjectStore):number {let id=this.stores.get(store);if(id===undefined){id=this.nextStore++;this.stores.set(store,id);}return id;}
+  get bytes():number {return this.size;}
+  get count():number {return this.entries.size;}
+  async read(store:ObjectStore,key:string):Promise<Uint8Array|null> {
+    const slot=`${this.id(store)}:${key}`;
+    const hit=this.entries.get(slot);
+    if(hit){this.entries.delete(slot);this.entries.set(slot,hit);return hit;}
+    const pending=this.flights.get(slot);
+    if(pending)return pending;
+    const flight=store.get(key).then(value=>{
+      if(!value)return null;
+      const body=value.body;
+      if(body.byteLength<=this.maxBytes){
+        this.entries.set(slot,body);this.size+=body.byteLength;
+        for(const [oldest,old] of this.entries){if(this.size<=this.maxBytes&&this.entries.size<=this.maxEntries)break;this.entries.delete(oldest);this.size-=old.byteLength;}
+      }
+      return body;
+    }).finally(()=>{this.flights.delete(slot);});
+    this.flights.set(slot,flight);
+    return flight;
+  }
+}

@@ -4,6 +4,7 @@ import {ConflictError,HttpError} from './errors';
 import {parseSnapshot,safeId} from './schema';
 import {mutateJson,readJson,writeJson} from './storage';
 import {prepareSnapshot} from './importer';
+import {copyFontLock} from './fonts';
 
 const hash=(text:string)=>createHash('sha256').update(text).digest('hex');
 const projectKey=(id:string)=>`projects/${safeId(id)}/project.json`;
@@ -80,6 +81,8 @@ export async function restoreProject(store:ObjectStore,id:string,token:string,ex
   if(!expected)throw new HttpError(428,'If-Match is required for restore.');if(expected!==etag)throw new ConflictError();
   const historical=await getRevision(store,id,revisionId);
   const revision={...structuredClone(historical),id:randomUUID(),createdAt:new Date().toISOString()};
+  // Copy the font lock before the revision becomes visible, so the restored revision replays the same fonts.
+  await copyFontLock(store,id,historical.id,revision.id);
   await writeJson(store,revisionKey(id,revision.id),revision);
   const next={...project,name:revision.snapshot.name,revisionId:revision.id,updatedAt:revision.createdAt};
   const result=await writeJson(store,projectKey(id),next,{ifMatch:etag});return projectView(store,next,result.etag);

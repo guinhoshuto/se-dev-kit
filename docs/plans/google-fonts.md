@@ -2,10 +2,10 @@
 
 | | |
 | --- | --- |
-| Status | **In progress. Stage 1 done (2026-09-27): `src/runtime/google-fonts-url.ts`, `src/fonts/css.ts` and their unit tests; the frame server route waits for the stage that makes `frame.ts` import the module.** |
+| Status | **In progress. Stage 1 done (2026-09-27): `src/runtime/google-fonts-url.ts`, `src/fonts/css.ts` and their unit tests; the frame server route waits for the stage that makes `frame.ts` import the module. Stage 2 done (2026-09-27): amendment applied, bounded transport, `lib/fonts.ts` cache, budget and locks, with web tests on an injected upstream.** |
 | Decision | 2026-09-26, by the repository owner |
 | Written | 2026-09-27, against `main` at `ae5fd9a`. Every `file:line` below was rechecked against that commit. Uncommitted parallel work (sample media) was changing `lib/importer.ts`, `lib/jobs.ts`, `lib/model.ts`, `lib/preview.ts`, `src/capture/renderer.ts`, `src/runtime/frame.ts`, `src/scenarios/runner.ts`, `src/server/server.ts`, `src/tutorial/timeline.ts`, `components/widget-preview.tsx` and `scripts/job-worker.mjs` at the time, so recheck line numbers in those files before implementing. |
-| Gate | The `AGENTS.md` amendment in [section 6](#6-proposed-agentsmd-amendment-pending-user-approval) is **PENDING USER APPROVAL**. Stage 1 has no network code and can start now. Stage 2 and everything after it wait for the approval. |
+| Gate | The `AGENTS.md` amendment in [section 6](#6-agentsmd-amendment-approved-2026-09-27) was **approved by the owner on 2026-09-27** and applied in the stage 2 change. |
 | Estimate | About 16 working days in 8 stages. Each stage ships on its own. The fixes from the adversarial review are folded into the stages and were not re-estimated. |
 
 ## 1. Context
@@ -179,7 +179,18 @@ Only stage 6 turns off capture into `_import/`, so no stage regresses what alrea
 
 ### Stage 2: AGENTS.md amendment, bounded transport, content-addressed cache. 2 days
 
-**Gate:** the amendment in section 6 must be approved first. It lands in this PR, before any code that fetches.
+**Gate:** the amendment in section 6 must be approved first. It lands in this PR, before any code that fetches. Approved 2026-09-27.
+
+**Status: done (2026-09-27).** Where the code differs from the text below:
+
+- `fetchPublicAsset(input, options, redirects)` takes the options object; the two import call sites now pass `{deadline}` and keep their defaults (4 redirects, `SE-Widget-Studio/0.2`, 10 MB). Trying the next validated address after a connection failure and the `Content-Length` check apply to every caller: they only turn a connection failure into a success, or refuse a truncated body. IPv4-first ordering is opt-in (`preferIpv4`), used by the font path only, so existing callers keep DNS order. DNS and the HTTPS request are injectable (`lookup`, `transport`), which is how the tests avoid the network.
+- The budget counts upstream GETs per UTC day: `render` 3000, `preview` 1500 (`FONT_BUDGET_LIMITS`, to calibrate in production). A stylesheet miss costs two reservations, not one: the stylesheet, then its eager files as one batch, because the file count is unknown until the CSS arrives. `reserveFontBudget()` is exported for the stage 5 refill pass.
+- 408 is treated as transient like 429 and 5xx: never cached.
+- The lock cap is 512 URLs per revision (`FONT_LOCK_MAX_ENTRIES`). A resolve that would exceed it returns `unavailable` with reason `lock`. When given a `lock`, `resolveGoogleFont()` replays the lock first (a recorded 4xx stays, independent of the negative TTL) and records `ok` and upstream 4xx outcomes; local 400s (placeholders) and `unavailable` are never pinned.
+- Storage failures are thrown rather than reported as `unavailable`: they are not an upstream condition.
+- The LRU is `ImmutableReadCache` in `lib/storage.ts` (64 MB, 512 entries, per store); single-flight covers both immutable reads and whole resolves. Objects are re-hashed on every read, LRU hits included.
+- `cssForPreview()` moves to stage 6 with the rest of the preview. `PreparedSnapshot.googleFonts` exists but nothing fills it until the stage 3 prewarm.
+- Line numbers cited below are from `ae5fd9a`; `fetchPublicAsset` was at `lib/importer.ts:43-76` when this stage started.
 
 **Files**
 
@@ -609,9 +620,9 @@ Only stage 6 turns off capture into `_import/`, so no stage regresses what alrea
 
 **Tests.** Review the docs against the code. Run `npm run typecheck`, `npm test` and `npm run build` (`AGENTS.md:14`), then the full `verify-hosted` in production.
 
-## 6. Proposed AGENTS.md amendment (PENDING USER APPROVAL)
+## 6. AGENTS.md amendment (approved 2026-09-27)
 
-**Status: PENDING USER APPROVAL. Do not apply until the owner approves the exact text.** It replaces `AGENTS.md:10-11` in the stage 2 PR.
+**Status: Approved 2026-09-27 by the owner, and applied in the stage 2 change.** It replaced `AGENTS.md:10-11`.
 
 This wording includes the review's corrections. The earlier draft said "preview pages may reach only…", but a `sandbox="allow-scripts"` iframe can still navigate itself, and the CSP does not block navigation. It also called the whole cache never-overwritten while the negative cache is overwritable.
 

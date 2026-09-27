@@ -14,11 +14,21 @@ export interface WidgetSnapshot {
   assets: AssetInput[];
 }
 export interface StoredAsset {path: string; key: string; contentType: string; bytes: number; sha256: string; sourceUrl?: string}
-/** A derived, offline-ready snapshot. Original source remains in Revision.snapshot. */
+/**
+ * A derived snapshot. Original source remains in Revision.snapshot. Captured assets are
+ * offline-ready; Google Fonts come from the content-addressed font cache and are pinned per
+ * revision by its font lock (`projects/<id>/fontlocks/<revisionId>/`).
+ */
 export interface PreparedSnapshot {
   snapshot: WidgetSnapshot; assets: StoredAsset[]; warnings: string[];
   /** Built-in sample references used by the revision, pinned to the SHA-256 of the deployed bytes at preparation. */
   sampleMedia?: Record<string, string>;
+  /**
+   * Google Fonts cache namespace pinned for this revision, so bumping the global epoch or
+   * User-Agent never changes old revisions. `static` lists the canonical stylesheet URLs known
+   * without running the widget.
+   */
+  googleFonts?: {epoch: string; userAgent: string; static: string[]};
 }
 export interface ProjectRecord {id: string; name: string; revisionId: string; accessHash: string; createdAt: string; updatedAt: string}
 export interface Revision {id: string; projectId: string; createdAt: string; snapshot: WidgetSnapshot; status: 'preparing' | 'ready' | 'blocked'; diagnostics: string[]; prepared?: PreparedSnapshot}
