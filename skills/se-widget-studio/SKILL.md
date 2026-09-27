@@ -36,7 +36,7 @@ Use `scripts/studio-client.mjs`; it defaults to `https://se-dev-kit.vercel.app` 
 
 ## Local operation rules
 
-Invoke a pinned CLI, never an unpinned remote package: the consumer's locked dependency through `npm exec -- se-widget-studio` when the widget declares it, or a reviewed Studio checkout prepared with `npm ci && npm run build:engine` and run as `node <checkout>/dist/cli/index.js`. Check current `--help`, then run `doctor` and `validate` before browser/media work. Dry-run recipe matrices before rendering. Never install a browser, FFmpeg, codecs, or fonts without explicit authorization. Require `--force` before replacing exact outputs, and never recursively clean a consumer directory.
+Invoke a pinned CLI, never an unpinned remote package: the consumer's locked dependency through `npm exec -- se-widget-studio` when the widget declares it, or a reviewed Studio checkout prepared with `npm ci && npm run build:engine` and run as `node <checkout>/dist/cli/index.js`. Check current `--help`, then run `doctor` and `validate` before browser/media work. Dry-run recipe matrices before rendering and report their frame, file, and disk estimates. Never install a browser, FFmpeg, codecs, or fonts without explicit authorization. Require `--force` before replacing exact outputs, and never recursively clean a consumer directory.
 
 ## Completion evidence
 

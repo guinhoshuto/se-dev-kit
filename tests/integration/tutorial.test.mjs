@@ -29,11 +29,20 @@ test("tutorial mode records the widget inside the editor replica with scripted U
   const result = await renderRecipe(project, recipe, {
     outputRoot,
     browserPath: detection.executablePath,
-    allowIntermediate: true
+    allowIntermediate: true,
+    // The 1.2 B/px upper bound puts this full-HD run near 160 MB; the test must not depend on this machine's free space.
+    allowLowDisk: true
   });
   assert.ok(result.status === "final" || result.status === "intermediate" || result.status === "unvalidated");
   const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));
-  const frames = JSON.parse(await readFile(join(outputRoot, manifest.artifacts[0].frames, "frames.json"), "utf8"));
+  const entry = manifest.artifacts[0];
+  const frames = entry.frameSequence;
+  assert.equal(entry.framesRetained, result.status !== "final", "frames are discarded only after a validated encode");
+  if (entry.framesRetained) {
+    assert.deepEqual(JSON.parse(await readFile(join(outputRoot, entry.frames, "frames.json"), "utf8")), frames);
+  } else {
+    assert.equal(entry.frames, null);
+  }
   assert.equal(frames.frames.length, Math.round((recipe.outputs.video.durationMs * 2) / 1000));
   assert.equal(frames.width, 1920);
   assert.equal(frames.height, 1080);

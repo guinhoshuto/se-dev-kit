@@ -2,8 +2,8 @@ export class StudioError extends Error {
   readonly code: string;
   readonly hint: string | undefined;
 
-  constructor(code: string, message: string, hint?: string) {
-    super(message);
+  constructor(code: string, message: string, hint?: string, options?: {cause?: unknown}) {
+    super(message, options);
     this.name = "StudioError";
     this.code = code;
     this.hint = hint;

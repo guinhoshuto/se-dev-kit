@@ -1,4 +1,4 @@
-import {readFile} from "node:fs/promises";
+import {lstat, readFile, unlink} from "node:fs/promises";
 import {dirname, relative, resolve, sep} from "node:path";
 import {fileURLToPath} from "node:url";
 import type {Browser, Page, PageScreenshotOptions} from "playwright-core";
@@ -11,8 +11,8 @@ import type {
   SceneDefinition,
   VideoDefinition
 } from "../types.js";
-import {StudioError} from "../shared/errors.js";
-import {assertSafeOutputRoot, ensureOutputDirectory} from "../shared/paths.js";
+import {StudioError, toErrorMessage} from "../shared/errors.js";
+import {assertOutputTarget, assertSafeOutputRoot, ensureOutputDirectory} from "../shared/paths.js";
 import {stableStringify} from "../shared/json.js";
 import {STUDIO_VERSION} from "../version.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
@@ -32,7 +32,26 @@ import {launchStudioBrowser} from "./browser.js";
 import {hashFile, hashJson, sha256} from "./hash.js";
 import {assertRecipeMatrixCardinality, expandRecipe} from "./matrix.js";
 import {detectMediaTooling, encodeFrameSequence, type MediaTooling} from "./media.js";
-import {atomicWriteFile, createAtomicTarget, preflightOutputTargets} from "./output.js";
+import {
+  atomicWriteFile,
+  createAtomicTarget,
+  discardFrameSequence,
+  preflightOutputTargets,
+  removeTemporaryFiles,
+  type TemporaryFiles
+} from "./output.js";
+import {
+  assertDiskBudget,
+  diskBudget,
+  diskFullError,
+  estimateRenderBytes,
+  isNoSpaceError,
+  measureFreeSpace,
+  type DiskBudget,
+  type RenderByteEstimate,
+  type RenderProgress,
+  type StatfsFunction
+} from "./disk.js";
 import {findExecutable, runExecutable} from "../validation/tools.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
 import {sampleMediaHashes as sampleMediaHashesFor} from "../config/sample-media.js";
@@ -53,6 +72,12 @@ export interface RenderOptions {
   headed?: boolean;
   ffmpegPath?: string;
   ffprobePath?: string;
+  /** Overrides `outputs.video.keepFrames`. */
+  keepFrames?: boolean;
+  /** Render even when the estimated peak exceeds the free-space budget. */
+  allowLowDisk?: boolean;
+  /** Replaces `statfs` from `node:fs/promises` when measuring free space; for tests. */
+  statfs?: StatfsFunction;
 }
 
 export interface RenderPlan {
@@ -63,6 +88,10 @@ export interface RenderPlan {
   count: number;
   totalFrames: number;
   totalTargets: number;
+  /** Estimated bytes per variant and in total, including the peak while frames exist. */
+  estimate: RenderByteEstimate;
+  /** Free space on the output volume against the estimated peak. */
+  disk: DiskBudget;
 }
 
 export interface RenderResult {
@@ -319,9 +348,10 @@ async function screenshotScene(
   page: Page,
   variant: CaptureVariant,
   outputRoot: string,
-  target: string
+  target: string,
+  temporaryFiles: TemporaryFiles
 ): Promise<void> {
-  const atomic = await createAtomicTarget(outputRoot, target);
+  const atomic = await createAtomicTarget(outputRoot, target, temporaryFiles);
   const format = variant.output.format ?? "png";
   const base: PageScreenshotOptions = {
     path: atomic.temporaryPath,
@@ -349,7 +379,8 @@ async function renderThumbnail(
   sourcePath: string,
   outputRoot: string,
   target: string,
-  thumbnail: NonNullable<RecipeDefinition["outputs"]>["thumbnails"]
+  thumbnail: NonNullable<RecipeDefinition["outputs"]>["thumbnails"],
+  temporaryFiles: TemporaryFiles
 ): Promise<void> {
   if (!thumbnail) return;
   const page = await browser.newPage({viewport: {width: thumbnail.width, height: thumbnail.height}, deviceScaleFactor: 1});
@@ -358,7 +389,7 @@ async function renderThumbnail(
     const data = (await readFile(sourcePath)).toString("base64");
     await page.setContent(`<!doctype html><style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}img{display:block;width:100%;height:100%;object-fit:${thumbnail.fit ?? "contain"}}</style><img alt="" src="data:image/${extension};base64,${data}">`);
     await page.locator("img").evaluate(async (image) => (image as HTMLImageElement).decode());
-    const atomic = await createAtomicTarget(outputRoot, target);
+    const atomic = await createAtomicTarget(outputRoot, target, temporaryFiles);
     const type = thumbnail.format ?? "png";
     await page.screenshot({path: atomic.temporaryPath, type, ...(type === "jpeg" ? {quality: 88} : {})});
     await atomic.commit();
@@ -371,7 +402,8 @@ async function renderContactSheet(
   browser: Browser,
   items: {id: string; path: string}[],
   outputRoot: string,
-  target: string
+  target: string,
+  temporaryFiles: TemporaryFiles
 ): Promise<void> {
   const width = 1600;
   const columns = Math.min(3, Math.max(1, items.length));
@@ -393,7 +425,7 @@ async function renderContactSheet(
       img{display:block;width:100%;height:100%;object-fit:contain}figcaption{padding:12px 2px 0;color:#aeb8c8;overflow-wrap:anywhere}
     </style><main>${cells.join("")}</main>`);
     await Promise.all(await page.locator("img").evaluateAll((images) => images.map((image) => (image as HTMLImageElement).decode())));
-    const atomic = await createAtomicTarget(outputRoot, target);
+    const atomic = await createAtomicTarget(outputRoot, target, temporaryFiles);
     await page.screenshot({path: atomic.temporaryPath, type: "png", fullPage: true});
     await atomic.commit();
   } finally {
@@ -409,7 +441,16 @@ async function renderVideoFrames(options: {
   video: VideoDefinition;
   outputRoot: string;
   recipeDirectory: string;
-}): Promise<{framesDirectory: string; framesManifest: string}> {
+  temporaryFiles: TemporaryFiles;
+  onFrame: (written: number) => void;
+}): Promise<{
+  framesDirectory: string;
+  framesManifest: string;
+  frameFiles: string[];
+  /** The exact frames.json content and text, so the manifest keeps them after the files are discarded. */
+  sequence: JsonObject;
+  sequenceText: string;
+}> {
   const tutorial: TutorialTimeline | undefined = options.video.mode === "tutorial"
     ? compileVariantTutorial(options.project, options.variant, options.video)
     : undefined;
@@ -478,8 +519,15 @@ async function renderVideoFrames(options: {
         );
       }
       const target = resolve(framesDirectory, `frame-${String(index).padStart(4, "0")}.png`);
-      await screenshotScene(opened.page, {...options.variant, output: {...options.variant.output, format: "png"}}, options.outputRoot, target);
+      await screenshotScene(
+        opened.page,
+        {...options.variant, output: {...options.variant.output, format: "png"}},
+        options.outputRoot,
+        target,
+        options.temporaryFiles
+      );
       frames.push({file: portable(framesDirectory, target), timestampMs, sha256: await hashFile(target)});
+      options.onFrame(frames.length);
     }
     const runtimeErrors = (await frameEvents(opened.page)).filter(
       (event) => event.type === "frame:error" || event.type === "frame:unhandled-rejection"
@@ -494,23 +542,41 @@ async function renderVideoFrames(options: {
     await opened.context.close();
   }
   const framesManifest = resolve(framesDirectory, "frames.json");
-  await atomicWriteFile(
-    options.outputRoot,
-    framesManifest,
-    `${stableStringify(
-      {
-        schemaVersion: 1,
-        fps: options.video.fps,
-        durationMs: options.video.durationMs,
-        width: options.variant.scene.crop?.width ?? options.variant.output.width,
-        height: options.variant.scene.crop?.height ?? options.variant.output.height,
-        pattern: "frame-%04d.png",
-        frames
-      },
-      2
-    )}\n`
-  );
-  return {framesDirectory, framesManifest};
+  const sequence: JsonObject = {
+    schemaVersion: 1,
+    fps: options.video.fps,
+    durationMs: options.video.durationMs,
+    width: options.variant.scene.crop?.width ?? options.variant.output.width,
+    height: options.variant.scene.crop?.height ?? options.variant.output.height,
+    pattern: "frame-%04d.png",
+    frames
+  };
+  const sequenceText = `${stableStringify(sequence, 2)}\n`;
+  await atomicWriteFile(options.outputRoot, framesManifest, sequenceText, options.temporaryFiles);
+  return {framesDirectory, framesManifest, frameFiles: frames.map((frame) => frame.file), sequence, sequenceText};
+}
+
+/** Deletes an earlier run's manifest.json when it is a regular file inside the output root; anything else stays. */
+async function removeStaleManifest(outputRoot: string, manifestPath: string): Promise<void> {
+  const safePath = assertOutputTarget(outputRoot, manifestPath);
+  try {
+    if ((await lstat(safePath)).isFile()) await unlink(safePath);
+  } catch (error) {
+    if ((error as {code?: unknown}).code !== "ENOENT") throw error;
+  }
+}
+
+/** The effective frame-retention choice: the render option wins over the recipe; the default discards. */
+export function effectiveKeepFrames(recipe: RecipeDefinition, options: Pick<RenderOptions, "keepFrames"> = {}): boolean {
+  return options.keepFrames ?? recipe.outputs?.video?.keepFrames ?? false;
+}
+
+/**
+ * Frames are discarded only after an encode that ffprobe validated. An unvalidated encode (FFmpeg without
+ * ffprobe) or an intermediate result (no FFmpeg) keeps them, because the PNG sequence may be the deliverable.
+ */
+export function shouldDiscardFrames(keepFrames: boolean, encodedStatus: "final" | "intermediate" | "unvalidated"): boolean {
+  return !keepFrames && encodedStatus === "final";
 }
 
 export async function planRecipe(
@@ -575,6 +641,21 @@ export async function planRecipe(
     }
   }
   const targets = targetPaths(outputRoot, recipe, variants, Boolean(tooling.ffmpegPath));
+  const estimate = estimateRenderBytes({
+    outputs: recipe.outputs,
+    variants: variants.map((variant) => ({
+      id: variant.id,
+      width: variant.scene.crop?.width ?? variant.output.width,
+      height: variant.scene.crop?.height ?? variant.output.height
+    })),
+    framesPerVariant: video ? videoFrameCount(video) : 0,
+    includeVideo: Boolean(tooling.ffmpegPath),
+    discardFrames: Boolean(video && tooling.ffmpegPath && tooling.ffprobePath) && !effectiveKeepFrames(recipe, options),
+    ...(marketplacePreset?.validation?.video?.maximumBytes !== undefined
+      ? {maximumVideoBytes: marketplacePreset.validation.video.maximumBytes}
+      : {})
+  });
+  const space = await measureFreeSpace(outputRoot, options.statfs);
   const result = {
     outputRoot,
     variants,
@@ -594,7 +675,9 @@ export async function planRecipe(
       targets,
       count: variants.length,
       totalFrames: Number(workload.totalFrames),
-      totalTargets: Number(workload.totalTargets)
+      totalTargets: Number(workload.totalTargets),
+      estimate,
+      disk: diskBudget(space.path, space.freeBytes, estimate.peakBytes)
     }
   };
   return marketplacePreset ? {...result, marketplacePreset} : result;
@@ -607,6 +690,7 @@ export async function renderRecipe(
 ): Promise<RenderResult> {
   const {plan, variants, outputRoot, tooling, marketplacePreset} = await planRecipe(project, recipe, options);
   if (options.dryRun) return {plan, status: "dry-run", artifacts: []};
+  assertDiskBudget(recipe.id, plan.disk, options.allowLowDisk ?? false);
   await ensureOutputDirectory(outputRoot);
   await preflightOutputTargets(outputRoot, plan.targets, options.force ?? false);
   const renderProject: ResolvedProject = outputRoot === project.outputRoot ? project : {...project, outputRoot};
@@ -614,6 +698,17 @@ export async function renderRecipe(
 
   const server = await startStudioServer(renderProject, {port: 0, watch: false});
   const recipeDirectory = resolve(outputRoot, recipe.id);
+  const keepFrames = effectiveKeepFrames(recipe, options);
+  const temporaryFiles: TemporaryFiles = new Set();
+  let staleManifestRemoved = false;
+  const progress: RenderProgress = {
+    recipeDirectory,
+    totalVariants: variants.length,
+    completedVariants: [],
+    step: "browser launch",
+    framesWritten: 0,
+    framesPlanned: 0
+  };
   const artifacts: string[] = [];
   const entries: CaptureManifestEntry[] = [];
   let status: RenderResult["status"] = "final";
@@ -628,14 +723,24 @@ export async function renderRecipe(
     const contactItems: {id: string; path: string}[] = [];
     let contactSheetPath: string | undefined;
     for (const variant of variants) {
+      progress.variant = variant.id;
+      progress.step = "input check";
+      progress.framesWritten = 0;
+      progress.framesPlanned = recipe.outputs?.video?.enabled ? videoFrameCount(recipe.outputs.video) : 0;
+      delete progress.framesDirectory;
       await assertInputsUnchanged(renderProject, recipe, inputSnapshot);
       let screenshotPath: string | undefined;
       let thumbnailPath: string | undefined;
       let videoPath: string | undefined;
       let framesPath: string | undefined;
       let framesManifestPath: string | undefined;
+      let framesManifestHash: string | undefined;
+      let frameSequence: JsonObject | undefined;
+      let framesRetained = true;
+      let framesDiscardError: string | undefined;
       let videoDimensions: {width: number; height: number} | undefined;
       if (recipe.outputs?.screenshots !== false) {
+        progress.step = "screenshot";
         const resolvedScene = await openScene(renderProject, server, browser, variant.scene);
         try {
           await replayUntil(resolvedScene.page, variant, variant.scene.captureAtMs ?? 0);
@@ -650,7 +755,7 @@ export async function renderRecipe(
           }
           const extension = (variant.output.format ?? "png") === "jpeg" ? "jpg" : "png";
           screenshotPath = resolve(recipeDirectory, `${variant.id}.${extension}`);
-          await screenshotScene(resolvedScene.page, variant, outputRoot, screenshotPath);
+          await screenshotScene(resolvedScene.page, variant, outputRoot, screenshotPath, temporaryFiles);
           artifacts.push(screenshotPath);
           contactItems.push({id: variant.id, path: screenshotPath});
         } finally {
@@ -659,14 +764,17 @@ export async function renderRecipe(
       }
 
       if (recipe.outputs?.thumbnails && screenshotPath) {
+        progress.step = "thumbnail";
         const extension = recipe.outputs.thumbnails.format === "jpeg" ? "jpg" : "png";
         thumbnailPath = resolve(recipeDirectory, `${variant.id}-thumb.${extension}`);
-        await renderThumbnail(browser, screenshotPath, outputRoot, thumbnailPath, recipe.outputs.thumbnails);
+        await renderThumbnail(browser, screenshotPath, outputRoot, thumbnailPath, recipe.outputs.thumbnails, temporaryFiles);
         artifacts.push(thumbnailPath);
       }
 
       const video = recipe.outputs?.video;
       if (video?.enabled) {
+        progress.step = "video frames";
+        progress.framesDirectory = resolve(recipeDirectory, variant.id, "frames");
         const renderedFrames = await renderVideoFrames({
           project: renderProject,
           server,
@@ -674,12 +782,18 @@ export async function renderRecipe(
           variant,
           video,
           outputRoot,
-          recipeDirectory
+          recipeDirectory,
+          temporaryFiles,
+          onFrame: (written) => {
+            progress.framesWritten = written;
+          }
         });
         framesPath = renderedFrames.framesDirectory;
         framesManifestPath = renderedFrames.framesManifest;
-        artifacts.push(renderedFrames.framesManifest);
+        framesManifestHash = sha256(renderedFrames.sequenceText);
+        frameSequence = renderedFrames.sequence;
         if (tooling.ffmpegPath) {
+          progress.step = "video encoding";
           videoPath = resolve(recipeDirectory, `${variant.id}.${video.format ?? "mp4"}`);
           const encoded = await encodeFrameSequence({
             outputRoot,
@@ -688,6 +802,8 @@ export async function renderRecipe(
             video,
             force: options.force ?? false,
             tooling,
+            temporaryFiles,
+            expectedFrames: videoFrameCount(video),
             expectedWidth: Math.round(
               variant.scene.crop?.width ?? variant.output.width
             ),
@@ -704,21 +820,43 @@ export async function renderRecipe(
           };
           status = encoded.status === "unvalidated" ? "unvalidated" : status;
           artifacts.push(videoPath);
+          if (shouldDiscardFrames(keepFrames, encoded.status)) {
+            progress.step = "frame cleanup";
+            if (!staleManifestRemoved) {
+              // A manifest from an earlier run lists frames this run is about to delete; remove it first so a
+              // later failure never leaves a manifest pointing at missing frames. It is an exact planned target.
+              await removeStaleManifest(outputRoot, resolve(recipeDirectory, "manifest.json"));
+              staleManifestRemoved = true;
+            }
+            try {
+              await discardFrameSequence({
+                outputRoot,
+                framesDirectory: renderedFrames.framesDirectory,
+                frameFiles: renderedFrames.frameFiles
+              });
+              framesRetained = false;
+            } catch (error) {
+              // The video is already validated; a failed cleanup must not fail the render. Report it instead.
+              if (isNoSpaceError(error)) throw error;
+              framesDiscardError = toErrorMessage(error);
+            }
+          }
         } else {
           status = "intermediate";
         }
+        if (framesRetained) artifacts.push(renderedFrames.framesManifest);
       }
 
       const hashes: JsonObject = {};
       if (screenshotPath) hashes.screenshot = await hashFile(screenshotPath);
       if (thumbnailPath) hashes.thumbnail = await hashFile(thumbnailPath);
       if (videoPath) hashes.video = await hashFile(videoPath);
-      if (framesManifestPath) hashes.framesManifest = await hashFile(framesManifestPath);
+      if (framesManifestHash) hashes.framesManifest = framesManifestHash;
       const files: JsonObject = {};
       if (screenshotPath) files.screenshot = await describeArtifact(outputRoot, screenshotPath);
       if (thumbnailPath) files.thumbnail = await describeArtifact(outputRoot, thumbnailPath);
       if (videoPath) files.video = await describeArtifact(outputRoot, videoPath, videoDimensions);
-      if (framesManifestPath) files.framesManifest = await describeArtifact(outputRoot, framesManifestPath);
+      if (framesManifestPath && framesRetained) files.framesManifest = await describeArtifact(outputRoot, framesManifestPath);
       entries.push({
         id: variant.id,
         scene: variant.scene.id,
@@ -727,7 +865,9 @@ export async function renderRecipe(
         screenshot: screenshotPath ? portable(outputRoot, screenshotPath) : null,
         thumbnail: thumbnailPath ? portable(outputRoot, thumbnailPath) : null,
         video: videoPath ? portable(outputRoot, videoPath) : null,
-        frames: framesPath ? portable(outputRoot, framesPath) : null,
+        frames: framesPath && framesRetained ? portable(outputRoot, framesPath) : null,
+        ...(frameSequence ? {framesRetained, frameSequence} : {}),
+        ...(framesDiscardError ? {framesDiscardError} : {}),
         parameters: JSON.parse(JSON.stringify({
           background: variant.background,
           viewport: variant.viewport,
@@ -738,13 +878,19 @@ export async function renderRecipe(
         hashes,
         files
       });
+      progress.completedVariants.push(variant.id);
     }
+    delete progress.variant;
+    delete progress.framesDirectory;
+    progress.framesPlanned = 0;
 
     if (recipe.outputs?.contactSheet && contactItems.length > 0) {
+      progress.step = "contact sheet";
       contactSheetPath = resolve(recipeDirectory, "contact-sheet.png");
-      await renderContactSheet(browser, contactItems, outputRoot, contactSheetPath);
+      await renderContactSheet(browser, contactItems, outputRoot, contactSheetPath, temporaryFiles);
       artifacts.push(contactSheetPath);
     }
+    progress.step = "manifest";
     await assertInputsUnchanged(renderProject, recipe, inputSnapshot);
     const manifestPath = resolve(recipeDirectory, "manifest.json");
     const manifest = {
@@ -772,9 +918,29 @@ export async function renderRecipe(
         : null,
       artifacts: entries
     };
-    await atomicWriteFile(outputRoot, manifestPath, `${stableStringify(JSON.parse(JSON.stringify(manifest)), 2)}\n`);
+    await atomicWriteFile(
+      outputRoot,
+      manifestPath,
+      `${stableStringify(JSON.parse(JSON.stringify(manifest)), 2)}\n`,
+      temporaryFiles
+    );
     artifacts.push(manifestPath);
     return {plan, status, manifestPath, artifacts};
+  } catch (error) {
+    // Remove only the temporary files this render created; finished artifacts and unrelated files stay.
+    const removedTemporaryFiles = await removeTemporaryFiles(temporaryFiles);
+    if (!isNoSpaceError(error)) throw error;
+    const freeBytes = await measureFreeSpace(outputRoot, options.statfs).then(
+      (space) => space.freeBytes,
+      () => undefined
+    );
+    throw diskFullError({
+      progress,
+      removedTemporaryFiles,
+      peakBytes: plan.estimate.peakBytes,
+      ...(freeBytes !== undefined ? {freeBytes} : {}),
+      cause: error
+    });
   } finally {
     await browser?.close();
     await server.close();

@@ -1,7 +1,7 @@
 import {readFile} from "node:fs/promises";
 import type {VideoDefinition} from "../types.js";
 import {StudioError} from "../shared/errors.js";
-import {createAtomicTarget} from "./output.js";
+import {createAtomicTarget, type TemporaryFiles} from "./output.js";
 import {findExecutable, runExecutable, toolVersion} from "../validation/tools.js";
 
 export interface MediaTooling {
@@ -35,10 +35,14 @@ export async function encodeFrameSequence(options: {
   tooling: MediaTooling;
   expectedWidth: number;
   expectedHeight: number;
+  /** Frames in the sequence; when ffprobe reports a stream frame count, it must match. */
+  expectedFrames?: number;
   maximumBytes?: number;
+  /** Receives the temporary video path so a failed render can remove it. */
+  temporaryFiles?: TemporaryFiles;
 }): Promise<{status: "final" | "intermediate" | "unvalidated"; metadata?: unknown}> {
   if (!options.tooling.ffmpegPath) return {status: "intermediate"};
-  const atomic = await createAtomicTarget(options.outputRoot, options.outputPath);
+  const atomic = await createAtomicTarget(options.outputRoot, options.outputPath, options.temporaryFiles);
   const format = options.video.format ?? "mp4";
   const codec = options.video.codec ?? (format === "mp4" ? "h264" : "vp9");
   const codecName = codec === "h264" ? "libx264" : "libvpx-vp9";
@@ -80,7 +84,7 @@ export async function encodeFrameSequence(options: {
     }
     metadata = JSON.parse(probe.stdout) as unknown;
     const parsed = metadata as {
-      streams?: {codec_type?: string; codec_name?: string; width?: number; height?: number; pix_fmt?: string; avg_frame_rate?: string; duration?: string; tags?: {alpha_mode?: string}}[];
+      streams?: {codec_type?: string; codec_name?: string; width?: number; height?: number; pix_fmt?: string; avg_frame_rate?: string; duration?: string; nb_frames?: string; tags?: {alpha_mode?: string}}[];
       format?: {duration?: string};
     };
     const videoStreams = (parsed.streams ?? []).filter((stream) => stream.codec_type === "video");
@@ -117,6 +121,14 @@ export async function encodeFrameSequence(options: {
       throw new StudioError(
         "VIDEO_DURATION_INVALID",
         `Encoded output duration is ${actualDuration}s; expected approximately ${expectedDuration}s.`
+      );
+    }
+    // MP4 reports nb_frames; WebM usually does not, and then duration is the only check.
+    const reportedFrames = stream.nb_frames !== undefined && /^\d+$/.test(stream.nb_frames) ? Number(stream.nb_frames) : undefined;
+    if (options.expectedFrames !== undefined && reportedFrames !== undefined && reportedFrames !== options.expectedFrames) {
+      throw new StudioError(
+        "VIDEO_FRAME_COUNT_INVALID",
+        `Encoded output has ${reportedFrames} frames; expected ${options.expectedFrames}.`
       );
     }
   }

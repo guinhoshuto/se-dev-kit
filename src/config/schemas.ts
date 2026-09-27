@@ -262,7 +262,8 @@ const videoSchema = z
     pixelFormat: z.enum(["yuv420p", "yuva420p"]).optional(),
     audio: z.literal("none").optional(),
     mode: z.enum(["stage", "tutorial"]).optional(),
-    tutorial: tutorialSchema.optional()
+    tutorial: tutorialSchema.optional(),
+    keepFrames: z.boolean().optional()
   })
   .strict();
 

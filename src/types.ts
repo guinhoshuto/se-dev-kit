@@ -233,6 +233,8 @@ export interface VideoDefinition {
   audio?: "none";
   mode?: "stage" | "tutorial";
   tutorial?: TutorialDefinition;
+  /** Keep the PNG frames and frames.json after a validated encode. Defaults to false. */
+  keepFrames?: boolean;
 }
 
 export interface RecipeDefinition {
@@ -349,7 +351,14 @@ export interface CaptureManifestEntry {
   screenshot: string | null;
   thumbnail: string | null;
   video: string | null;
+  /** Frame directory relative to the output root, or null when no frames remain on disk. */
   frames: string | null;
+  /** Video variants only: whether the PNG frames and frames.json were kept after encoding. */
+  framesRetained?: boolean;
+  /** Video variants only: the exact frames.json content, kept even after the files are discarded. */
+  frameSequence?: JsonObject;
+  /** Set when frame removal after a validated encode failed; the frames and frames.json may remain in part. */
+  framesDiscardError?: string;
   parameters: JsonObject;
   hashes: JsonObject;
   files?: JsonObject;

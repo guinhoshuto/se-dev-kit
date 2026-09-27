@@ -85,6 +85,8 @@ The header and the alpha strip follow every drag live. The field text, its swatc
 - If the editor is shorter than the dialog, the dialog is scaled down so every picker target stays on screen.
 - The header's HEX/RGB tab follows the notation of the requested value.
 
-Every frame is drawn from the timeline at the frame timestamp: the host page has no CSS transitions, and the cursor, menus, typing, and caret are derived from the time alone. Each cursor move starts from the previous target as laid out at that frame, not from the last rendered frame, so a low frame rate shows the same cursor positions as 30 fps at the shared timestamps. In local checks on 2026-09-25, repeated renders matched frame for frame, except for one run in which a single frame differed; treat frame hashes as a strong reproducibility signal, not a guarantee.
+Every frame is drawn from the timeline at the frame timestamp: the host page has no CSS transitions, and the cursor, menus, typing, and caret are derived from the time alone. Each cursor move starts from the previous target as laid out at that frame, not from the last rendered frame, so a low frame rate shows the same cursor positions as 30 fps at the shared timestamps. In local checks on 2026-09-25, repeated renders matched frame for frame, except for one run in which a single frame differed; treat frame hashes as a strong reproducibility signal, not a guarantee. The hashes stay in the render manifest (`frameSequence`) after the frames themselves are deleted.
 
 The hosted Studio still limits videos to 15 seconds, so longer tutorials must be rendered with the local CLI.
+
+The disk estimate counts tutorial frames at 0.3 bytes per pixel (tutorial frames measured about 0.076), so a 28-second full-HD tutorial estimates a peak of about 590 MiB and needs about 840 MiB free. On a tight disk it may still stop with `OUTPUT_DISK_LOW`; review `plan.disk.summary` from `--dry-run`, then free space or pass `--allow-low-disk`.

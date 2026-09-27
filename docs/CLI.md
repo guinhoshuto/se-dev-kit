@@ -10,7 +10,7 @@ The Studio provides:
 - An interactive editor generated from the real FIELDS schema.
 - Themes, synthetic fixtures, declarative scenes, smoke scenarios, and capture recipes.
 - Essential `onWidgetLoad`, `onWidgetUpdate`, and `onEventReceived` simulation.
-- Deterministic Playwright screenshots, thumbnails, contact sheets, and PNG video frames.
+- Deterministic Playwright screenshots, thumbnails, contact sheets, and video rendered from PNG frames.
 - Optional FFmpeg conversion and ffprobe validation when those tools are already installed.
 - Versioned marketplace presets, including an Etsy profile with official sources and a verification date.
 - Stable English CLI output and JSON output for humans, agents, and CI.
@@ -121,7 +121,7 @@ Run `se-widget-studio <command> --help` for the installed contract.
 | `dev [root]` | Start the interactive workbench (`studio` is an alias). |
 | `test [root]` | Run deterministic browser scenarios in fresh contexts. |
 | `capture [root]` | Capture one scene. |
-| `record [root]` | Record one scene as PNG frames and optionally encode video. |
+| `record [root]` | Record one scene to video; PNG frames are removed after a validated encode unless `--keep-frames` is passed. |
 | `render [root] --recipe <id>` | Expand and render a recipe matrix. |
 
 Every command supports `--json` at the program level. Matrix rendering should begin with a dry run:
@@ -134,6 +134,8 @@ se-widget-studio render examples/basic-chat --recipe etsy-listing-video --dry-ru
 Matrix cardinality is calculated with integer-safe arithmetic before variants are expanded. The default matrix limit is 48 variants; a larger matrix requires `--allow-large-matrix`.
 
 An independent render-workload guard counts video frames and every planned file before frame paths are created. The default limit is 10,000 planned files. A reviewed dry run or render can opt in with `--allow-large-render`; neither large-render flag can bypass the safe-integer boundary.
+
+The plan also estimates bytes: `plan.estimate` per variant and in total, and `plan.disk`, which compares the estimated peak with the free space on the output volume. `capture`, `record`, and `render` stop before writing with `OUTPUT_DISK_LOW` when the peak is above 70% of free space; the error states the estimate, the free space, and the limit. A dry run prints the same figures (`plan.disk.summary`) without failing. `--allow-low-disk` renders anyway after review.
 
 ## Runtime boundary
 
@@ -177,7 +179,7 @@ StreamElements object-form dropdown options use option values as keys and human-
 
 The renderer calculates every target before writing. If any exact target exists, it aborts unless `--force` is present. With `--force`, it atomically replaces only those planned regular files. It never recursively clears an output directory, follows an output symlink, or removes unrelated files.
 
-Video starts as deterministic numbered PNG frames plus `frames.json`. When an existing FFmpeg executable is detected, those frames can be encoded. When FFmpeg is missing, the frame sequence remains a documented intermediate and the command exits with code `3` unless `--allow-intermediate` is explicit.
+Video starts as deterministic numbered PNG frames plus `frames.json`. When an existing FFmpeg executable is detected, those frames are encoded; once ffprobe validates the video, the frames listed in `frames.json` and `frames.json` itself are deleted, and the manifest keeps the frame list with its hashes (`frameSequence`, `framesRetained: false`). Pass `--keep-frames` to `record` or `render`, or set `outputs.video.keepFrames: true`, to keep them. Frames also stay when ffprobe is missing (status `unvalidated`). When FFmpeg is missing, the frame sequence remains a documented intermediate and the command exits with code `3` unless `--allow-intermediate` is explicit. A render that runs out of space stops with `OUTPUT_DISK_FULL`, after deleting only the temporary files it created, and says what remains on disk.
 
 See [Capture and media](CAPTURE.md) for recipes, manifests, FFmpeg behavior, and marketplace profiles.
 

@@ -33,14 +33,16 @@ try {
     if (!recipe) throw new Error('Select an existing recipe or scene.');
     const video = recipe.outputs?.video;
     if (video?.enabled && (video.durationMs > 15000 || video.fps > 30)) throw new Error('Video limit is 15 seconds at 30 FPS.');
-    const options = {matrixLimit: 48, allowIntermediate: true,
+    // Hosted jobs never publish frames, so they are removed after each validated encode whatever the recipe says.
+    // The Sandbox free space has not been measured yet, so the local disk guard stays off here until it is.
+    const options = {matrixLimit: 48, allowIntermediate: true, keepFrames: false, allowLowDisk: true,
       ...(process.env.STUDIO_FFMPEG_PATH ? {ffmpegPath: process.env.STUDIO_FFMPEG_PATH} : {}),
       ...(process.env.STUDIO_FFPROBE_PATH ? {ffprobePath: process.env.STUDIO_FFPROBE_PATH} : {})};
     const plan = await planRecipe(project, recipe, options);
     if (plan.plan.variants.some(item => item.output.width > 4096 || item.output.height > 4096)) throw new Error('Output dimensions must not exceed 4096 pixels.');
     if (video?.enabled && plan.plan.totalFrames > 900) throw new Error('A video job is limited to 900 total frames. Split the recipe.');
     const rendered = await renderRecipe(project, recipe, options);
-    // Successful videos retain final media only; intermediate frames are job-local and cleaned by the host.
+    // Successful videos retain final media only; frames left by an unvalidated or intermediate encode are job-local and cleaned by the host.
     for (const file of rendered.artifacts) if (!file.includes('/frames/')) artifactPaths.push(file);
     if (rendered.status === 'intermediate') {
       const reportPath = resolve(project.outputRoot, 'intermediate.json');
@@ -62,7 +64,10 @@ try {
     result.artifacts.push({name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex')});
   }
 } catch (error) {
-  result.error = error instanceof Error ? error.message : String(error);
+  // Keep a StudioError's code (for example OUTPUT_DISK_LOW) so the job failure can be matched to the docs.
+  // The hint is left out: it names local CLI flags that a hosted job cannot pass.
+  const code = typeof error?.code === 'string' && !String(error.message).startsWith(error.code) ? `${error.code}: ` : '';
+  result.error = error instanceof Error ? `${code}${error.message}` : String(error);
   result.progress = 'Job failed.';
 }
 await writeFile(resultPath, JSON.stringify(result));

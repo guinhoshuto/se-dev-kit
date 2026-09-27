@@ -47,7 +47,7 @@ Scene and recipe presentation objects use these keys:
 - `camera`: required `id`, `scale` (0.05–20), `x`, `y`; optional `label` and `origin`.
 - `crop`: nonnegative integer `x`, `y`, positive integer `width`, `height`.
 - `matrix`: optional arrays `themes`, `backgrounds`, `viewports`, `cameras`.
-- `outputs`: optional `screenshots`, `thumbnails`, `contactSheet`, `video`. Thumbnails require `width`, `height`, with optional `fit` (`contain` or `cover`) and `format` (`png` or `jpeg`). Video requires `enabled`, `durationMs`, `fps`; optional `format` (`mp4` or `webm`), `codec` (`h264` or `vp9`), `pixelFormat` (`yuv420p` or `yuva420p`), and `audio` (only `none`). MP4 requires H.264; WebM requires VP9; alpha requires VP9 WebM. Thumbnails/contact sheets cannot be combined with `screenshots: false`.
+- `outputs`: optional `screenshots`, `thumbnails`, `contactSheet`, `video`. Thumbnails require `width`, `height`, with optional `fit` (`contain` or `cover`) and `format` (`png` or `jpeg`). Video requires `enabled`, `durationMs`, `fps`; optional `format` (`mp4` or `webm`), `codec` (`h264` or `vp9`), `pixelFormat` (`yuv420p` or `yuva420p`), `audio` (only `none`), and `keepFrames` (boolean; hosted jobs ignore it and never retain frames; a deployment older than this key rejects it). MP4 requires H.264; WebM requires VP9; alpha requires VP9 WebM. Thumbnails/contact sheets cannot be combined with `screenshots: false`.
 
 Scenario steps are strict objects:
 

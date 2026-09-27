@@ -137,4 +137,4 @@ For hosted import, list local binary dependencies explicitly as `{path, file, co
 }
 ```
 
-Use synthetic content only. For WebM alpha, select VP9 WebM with `yuva420p`; MP4 requires H.264 and does not preserve alpha. Keep marketplace-specific constraints in dated presets with official source URLs, not in generic recipes.
+Use synthetic content only. For WebM alpha, select VP9 WebM with `yuva420p`; MP4 requires H.264 and does not preserve alpha. A local render deletes the PNG frames after a validated encode; add `"keepFrames": true` to `outputs.video` only when the frames themselves are wanted for inspection or post-processing (loop cuts, posters, stills, a higher-quality re-encode). Leave it out of hosted catalogs: hosted jobs ignore it, and a deployment older than this key rejects it. Keep marketplace-specific constraints in dated presets with official source URLs, not in generic recipes.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
@@ -7,10 +7,56 @@ import test from "node:test";
 
 import {detectBrowser} from "../../dist/capture/browser.js";
 import {detectMediaTooling} from "../../dist/capture/media.js";
-import {renderRecipe} from "../../dist/capture/renderer.js";
+import {sha256} from "../../dist/capture/hash.js";
+import {planRecipe, renderRecipe} from "../../dist/capture/renderer.js";
 import {loadProject} from "../../dist/config/load.js";
+import {stableStringify} from "../../dist/shared/json.js";
 
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
+
+async function exists(path) {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function temporaryFilesUnder(directory) {
+  const found = [];
+  for (const entry of await readdir(directory, {recursive: true})) if (/\.sws-[^/]*\.tmp$/.test(entry)) found.push(entry);
+  return found.sort();
+}
+
+function videoSmokeProject(project, id = "video-smoke") {
+  project.scenes.push({
+    id,
+    filePath: "",
+    value: {
+      schemaVersion: 1,
+      id,
+      name: "Video smoke",
+      theme: "midnight",
+      fixture: "launch-chat",
+      viewport: {width: 320, height: 240, deviceScaleFactor: 1},
+      output: {width: 320, height: 240, format: "png"},
+      camera: {id: "video-smoke-camera", scale: 0.5, x: 0, y: 0},
+      background: {id: "video-smoke-background", color: "#10172b"}
+    }
+  });
+  return project;
+}
+
+const twoFrameVideo = {
+  enabled: true,
+  durationMs: 1000,
+  fps: 2,
+  format: "mp4",
+  codec: "h264",
+  pixelFormat: "yuv420p",
+  audio: "none"
+};
 
 function pngDimensions(buffer) {
   assert.deepEqual([...buffer.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
@@ -100,7 +146,7 @@ test("capture writes deterministic images, thumbnail, contact sheet, and provena
   assert.equal(await readFile(sentinel, "utf8"), "unrelated user file");
 });
 
-test("video capture writes deterministic frames and produces an ffprobe-validated silent MP4", {timeout: 90_000}, async (t) => {
+test("video capture with keepFrames writes deterministic frames and produces an ffprobe-validated silent MP4", {timeout: 90_000}, async (t) => {
   const [detection, tooling] = await Promise.all([detectBrowser(), detectMediaTooling()]);
   if (!detection.executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
@@ -143,7 +189,8 @@ test("video capture writes deterministic frames and produces an ffprobe-validate
         format: "mp4",
         codec: "h264",
         pixelFormat: "yuv420p",
-        audio: "none"
+        audio: "none",
+        keepFrames: true
       }
     },
     limit: 1
@@ -163,8 +210,271 @@ test("video capture writes deterministic frames and produces an ffprobe-validate
   assert.equal(entry.files.video.width, 320);
   assert.equal(entry.files.video.height, 240);
   assert.ok(entry.files.video.bytes > 0);
+  assert.equal(entry.framesRetained, true);
   const frames = JSON.parse(await readFile(join(outputRoot, entry.files.framesManifest.file), "utf8"));
   assert.equal(frames.frames.length, 2);
   assert.deepEqual(frames.frames.map((frame) => frame.timestampMs), [0, 500]);
   assert.ok(frames.frames.every((frame) => /^[a-f0-9]{64}$/.test(frame.sha256)));
+  assert.deepEqual(entry.frameSequence, frames, "the manifest carries the frames.json content");
+  for (const frame of frames.frames) {
+    assert.equal(sha256(await readFile(join(outputRoot, entry.frames, frame.file))), frame.sha256);
+  }
+  assert.ok(result.artifacts.some((file) => file.endsWith("/frames/frames.json")));
+});
+
+test("a validated encode removes only the listed frames and keeps a frame folder that holds an unrelated file", {timeout: 180_000}, async (t) => {
+  const [detection, tooling] = await Promise.all([detectBrowser(), detectMediaTooling()]);
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  if (!tooling.ffmpegPath || !tooling.ffprobePath) {
+    t.skip("FFmpeg and ffprobe are optional and are not installed; the Studio must not download them implicitly.");
+    return;
+  }
+
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-video-discard-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  const project = videoSmokeProject(await loadProject({inputDirectory: exampleRoot}));
+  const recipe = {
+    schemaVersion: 1,
+    id: "integration-discard",
+    name: "Integration discard",
+    scenes: ["video-smoke"],
+    matrix: {
+      backgrounds: [
+        {id: "navy-stage", color: "#10172b"},
+        {id: "warm-stage", color: "#3b1f37"}
+      ]
+    },
+    outputs: {screenshots: false, video: twoFrameVideo}
+  };
+  const options = {outputRoot, browserPath: detection.executablePath, ffmpegPath: tooling.ffmpegPath, ffprobePath: tooling.ffprobePath};
+  const {plan} = await planRecipe(project, recipe, options);
+  const [withNotes, clean] = plan.variants.map((variant) => variant.id);
+  assert.ok(withNotes && clean);
+  const notesDirectory = join(outputRoot, recipe.id, withNotes, "frames");
+  await mkdir(notesDirectory, {recursive: true});
+  await writeFile(join(notesDirectory, "notes.txt"), "unrelated user file");
+
+  const result = await renderRecipe(project, recipe, options);
+  assert.equal(result.status, "final");
+  assert.deepEqual(await readdir(notesDirectory), ["notes.txt"], "only the listed frames and frames.json were removed");
+  assert.equal(await readFile(join(notesDirectory, "notes.txt"), "utf8"), "unrelated user file");
+  assert.equal(await exists(join(outputRoot, recipe.id, clean)), false, "an emptied frame folder and variant folder are removed");
+  assert.equal(result.artifacts.some((file) => file.includes("/frames/")), false);
+  assert.deepEqual(await temporaryFilesUnder(outputRoot), []);
+
+  const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));
+  assert.equal(manifest.status, "final");
+  assert.equal(manifest.artifacts.length, 2);
+  for (const entry of manifest.artifacts) {
+    assert.equal(entry.framesRetained, false);
+    assert.equal(entry.frames, null);
+    assert.equal(entry.files.framesManifest, undefined);
+    assert.equal(entry.frameSequence.frames.length, 2);
+    assert.deepEqual(entry.frameSequence.frames.map((frame) => frame.timestampMs), [0, 500]);
+    assert.ok(entry.frameSequence.frames.every((frame) => /^[a-f0-9]{64}$/.test(frame.sha256)));
+    assert.equal(
+      entry.hashes.framesManifest,
+      sha256(`${stableStringify(entry.frameSequence, 2)}\n`),
+      "the recorded hash is the discarded frames.json, reproducible from the manifest"
+    );
+    const video = await readFile(join(outputRoot, entry.video));
+    assert.equal(sha256(video), entry.files.video.sha256);
+    assert.equal(entry.files.video.bytes, video.byteLength);
+  }
+});
+
+test("without FFmpeg, allowIntermediate keeps the PNG sequence and frames.json", {timeout: 180_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-video-intermediate-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  const project = videoSmokeProject(await loadProject({inputDirectory: exampleRoot}));
+  const recipe = {schemaVersion: 1, id: "integration-intermediate", name: "Integration intermediate", scenes: ["video-smoke"], outputs: {screenshots: false, video: twoFrameVideo}};
+
+  const result = await renderRecipe(project, recipe, {
+    outputRoot,
+    browserPath: detection.executablePath,
+    ffmpegPath: join(outputRoot, "missing-ffmpeg"),
+    allowIntermediate: true
+  });
+  assert.equal(result.status, "intermediate");
+  const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));
+  const entry = manifest.artifacts[0];
+  assert.equal(entry.video, null);
+  assert.equal(entry.framesRetained, true);
+  const frames = JSON.parse(await readFile(join(outputRoot, entry.files.framesManifest.file), "utf8"));
+  assert.deepEqual(entry.frameSequence, frames);
+  for (const frame of frames.frames) assert.equal(await exists(join(outputRoot, entry.frames, frame.file)), true);
+});
+
+test("a disk-full encode removes this run's temporary files, keeps another's, and reports what remains", {timeout: 180_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-video-enospc-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  const fakeFfmpeg = join(outputRoot, "ffmpeg");
+  await writeFile(fakeFfmpeg, [
+    "#!/bin/sh",
+    'if [ "$1" = "-version" ]; then echo "ffmpeg version fake"; exit 0; fi',
+    "for last; do :; done",
+    'printf partial > "$last"',
+    'echo "av_interleaved_write_frame(): No space left on device" >&2',
+    "exit 1",
+    ""
+  ].join("\n"));
+  await chmod(fakeFfmpeg, 0o755);
+  const project = videoSmokeProject(await loadProject({inputDirectory: exampleRoot}));
+  const recipe = {schemaVersion: 1, id: "integration-enospc", name: "Integration disk full", scenes: ["video-smoke"], outputs: {screenshots: false, video: twoFrameVideo}};
+  const options = {outputRoot, browserPath: detection.executablePath, ffmpegPath: fakeFfmpeg};
+  const {plan} = await planRecipe(project, recipe, options);
+  const variant = plan.variants[0].id;
+  const recipeDirectory = join(outputRoot, recipe.id);
+  const foreign = `.${variant}.mp4.sws-0123456789ab.tmp`;
+  await mkdir(recipeDirectory, {recursive: true});
+  await writeFile(join(recipeDirectory, foreign), "another process");
+
+  await assert.rejects(renderRecipe(project, recipe, options), (error) => {
+    assert.equal(error?.code, "OUTPUT_DISK_FULL", error?.message);
+    assert.match(error.message, new RegExp(`video encoding of variant "${variant}" \\(2 of 2 frames written\\)`));
+    assert.match(error.message, /0 of 1 variant\(s\) finished/);
+    assert.match(error.message, /manifest\.json was not written for this run/);
+    assert.match(error.message, /Removed 1 temporary file\(s\) this run had created/);
+    assert.ok(error.message.includes(join(recipeDirectory, variant, "frames")));
+    assert.match(error.message, /No space left on device/);
+    assert.match(error.hint, /--force/);
+    return true;
+  });
+  assert.deepEqual(await temporaryFilesUnder(recipeDirectory), [foreign]);
+  assert.equal(await readFile(join(recipeDirectory, foreign), "utf8"), "another process");
+  assert.equal(await exists(join(recipeDirectory, "manifest.json")), false);
+  assert.equal(await exists(join(recipeDirectory, `${variant}.mp4`)), false);
+  assert.deepEqual(
+    (await readdir(join(recipeDirectory, variant, "frames"))).sort(),
+    ["frame-0000.png", "frame-0001.png", "frames.json"],
+    "frames of a failed encode stay"
+  );
+});
+
+test("an encode that ffprobe cannot validate keeps its frames", {timeout: 180_000}, async (t) => {
+  const [detection, tooling] = await Promise.all([detectBrowser(), detectMediaTooling()]);
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  if (!tooling.ffmpegPath) {
+    t.skip("FFmpeg is optional and is not installed; the Studio must not download it implicitly.");
+    return;
+  }
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-video-unvalidated-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  const project = videoSmokeProject(await loadProject({inputDirectory: exampleRoot}));
+  const recipe = {schemaVersion: 1, id: "integration-unvalidated", name: "Integration unvalidated", scenes: ["video-smoke"], outputs: {screenshots: false, video: twoFrameVideo}};
+
+  const result = await renderRecipe(project, recipe, {
+    outputRoot,
+    browserPath: detection.executablePath,
+    ffmpegPath: tooling.ffmpegPath,
+    ffprobePath: join(outputRoot, "missing-ffprobe")
+  });
+  assert.equal(result.status, "unvalidated");
+  const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));
+  const entry = manifest.artifacts[0];
+  assert.equal(entry.framesRetained, true);
+  assert.notEqual(entry.frames, null);
+  assert.ok(entry.video);
+  const frames = JSON.parse(await readFile(join(outputRoot, entry.files.framesManifest.file), "utf8"));
+  assert.equal(frames.frames.length, 2);
+  for (const frame of frames.frames) assert.equal(await exists(join(outputRoot, entry.frames, frame.file)), true);
+});
+
+test("an encode that fails for another reason also removes only this run's temporary files", {timeout: 180_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-video-ffmpeg-fail-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  const fakeFfmpeg = join(outputRoot, "ffmpeg");
+  await writeFile(fakeFfmpeg, [
+    "#!/bin/sh",
+    'if [ "$1" = "-version" ]; then echo "ffmpeg version fake"; exit 0; fi',
+    "for last; do :; done",
+    'printf partial > "$last"',
+    'echo "frame-%04d.png: Invalid data found when processing input" >&2',
+    "exit 1",
+    ""
+  ].join("\n"));
+  await chmod(fakeFfmpeg, 0o755);
+  const project = videoSmokeProject(await loadProject({inputDirectory: exampleRoot}));
+  const recipe = {schemaVersion: 1, id: "integration-ffmpeg-fail", name: "Integration FFmpeg failure", scenes: ["video-smoke"], outputs: {screenshots: false, video: twoFrameVideo}};
+  const options = {outputRoot, browserPath: detection.executablePath, ffmpegPath: fakeFfmpeg};
+  const {plan} = await planRecipe(project, recipe, options);
+  const variant = plan.variants[0].id;
+  const recipeDirectory = join(outputRoot, recipe.id);
+  const foreign = `.${variant}.mp4.sws-0123456789ab.tmp`;
+  await mkdir(recipeDirectory, {recursive: true});
+  await writeFile(join(recipeDirectory, foreign), "another process");
+
+  await assert.rejects(renderRecipe(project, recipe, options), (error) => {
+    assert.equal(error?.code, "FFMPEG_FAILED", error?.message);
+    assert.match(error.message, /Invalid data found/);
+    return true;
+  });
+  assert.deepEqual(await temporaryFilesUnder(recipeDirectory), [foreign]);
+  assert.equal(await readFile(join(recipeDirectory, foreign), "utf8"), "another process");
+  assert.equal(await exists(join(recipeDirectory, `${variant}.mp4`)), false);
+});
+
+test("a forced rerun removes the earlier manifest before discarding frames, so a later failure leaves none", {timeout: 180_000}, async (t) => {
+  const [detection, tooling] = await Promise.all([detectBrowser(), detectMediaTooling()]);
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  if (!tooling.ffmpegPath || !tooling.ffprobePath) {
+    t.skip("FFmpeg and ffprobe are optional and are not installed; the Studio must not download them implicitly.");
+    return;
+  }
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-video-stale-manifest-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  // Encodes the first variant with the real FFmpeg and fails the second, after the first variant's frames are gone.
+  const counter = join(outputRoot, "encodes");
+  const flakyFfmpeg = join(outputRoot, "ffmpeg");
+  await writeFile(flakyFfmpeg, [
+    "#!/bin/sh",
+    `if [ "$1" = "-version" ]; then exec "${tooling.ffmpegPath}" "$@"; fi`,
+    `if [ -f "${counter}" ]; then echo "Invalid data found when processing input" >&2; exit 1; fi`,
+    `touch "${counter}"`,
+    `exec "${tooling.ffmpegPath}" "$@"`,
+    ""
+  ].join("\n"));
+  await chmod(flakyFfmpeg, 0o755);
+  const project = videoSmokeProject(await loadProject({inputDirectory: exampleRoot}));
+  const recipe = {
+    schemaVersion: 1,
+    id: "integration-stale-manifest",
+    name: "Integration stale manifest",
+    scenes: ["video-smoke"],
+    matrix: {backgrounds: [{id: "navy-stage", color: "#10172b"}, {id: "warm-stage", color: "#3b1f37"}]},
+    outputs: {screenshots: false, video: twoFrameVideo}
+  };
+  const manifestPath = join(outputRoot, recipe.id, "manifest.json");
+  await mkdir(join(outputRoot, recipe.id), {recursive: true});
+  await writeFile(manifestPath, '{"stale": true}\n');
+
+  await assert.rejects(
+    renderRecipe(project, recipe, {outputRoot, browserPath: detection.executablePath, ffmpegPath: flakyFfmpeg, ffprobePath: tooling.ffprobePath, force: true}),
+    (error) => error?.code === "FFMPEG_FAILED"
+  );
+  assert.equal(await exists(manifestPath), false, "no manifest points at the discarded frames");
 });

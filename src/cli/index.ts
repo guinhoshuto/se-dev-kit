@@ -280,6 +280,8 @@ async function runSingleMedia(
     dryRun: options.dryRun === true,
     allowLargeRender: options.allowLargeRender === true,
     allowIntermediate: options.allowIntermediate === true,
+    allowLowDisk: options.allowLowDisk === true,
+    ...(options.keepFrames === true ? {keepFrames: true} : {}),
     ...(typeof options.browserPath === "string" ? {browserPath: options.browserPath} : {}),
     ...(typeof options.ffmpegPath === "string" ? {ffmpegPath: options.ffmpegPath} : {}),
     ...(typeof options.ffprobePath === "string" ? {ffprobePath: options.ffprobePath} : {})
@@ -291,19 +293,25 @@ async function runSingleMedia(
 for (const kind of ["capture", "record"] as const) {
   const media = program
     .command(kind)
-    .description(kind === "capture" ? "Capture one deterministic scene image." : "Record one scene to PNG frames and optional video.")
+    .description(
+      kind === "capture"
+        ? "Capture one deterministic scene image."
+        : "Record one scene to video. PNG frames are removed after a validated encode unless --keep-frames is passed."
+    )
     .argument("[root]", "Widget root", ".")
     .option("--scene <id>", "Scene id")
     .option("--theme <id>", "Theme override")
     .option("--output <directory>", "Validated output root")
     .option("--browser-path <file>", "Use an explicit Chromium or Chrome executable")
     .option("--force", "Replace only exact planned output files")
-    .option("--dry-run", "Print the output plan without starting a browser")
-    .option("--allow-intermediate", "Accept PNG frame output when FFmpeg is unavailable");
+    .option("--dry-run", "Print the output plan and disk estimate without starting a browser")
+    .option("--allow-intermediate", "Accept PNG frame output when FFmpeg is unavailable")
+    .option("--allow-low-disk", "Render even when the estimated peak exceeds 70% of free disk space");
   if (kind === "record") {
     media.option("--ffmpeg-path <file>", "Use an explicit FFmpeg executable");
     media.option("--ffprobe-path <file>", "Use an explicit ffprobe executable");
     media.option("--allow-large-render", "Allow a render plan above the 10,000-file safety limit");
+    media.option("--keep-frames", "Keep the PNG frames and frames.json after a validated encode");
   }
   media.action((root: string, options: Record<string, unknown>, command: Command) => runSingleMedia(kind, root, options, command));
 }
@@ -318,11 +326,13 @@ program
   .option("--ffmpeg-path <file>", "Use an explicit FFmpeg executable")
   .option("--ffprobe-path <file>", "Use an explicit ffprobe executable")
   .option("--force", "Replace only exact planned output files")
-  .option("--dry-run", "Expand and print the matrix without writing files")
+  .option("--dry-run", "Expand and print the matrix and disk estimate without writing files")
   .option("--allow-large-matrix", "Render a matrix above the configured safety limit")
   .option("--allow-large-render", "Allow a render plan above the 10,000-file safety limit")
   .option("--limit <count>", "Override the matrix limit", (value) => Number(value))
   .option("--allow-intermediate", "Accept PNG frame output when FFmpeg is unavailable")
+  .option("--allow-low-disk", "Render even when the estimated peak exceeds 70% of free disk space")
+  .option("--keep-frames", "Keep the PNG frames and frames.json after a validated encode (takes precedence over a recipe's keepFrames: false)")
   .action(async (
     root: string,
     options: {
@@ -337,6 +347,8 @@ program
       allowLargeRender?: boolean;
       limit?: number;
       allowIntermediate?: boolean;
+      allowLowDisk?: boolean;
+      keepFrames?: boolean;
     },
     command: Command
   ) => {
@@ -353,7 +365,9 @@ program
       ...(options.allowLargeMatrix !== undefined ? {allowLargeMatrix: options.allowLargeMatrix} : {}),
       ...(options.allowLargeRender !== undefined ? {allowLargeRender: options.allowLargeRender} : {}),
       ...(options.limit !== undefined ? {matrixLimit: options.limit} : {}),
-      ...(options.allowIntermediate !== undefined ? {allowIntermediate: options.allowIntermediate} : {})
+      ...(options.allowIntermediate !== undefined ? {allowIntermediate: options.allowIntermediate} : {}),
+      ...(options.allowLowDisk !== undefined ? {allowLowDisk: options.allowLowDisk} : {}),
+      ...(options.keepFrames !== undefined ? {keepFrames: options.keepFrames} : {})
     };
     const result = options.dryRun
       ? await planRecipe(project, recipe, renderOptions).then(({plan}) => ({plan, status: "dry-run", artifacts: []}))
