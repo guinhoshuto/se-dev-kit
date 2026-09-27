@@ -15,6 +15,7 @@ import type {
 import {StudioError, toErrorMessage} from "../shared/errors.js";
 import {assertOutputTarget, assertSafeOutputRoot, ensureOutputDirectory} from "../shared/paths.js";
 import {stableStringify} from "../shared/json.js";
+import {buildInfo} from "../build-info.js";
 import {STUDIO_VERSION} from "../version.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
 import {startStudioServer} from "../server/server.js";
@@ -1021,7 +1022,7 @@ export async function renderRecipe(
       schemaVersion: 1,
       status,
       generatedAt: new Date().toISOString(),
-      studio: {name: "se-widget-studio", version: STUDIO_VERSION},
+      studio: {name: "se-widget-studio", version: STUDIO_VERSION, commit: buildInfo().commit, dirty: buildInfo().dirty},
       runtime: {seed: DEFAULT_SEED, fixedTime: DEFAULT_FIXED_TIME, locale: "en-US", timezone: "UTC"},
       ...(options.fonts ? {fonts: jobFonts(options.fonts, fontAccount)} : {}),
       widget: {
