@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Proposed. Not started.** |
+| Status | **In progress. Stage 1 done (2026-09-27): `src/runtime/google-fonts-url.ts`, `src/fonts/css.ts` and their unit tests; the frame server route waits for the stage that makes `frame.ts` import the module.** |
 | Decision | 2026-09-26, by the repository owner |
 | Written | 2026-09-27, against `main` at `ae5fd9a`. Every `file:line` below was rechecked against that commit. Uncommitted parallel work (sample media) was changing `lib/importer.ts`, `lib/jobs.ts`, `lib/model.ts`, `lib/preview.ts`, `src/capture/renderer.ts`, `src/runtime/frame.ts`, `src/scenarios/runner.ts`, `src/server/server.ts`, `src/tutorial/timeline.ts`, `components/widget-preview.tsx` and `scripts/job-worker.mjs` at the time, so recheck line numbers in those files before implementing. |
 | Gate | The `AGENTS.md` amendment in [section 6](#6-proposed-agentsmd-amendment-pending-user-approval) is **PENDING USER APPROVAL**. Stage 1 has no network code and can start now. Stage 2 and everything after it wait for the approval. |
@@ -120,6 +120,8 @@ Rejected alternatives:
 Only stage 6 turns off capture into `_import/`, so no stage regresses what already works. Items marked **(review fix)** come from the adversarial review. [Section 12](#12-review-findings-index) maps each finding to its fix.
 
 ### Stage 1: Google Fonts core in the engine (pure, no network). 1 day
+
+**Status: done (2026-09-27).** `frame.ts` does not import the module yet, so `src/server/server.ts` was left unchanged; its fixed runtime list and the frame-server integration check move to the stage that adds the import (stage 4). The hosted preview already ships it, because `dist/runtime/` is copied whole.
 
 **Files**
 
