@@ -49,7 +49,7 @@ export async function detectBrowser(explicitPath?: string): Promise<BrowserDetec
   const environmentPath = process.env.SE_WIDGET_STUDIO_BROWSER;
   if (environmentPath) candidates.push({path: environmentPath, source: "environment"});
   // The system Chrome first: Playwright's Chromium build has no proprietary codecs, so H.264/AAC
-  // media (a widget's .mp4 video) renders black in it. The cache is only a fallback.
+  // media (a widget's .mp4 video) fails to load in it, and so does the capture. The cache is only a fallback.
   for (const path of SYSTEM_PATHS[platform()] ?? []) candidates.push({path, source: "system"});
   const cached = chromium.executablePath();
   if (cached) candidates.push({path: cached, source: "playwright-cache"});

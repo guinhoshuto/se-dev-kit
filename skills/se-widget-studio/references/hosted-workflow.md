@@ -114,6 +114,7 @@ Hosted mode is the default even for marketing batches. Plan them inside the boun
 - A saved revision pins each sample it uses to its SHA-256. If a deployment ever served different bytes for that reference, preview and jobs fail with `Sample media changed since this revision was saved` instead of rendering other pixels.
 - One active job per project, two globally; 50 jobs per UTC day.
 - Video: up to 15 seconds and 30 fps per variant, and 900 frames per job. A render is also refused when its estimated peak disk use exceeds 70% of the Sandbox's free space (see "Plan a large batch").
+- Video input: jobs run HeadlessChrome 139, a Chromium build without H.264 (checked on 2026-09-28: `canPlayType` answers `""` for `avc1` and `"probably"` for `vp9`). An MP4, M4V, or MOV that the widget plays, whether a `video-input` value, an asset, or a `src` in the HTML, fails to load, and the whole job fails with `Video failed to load: …`. Use WebM (VP9) test media in hosted catalogs. The editor preview runs in your own browser and may still play the MP4. Video output is not affected: FFmpeg encodes the MP4 of recipes and `video:<id>`.
 - A render recipe has at most 48 variants, or four when video is enabled.
 - Job artifacts: at most 100 MB per file and 250 MB per job.
 - There is no account recovery, capability rotation, cancel endpoint, project listing, or delete endpoint.

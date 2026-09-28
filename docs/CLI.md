@@ -114,7 +114,7 @@ Run `se-widget-studio <command> --help` for the installed contract.
 | Command | Purpose |
 | --- | --- |
 | `init [root]` | Create configuration and Studio data directories without changing production files. |
-| `doctor [root]` | Detect Node, browser, output, FFmpeg, and ffprobe without installing anything. |
+| `doctor [root]` | Detect Node, browser, output, FFmpeg, and ffprobe without installing anything. With a root, warn (`BROWSER_NO_H264`) when a Chromium build meets MP4/MOV video in the catalog. |
 | `list [root]` | List normalized fields and every configured catalog item. |
 | `presets` | List versioned marketplace presets and official sources. |
 | `validate [root]` | Validate files, schemas, references, safe paths, and synthetic-data rules. |
