@@ -32,6 +32,7 @@ Use `scripts/studio-client.mjs`; it defaults to `https://se-dev-kit.vercel.app` 
 - `pull` produces a capability-free draft with an opaque `etag`. Edit the complete `snapshot`, then `push`. A conflict must stop for reconciliation; never refetch and overwrite silently.
 - `run` requires a new output directory, polls one accepted job, downloads authorized artifacts without forwarding the bearer token to Blob, and verifies byte counts and SHA-256.
 - Open the private editor only when the user requests it, using `open-editor`; do not expose the fragment URL in a response or tool argument.
+- Google Fonts work as in StreamElements, in preview and in jobs (see "Fonts" in [references/hosted-workflow.md](references/hosted-workflow.md#fonts)); never vendor fonts or edit the widget for them. Other runtime network requests stay blocked.
 - Hosted actions consume personal project/job/storage/Sandbox quotas. Do not retry mutations automatically after an uncertain response. Resume or inspect the accepted project/job instead.
 
 ## Local operation rules

@@ -2,6 +2,8 @@
 
 Local mode is for developing or debugging SE Widget Studio itself, or for a local render the user explicitly asked for. Widget tests and media generation use hosted mode by default.
 
+The local CLI blocks Google Fonts and fails with `FONT_UNAVAILABLE`; validate a widget that depends on them in hosted mode. Do not reintroduce `--allow-google-fonts`.
+
 ## Invoke the CLI
 
 Use a pinned CLI, never an unpinned remote package, and do not recreate the runtime in the widget.

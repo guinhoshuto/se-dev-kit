@@ -19,6 +19,8 @@ FIELDS defaults → theme → fixture → scene → temporary preview override
 
 Never put background, crop, zoom, or output dimensions in `fieldData` unless they are genuine widget FIELDS.
 
+Themes and scenes may set a `googleFont` field freely: hosted preview and jobs load Google Fonts as StreamElements does, and substitute `{{field}}` placeholders with the effective field data in HTML, CSS and JS.
+
 ## Sample media
 
 Never generate, download, draw, or upload images just to test a widget. The Studio ships synthetic sample images, and every mode (hosted preview, hosted jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
