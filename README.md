@@ -114,6 +114,11 @@ node scripts/verify-hosted.mjs \
 
 It creates one synthetic project and at most three jobs (smoke, one 320×240 PNG, and one one-second silent MP4), then verifies authorization, optimistic concurrency, iframe policy, artifact hashes, image dimensions, and video streams. Evidence and the private resume capability are written under ignored `.studio-data/`; never publish `access.private.json`. The command neither downloads tools nor deletes remote data. Use `--resume` with that private file after an interrupted run instead of creating another project.
 
+## Known pitfalls
+
+- This checkout's `dist/` and `skills/` are live for every agent session: the global skill links here, and consumer sessions run this `dist/`. Prove a test by mutating a copy, never `dist/` or the skill in place: copy `dist/` and `package.json` into a scratch folder, link `node_modules`, `sample-media`, and `examples` beside them, copy the test file to the same relative path, mutate the copy, and run the test there.
+- The working tree is live too, so skill text that waits for a deploy never sits in it. Commit that text to its branch through a temporary index (`GIT_INDEX_FILE=<file> git read-tree main`, `git update-index --cacheinfo`, `git commit-tree`, `git update-ref`) instead of switching this checkout to the branch.
+
 ## Guides
 
 - [Install the bundled agent skill on another machine](skills/INSTALL.md)
