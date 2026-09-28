@@ -35,7 +35,7 @@ import {
 import {compileVariantTutorial, EMULATE_MENU, tutorialCamera} from "../tutorial/variant.js";
 import type {TutorialTimeline} from "../tutorial/timeline.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
-import {launchStudioBrowser, type FontRoute} from "./browser.js";
+import {closeStudioBrowser, launchStudioBrowser, type BrowserDetection, type FontRoute} from "./browser.js";
 import {FontsMissingError, type FontResolver} from "../fonts/resolver.js";
 import {hashFile, hashJson, sha256} from "./hash.js";
 import {assertRecipeMatrixCardinality, expandRecipe} from "./matrix.js";
@@ -94,6 +94,23 @@ export interface RenderOptions {
    * ends with FONTS_MISSING listing every missing URL. The manifest gains `fonts`.
    */
   fonts?: FontResolver;
+  /**
+   * A browser from launchStudioBrowser to render in, instead of launching one; the caller closes it,
+   * and `browserPath` and `headed` are ignored. One process renders several recipes with one Chrome.
+   */
+  browser?: {browser: Browser; detection: BrowserDetection};
+  /** Receives one timestamped event per phase, so a render that hangs shows the phase it stopped in. */
+  trace?: (event: RenderTraceEvent) => void;
+}
+
+export interface RenderTraceEvent {
+  /** ISO time of the event. */
+  at: string;
+  /** Milliseconds since the render started its browser work. */
+  elapsedMs: number;
+  phase: string;
+  variant?: string;
+  detail?: string;
 }
 
 /** Fonts as the manifest records them for one artifact. */
@@ -806,12 +823,28 @@ export async function renderRecipe(
   const entries: CaptureManifestEntry[] = [];
   let status: RenderResult["status"] = "final";
   let browser: Browser | undefined;
+  const started = Date.now();
+  const trace = (phase: string, detail?: string): void => {
+    options.trace?.({
+      at: new Date().toISOString(),
+      elapsedMs: Date.now() - started,
+      phase,
+      ...(progress.variant ? {variant: progress.variant} : {}),
+      ...(detail ? {detail} : {})
+    });
+  };
+  const step = (name: string): void => {
+    progress.step = name;
+    trace(name);
+  };
   try {
-    const launched = await launchStudioBrowser({
+    if (!options.browser) trace("browser launch");
+    const launched = options.browser ?? await launchStudioBrowser({
       ...(options.browserPath ? {browserPath: options.browserPath} : {}),
       ...(options.headed !== undefined ? {headed: options.headed} : {})
     });
     browser = launched.browser;
+    if (!options.browser) trace("browser ready");
     const detection = launched.detection;
     const contactItems: {id: string; path: string}[] = [];
     let contactSheetPath: string | undefined;
@@ -821,7 +854,7 @@ export async function renderRecipe(
     const activeBrowser = browser;
     const renderVariant = async (variant: CaptureVariant): Promise<void> => {
       progress.variant = variant.id;
-      progress.step = "input check";
+      step("input check");
       progress.framesWritten = 0;
       progress.framesPlanned = recipe.outputs?.video?.enabled ? videoFrameCount(recipe.outputs.video) : 0;
       delete progress.framesDirectory;
@@ -839,7 +872,7 @@ export async function renderRecipe(
       let stillFonts: ArtifactFonts | undefined;
       let videoFonts: ArtifactFonts | undefined;
       if (recipe.outputs?.screenshots !== false) {
-        progress.step = "screenshot";
+        step("screenshot");
         const resolvedScene = await openScene(renderProject, server, activeBrowser, variant.scene, sceneFonts);
         try {
           await replayUntil(resolvedScene.page, variant, variant.scene.captureAtMs ?? 0);
@@ -870,7 +903,7 @@ export async function renderRecipe(
       }
 
       if (recipe.outputs?.thumbnails && screenshotPath) {
-        progress.step = "thumbnail";
+        step("thumbnail");
         const extension = recipe.outputs.thumbnails.format === "jpeg" ? "jpg" : "png";
         thumbnailPath = resolve(recipeDirectory, `${variant.id}-thumb.${extension}`);
         await renderThumbnail(activeBrowser, screenshotPath, outputRoot, thumbnailPath, recipe.outputs.thumbnails, temporaryFiles);
@@ -879,7 +912,7 @@ export async function renderRecipe(
 
       const video = recipe.outputs?.video;
       if (video?.enabled) {
-        progress.step = "video frames";
+        step("video frames");
         progress.framesDirectory = resolve(recipeDirectory, variant.id, "frames");
         const renderedFrames = await renderVideoFrames({
           project: renderProject,
@@ -903,7 +936,7 @@ export async function renderRecipe(
         framesManifestHash = sha256(renderedFrames.sequenceText);
         frameSequence = renderedFrames.sequence;
         if (tooling.ffmpegPath) {
-          progress.step = "video encoding";
+          step("video encoding");
           videoPath = resolve(recipeDirectory, `${variant.id}.${video.format ?? "mp4"}`);
           const encoded = await encodeFrameSequence({
             outputRoot,
@@ -931,7 +964,7 @@ export async function renderRecipe(
           status = encoded.status === "unvalidated" ? "unvalidated" : status;
           artifacts.push(videoPath);
           if (shouldDiscardFrames(keepFrames, encoded.status)) {
-            progress.step = "frame cleanup";
+            step("frame cleanup");
             if (!staleManifestRemoved) {
               // A manifest from an earlier run lists frames this run is about to delete; remove it first so a
               // later failure never leaves a manifest pointing at missing frames. It is an exact planned target.
@@ -1012,12 +1045,12 @@ export async function renderRecipe(
     progress.framesPlanned = 0;
 
     if (recipe.outputs?.contactSheet && contactItems.length > 0) {
-      progress.step = "contact sheet";
+      step("contact sheet");
       contactSheetPath = resolve(recipeDirectory, "contact-sheet.png");
       await renderContactSheet(browser, contactItems, outputRoot, contactSheetPath, temporaryFiles);
       artifacts.push(contactSheetPath);
     }
-    progress.step = "manifest";
+    step("manifest");
     await assertInputsUnchanged(renderProject, recipe, inputSnapshot);
     const manifestPath = resolve(recipeDirectory, "manifest.json");
     const manifest = {
@@ -1053,6 +1086,7 @@ export async function renderRecipe(
       temporaryFiles
     );
     artifacts.push(manifestPath);
+    trace("manifest written");
     return {plan, status, manifestPath, artifacts};
   } catch (error) {
     // Remove only the temporary files this render created; finished artifacts and unrelated files stay.
@@ -1070,8 +1104,15 @@ export async function renderRecipe(
       cause: error
     });
   } finally {
-    await browser?.close();
+    if (browser && !options.browser) {
+      trace("browser close");
+      const closing = await closeStudioBrowser(browser);
+      if (closing.closed) trace("browser closed", `${closing.elapsedMs} ms`);
+      else trace("browser close timed out", `killed PID ${closing.killed.join(", ") || "none found"} after ${closing.elapsedMs} ms`);
+    }
+    trace("server close");
     await server.close();
+    trace("server closed");
   }
 }
 

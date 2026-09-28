@@ -109,8 +109,19 @@ async function newRunDirectory() {
   return directory;
 }
 
+// Integration tests render in-process, where the CLI's Node.js refusal does not reach.
+async function warnOnUnsupportedNode() {
+  try {
+    const {SUPPORTED_NODE, satisfiesNodeRange} = await import('../dist/shared/node-support.js');
+    if (!satisfiesNodeRange(process.versions.node)) console.log(`Warning: Node.js ${process.versions.node} is outside package.json engines (${SUPPORTED_NODE}); Chrome has hung on Node 26. Use Node 24 (.node-version).`);
+  } catch {
+    // Without a built engine there is nothing to render with yet.
+  }
+}
+
 async function runSuites(names) {
   for (const name of names) if (!SUITES[name]) throw new Error(`Unknown suite ${name}. Suites: ${Object.keys(SUITES).join(', ')}.`);
+  await warnOnUnsupportedNode();
   const directory = await newRunDirectory();
   console.log(`Test logs: ${relative(ROOT, directory)}/`);
   const results = [];
@@ -143,6 +154,7 @@ async function repeat(file, countText) {
   const count = Number(countText ?? 5);
   if (!file || !Number.isInteger(count) || count < 1 || count > 100) throw new Error('Usage: npm run test:repeat -- <test file> [count 1-100, default 5]');
   const {path, suite: base} = suiteForFile(file);
+  await warnOnUnsupportedNode();
   const browser = base.browser || BROWSER_TEST.test(await readFile(join(ROOT, path), 'utf8'));
   const suite = {...base, browser, flags: []};
   const directory = await newRunDirectory();

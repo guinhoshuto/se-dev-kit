@@ -11,7 +11,7 @@ import type {
 import {StudioError} from "../shared/errors.js";
 import {assetUrlPath} from "../server/assets.js";
 import {startStudioServer, type StudioServer} from "../server/server.js";
-import {createIsolatedContext, launchStudioBrowser, observePage, type BrowserIssueLog, type FontRoute} from "../capture/browser.js";
+import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser, observePage, type BrowserIssueLog, type FontRoute} from "../capture/browser.js";
 import {checkFonts} from "../capture/fonts.js";
 import {FontsMissingError, isFontsMissing, type FontResolver} from "../fonts/resolver.js";
 import {createDefaultScene, resolveSceneState, type ResolvedSceneState} from "./state.js";
@@ -503,7 +503,7 @@ export async function runScenarios(
     if (options.fonts?.hasMissing()) throw new FontsMissingError(options.fonts.missing());
     return {results, browserPath: launched.detection.executablePath ?? "unknown"};
   } finally {
-    await browser?.close();
+    if (browser) await closeStudioBrowser(browser);
     await server.close();
   }
 }
@@ -528,7 +528,7 @@ export async function runBrowserSmoke(
     }));
     return await runOneScenario(project, server, browser, smoke, options.fonts);
   } finally {
-    await browser?.close();
+    if (browser) await closeStudioBrowser(browser);
     await server.close();
   }
 }

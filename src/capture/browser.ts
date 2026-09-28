@@ -1,7 +1,9 @@
+import {execFile} from "node:child_process";
 import {access, realpath} from "node:fs/promises";
 import {constants} from "node:fs";
 import {platform} from "node:os";
-import {chromium, type Browser, type BrowserContext, type Page} from "playwright-core";
+import {promisify} from "node:util";
+import {chromium, errors, type Browser, type BrowserContext, type Page} from "playwright-core";
 import {StudioError} from "../shared/errors.js";
 import {canonicalGoogleFontsUrl, isGoogleFontsHost} from "../runtime/google-fonts-url.js";
 
@@ -65,14 +67,28 @@ export async function detectBrowser(explicitPath?: string): Promise<BrowserDetec
 
 /**
  * An inert Chrome switch on every browser this module starts, valued `<pid>-<launch>`. `npm run
- * kill-stale` finds this checkout's orphans by it without touching another session's Chrome.
+ * kill-stale` finds this checkout's orphans by it without touching another session's Chrome, and a
+ * close that hangs finds the process to kill by it.
  */
 export const BROWSER_MARKER = "--se-widget-studio";
 let launches = 0;
+const markers = new WeakMap<Browser, string>();
+
+/** How long Chrome may take to start before the launch fails and the process it started is killed. */
+export const LAUNCH_TIMEOUT_MS = 30_000;
+/** How long `browser.close()` may take before the browser's process group is killed. */
+export const CLOSE_TIMEOUT_MS = 10_000;
+// Room for Playwright to report its own launch timeout first. It may not: on its timeout it waits for
+// the process to close gracefully, which a hung browser never does (a fake one held it for 30 s).
+const LAUNCH_GRACE_MS = 5_000;
+const OUTER_DEADLINE = Symbol("launch deadline");
+
+const execFileAsync = promisify(execFile);
 
 export async function launchStudioBrowser(options: {
   browserPath?: string;
   headed?: boolean;
+  launchTimeoutMs?: number;
 } = {}): Promise<{browser: Browser; detection: BrowserDetection}> {
   const detection = await detectBrowser(options.browserPath);
   if (!detection.executablePath) {
@@ -83,12 +99,87 @@ export async function launchStudioBrowser(options: {
     );
   }
   launches += 1;
-  const browser = await chromium.launch({
-    executablePath: detection.executablePath,
-    headless: !options.headed,
-    args: [`${BROWSER_MARKER}=${process.pid}-${launches}`]
+  const marker = `${BROWSER_MARKER}=${process.pid}-${launches}`;
+  const timeout = options.launchTimeoutMs ?? LAUNCH_TIMEOUT_MS;
+  const launchTimeout = () => new StudioError(
+    "BROWSER_LAUNCH_TIMEOUT",
+    `Chrome did not start within ${timeout / 1000} s (${detection.executablePath}).`,
+    "The machine may be busy with another render: check for running headless Chrome, wait, and retry. The process this launch started was killed."
+  );
+  const launching = chromium.launch({executablePath: detection.executablePath, headless: !options.headed, args: [marker], timeout});
+  let deadline: NodeJS.Timeout | undefined;
+  try {
+    const browser = await Promise.race([
+      launching,
+      new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(() => reject(OUTER_DEADLINE), timeout + LAUNCH_GRACE_MS);
+      })
+    ]);
+    markers.set(browser, marker);
+    return {browser, detection};
+  } catch (error) {
+    // A launch that settles after the deadline must not leave its browser running.
+    launching.then((late) => late.close()).catch(() => undefined);
+    if (error !== OUTER_DEADLINE && !(error instanceof errors.TimeoutError)) throw error;
+    await killLaunchedBrowser(marker);
+    throw launchTimeout();
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+export interface BrowserCloseResult {
+  /** False when the close ran out of time and the browser was killed instead. */
+  closed: boolean;
+  elapsedMs: number;
+  killed: number[];
+}
+
+/**
+ * Closes a browser from launchStudioBrowser within `timeoutMs`. A close that hangs kills the
+ * browser's process group (found by its marker among this process's children), so a finished
+ * render never waits forever on Chrome. A close that fails counts as closed: the work is done.
+ */
+export async function closeStudioBrowser(browser: Browser, options: {timeoutMs?: number} = {}): Promise<BrowserCloseResult> {
+  const started = Date.now();
+  let timer: NodeJS.Timeout | undefined;
+  const closed = await Promise.race([
+    browser.close().then(() => true, () => true),
+    new Promise<false>((resolveClose) => {
+      timer = setTimeout(() => resolveClose(false), options.timeoutMs ?? CLOSE_TIMEOUT_MS);
+    })
+  ]);
+  clearTimeout(timer);
+  const marker = markers.get(browser);
+  const killed = closed || !marker ? [] : await killLaunchedBrowser(marker);
+  return {closed, elapsedMs: Date.now() - started, killed};
+}
+
+/** SIGKILLs the process group of this process's child Chrome that carries `marker`. POSIX only. */
+async function killLaunchedBrowser(marker: string): Promise<number[]> {
+  let listing: string;
+  try {
+    ({stdout: listing} = await execFileAsync("ps", ["-axww", "-o", "pid=,ppid=,command="], {maxBuffer: 32 * 1024 * 1024}));
+  } catch {
+    return [];
+  }
+  const pids = listing.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    return match && Number(match[2]) === process.pid && ` ${match[3]} `.includes(` ${marker} `) ? [Number(match[1])] : [];
   });
-  return {browser, detection};
+  for (const pid of pids) {
+    // Playwright starts Chrome as the leader of its own process group, which holds its helpers too.
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+  }
+  return pids;
 }
 
 /** A Google Fonts answer the trusted process fulfills itself; nothing is fetched from the network. */

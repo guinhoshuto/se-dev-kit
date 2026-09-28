@@ -4,6 +4,7 @@ import type {Diagnostic, ResolvedProject} from "../types.js";
 import {detectBrowser, type BrowserDetection} from "../capture/browser.js";
 import {nearestExistingAncestor} from "../shared/paths.js";
 import {findExecutable, toolVersion} from "./tools.js";
+import {satisfiesNodeRange} from "../shared/node-support.js";
 
 // H.264/AAC video. Chromium builds without proprietary codecs (Playwright's, and the hosted
 // Sandbox's HeadlessChrome) fire `error` on it, and the capture then fails with "Video failed to load".
@@ -50,8 +51,7 @@ export async function runDoctor(options: {
   ffprobePath?: string;
 } = {}): Promise<DoctorReport> {
   const diagnostics: Diagnostic[] = [];
-  const [nodeMajor = 0, nodeMinor = 0] = process.versions.node.split(".").map(Number);
-  const nodeSupported = (nodeMajor === 22 && nodeMinor >= 20) || nodeMajor === 24;
+  const nodeSupported = satisfiesNodeRange(process.versions.node);
   diagnostics.push({
     status: nodeSupported ? "ok" : "error",
     code: "NODE_VERSION",

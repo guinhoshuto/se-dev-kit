@@ -31,7 +31,9 @@ test("tutorial mode records the widget inside the editor replica with scripted U
     browserPath: detection.executablePath,
     allowIntermediate: true,
     // The 1.2 B/px upper bound puts this full-HD run near 160 MB; the test must not depend on this machine's free space.
-    allowLowDisk: true
+    allowLowDisk: true,
+    // This test once timed out after its last frame, under load, without saying where: now the log says.
+    trace: (event) => t.diagnostic(`${event.at} +${event.elapsedMs} ms ${event.phase}${event.detail ? ` (${event.detail})` : ""}`)
   });
   assert.ok(result.status === "final" || result.status === "intermediate" || result.status === "unvalidated");
   const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));

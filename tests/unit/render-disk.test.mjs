@@ -235,7 +235,8 @@ test("the CLI refuses a render above the disk budget and --allow-low-disk lets i
     outputs: {screenshots: false, video: {...smallVideo, durationMs: 600_000, fps: 1}}
   }));
   const outputRoot = join(root, "out");
-  const base = ["render", root, "--recipe", "huge-video", "--output", outputRoot, "--json"];
+  // These runs check the disk guard, not the Node.js policy (tests/unit/node-support.test.mjs).
+  const base = ["render", root, "--recipe", "huge-video", "--output", outputRoot, "--json", "--allow-unsupported-node"];
 
   const refused = await runCli(base);
   assert.equal(refused.code, 2);
@@ -254,7 +255,7 @@ test("the CLI refuses a render above the disk budget and --allow-low-disk lets i
   assert.match((await runCli(["render", "--help"])).stdout, /--keep-frames/);
 
   const recordOutput = join(root, "record-out");
-  const recordBase = ["record", root, "--scene", "huge", "--output", recordOutput, "--json"];
+  const recordBase = ["record", root, "--scene", "huge", "--output", recordOutput, "--json", "--allow-unsupported-node"];
   const recordRefused = await runCli(recordBase);
   assert.equal(JSON.parse(recordRefused.stderr).code, "OUTPUT_DISK_LOW", recordRefused.stderr);
   assert.equal(await exists(recordOutput), false);
