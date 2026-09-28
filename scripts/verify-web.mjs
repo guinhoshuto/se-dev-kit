@@ -18,6 +18,10 @@ try {
   if(created.status()!==201)throw new Error(`Project creation failed (${created.status()}): ${(await created.json()).error??'Unknown error'}`);
   await page.waitForURL('**/p/**');
   await page.getByText('Ready · isolated runtime',{exact:true}).waitFor({timeout:30000});
+  // The editing key leaves the address bar once the tab keeps it, and a reload still opens the project.
+  assert.ok(!new URL(page.url()).hash.includes('key='),'The editor left its key in the address bar.');
+  await page.reload({waitUntil:'networkidle'});
+  await page.getByText('Ready · isolated runtime',{exact:true}).waitFor({timeout:30000});
   const frame=page.frameLocator('iframe[title="Isolated widget preview"]');
   assert.equal(await page.locator('iframe').getAttribute('sandbox'),'allow-scripts');
   await frame.locator('#messages').getByText('Ready when you are!').waitFor();

@@ -215,6 +215,28 @@ test('hosted import stores the capability privately and never prints it', async 
   }
 });
 
+test('open-editor opens a verify-hosted access file through the system opener without printing the key, and no other command reads it', {skip: process.platform === 'win32'}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-open-editor-'));
+  try {
+    const bin = join(root, 'bin');
+    const opened = join(root, 'opened.txt');
+    await mkdir(bin);
+    // A system opener that records the address it was given instead of starting a browser.
+    for (const name of ['open', 'xdg-open']) await writeFile(join(bin, name), `#!/bin/sh\nprintf '%s' "$1" > '${opened}'\n`, {mode: 0o755});
+    const access = join(root, 'access.private.json');
+    await writeFile(access, JSON.stringify({schemaVersion: 1, purpose: 'hosted-verification', origin: 'https://studio.example', projectId: 'project-test', revisionId: 'revision-test', token: TEST_TOKEN}), {mode: 0o600});
+    const {stdout, stderr} = await exec(process.execPath, [script, 'open-editor', '--access', access], {env: {...process.env, PATH: `${bin}:${process.env.PATH}`}});
+    assert.deepEqual(JSON.parse(stdout), {status: 'opened', projectId: 'project-test'});
+    assert.ok(!stdout.includes(TEST_TOKEN) && !stderr.includes(TEST_TOKEN), 'the key is never printed');
+    // The opener runs detached; give it a moment to write.
+    for (let attempt = 0; attempt < 100 && !(await stat(opened).then(() => true, () => false)); attempt += 1) await new Promise(done => setTimeout(done, 50));
+    assert.equal(await readFile(opened, 'utf8'), `https://studio.example/p/project-test#key=${TEST_TOKEN}`);
+    await assert.rejects(main(['status', '--access', access]), /Access bundle has an unsupported format\./);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('hosted skill client exposes complete English command help', async () => {
   const {stdout} = await exec(process.execPath, [script, '--help']);
   for (const command of ['import', 'status', 'open-editor', 'pull', 'push', 'run']) assert.match(stdout, new RegExp(`\\b${command}\\b`));

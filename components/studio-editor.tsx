@@ -2,6 +2,7 @@
 
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import type {Artifact, Job, ProjectView, WidgetSnapshot} from '../lib/model';
+import {addressWithoutKey} from '../lib/editor-link';
 import type {JsonObject, JsonValue, NormalizedField, SceneDefinition} from '../src/types';
 import {normalizeFields} from '../src/config/fields';
 import {applySampleChoice, fillEmptyImageFields, isMultipleMediaField, parseMediaArrayText, splitFieldOverrides, withBackgroundImage, type SampleMediaSummary} from '../src/studio-ui/sample-media';
@@ -64,9 +65,12 @@ export function StudioEditor({projectId}: {projectId: string}) {
   }, []);
 
   useEffect(() => {
-    const key = new URLSearchParams(window.location.hash.slice(1)).get('key') || sessionStorage.getItem(`studio:key:${projectId}`);
+    const linked = new URLSearchParams(window.location.hash.slice(1)).get('key');
+    const key = linked || sessionStorage.getItem(`studio:key:${projectId}`);
     if (!key) {setError('This project needs its private editing link. Open the full link including #key=…'); return;}
     sessionStorage.setItem(`studio:key:${projectId}`, key); setToken(key);
+    // Kept for reloads in this tab; the capability leaves the address bar.
+    if (linked) window.history.replaceState(null, '', addressWithoutKey(window.location.pathname, window.location.search, window.location.hash));
   }, [projectId]);
   useEffect(() => {if (!token) return; let active = true; void request<ProjectView>(`/api/v1/projects/${projectId}`).then(next => {if (active) acceptView(next);}).catch(cause => {if (active) setError(errorMessage(cause));}); return () => {active = false;};}, [projectId, token, request, acceptView]);
   useEffect(() => {if (!dirty) return; const guard = (event: BeforeUnloadEvent) => {event.preventDefault();}; window.addEventListener('beforeunload', guard); return () => window.removeEventListener('beforeunload', guard);}, [dirty]);

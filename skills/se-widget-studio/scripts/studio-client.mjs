@@ -229,15 +229,21 @@ async function requireAbsent(path, label) {
   catch (error) {if (error?.code !== 'ENOENT') throw error;}
 }
 
-async function readPrivate(path) {
+const ACCESS_PURPOSE = 'se-widget-studio-access';
+// scripts/verify-hosted.mjs keeps the same capability as {purpose: 'hosted-verification', origin, projectId, revisionId, token}.
+const VERIFICATION_PURPOSE = 'hosted-verification';
+
+async function readPrivate(path, {purposes = [ACCESS_PURPOSE]} = {}) {
   const target = resolve(path);
   const info = await lstat(target);
   check(info.isFile() && !info.isSymbolicLink() && info.size < 64 * 1024, 'Access bundle must be a bounded regular file.');
   if (platform() !== 'win32') check((info.mode & 0o077) === 0, 'Access bundle permissions must be 0600.');
   const value = JSON.parse(await readFile(target, 'utf8'));
-  check(value.schemaVersion === 1 && value.purpose === 'se-widget-studio-access', 'Access bundle has an unsupported format.');
+  check(value.schemaVersion === 1 && purposes.includes(value.purpose), 'Access bundle has an unsupported format.');
   check(ID.test(value.projectId) && typeof value.token === 'string' && /^[a-zA-Z0-9_-]{24,256}$/.test(value.token), 'Access bundle identifiers are invalid.');
   value.origin = normalizeOrigin(value.origin);
+  // The verification file has no editorUrl; the Studio's editing link is always /p/<project>#key=<token>.
+  if (value.purpose === VERIFICATION_PURPOSE && value.editorUrl === undefined) value.editorUrl = `/p/${value.projectId}#key=${value.token}`;
   check(typeof value.editorUrl === 'string' && value.editorUrl.startsWith(`/p/${value.projectId}#key=`), 'Access bundle editor URL is invalid.');
   return value;
 }
@@ -252,7 +258,7 @@ async function importWidget(flags) {
   const created = expect(result, [201], 'Project creation');
   check(ID.test(created.projectId) && ID.test(created.revisionId) && typeof created.token === 'string' && /^[a-zA-Z0-9_-]{24,256}$/.test(created.token) && created.editorUrl === `/p/${created.projectId}#key=${created.token}`, 'Project creation returned an invalid access contract.');
   const access = {
-    schemaVersion: 1, purpose: 'se-widget-studio-access', origin, projectId: created.projectId,
+    schemaVersion: 1, purpose: ACCESS_PURPOSE, origin, projectId: created.projectId,
     token: created.token, editorUrl: created.editorUrl, createdAt: new Date().toISOString()
   };
   const accessFile = await writePrivate(flags['--access-out'] ?? resolve(homedir(), '.se-widget-studio', `access-${created.projectId}.json`), access);
@@ -335,7 +341,7 @@ async function push(flags) {
 }
 
 async function openEditor(flags) {
-  const access = await readPrivate(required(flags, '--access'));
+  const access = await readPrivate(required(flags, '--access'), {purposes: [ACCESS_PURPOSE, VERIFICATION_PURPOSE]});
   const url = new URL(access.editorUrl, access.origin);
   check(url.origin === access.origin && url.pathname === `/p/${access.projectId}` && url.hash.startsWith('#key='), 'Editor URL is invalid.');
   let command; let args;
@@ -419,6 +425,7 @@ Usage:
 
 The default origin is ${DEFAULT_ORIGIN}. Set SE_WIDGET_STUDIO_URL or pass --origin to select another deployment.
 Creation reads STUDIO_CREATE_KEY from the environment when configured. Capabilities are never printed.
+Open-editor also accepts the access.private.json that scripts/verify-hosted.mjs writes; no other command does.
 Import reads but never modifies production widget files. Pull/push use complete snapshots and optimistic concurrency.
 Import and push check sws-sample: references against the selected deployment before any change; a blocked import prints its diagnostics.
 Run refuses an existing output directory, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.`);
