@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import {execFile} from "node:child_process";
 import {chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
+import {promisify} from "node:util";
 import test from "node:test";
 
+import {buildInfo} from "../../dist/build-info.js";
 import {detectBrowser} from "../../dist/capture/browser.js";
 import {detectMediaTooling} from "../../dist/capture/media.js";
 import {sha256} from "../../dist/capture/hash.js";
@@ -477,4 +480,24 @@ test("a forced rerun removes the earlier manifest before discarding frames, so a
     (error) => error?.code === "FFMPEG_FAILED"
   );
   assert.equal(await exists(manifestPath), false, "no manifest points at the discarded frames");
+});
+
+test("a CLI capture records the build and the command-line flags it ran with in the manifest", {timeout: 120_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-capture-cli-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  const cli = fileURLToPath(new URL("../../dist/cli/index.js", import.meta.url));
+  await promisify(execFile)(process.execPath, [cli, "capture", exampleRoot, "--json", "--scene", "hero", "--output", outputRoot, "--force"], {maxBuffer: 16 * 1024 * 1024});
+  const manifest = JSON.parse(await readFile(join(outputRoot, "capture-hero", "manifest.json"), "utf8"));
+  assert.deepEqual(manifest.studio, {
+    name: "se-widget-studio",
+    version: buildInfo().version,
+    commit: buildInfo().commit,
+    dirty: buildInfo().dirty,
+    cliFlags: ["--json", "--scene", "hero", "--output", "<path>", "--force"]
+  });
 });

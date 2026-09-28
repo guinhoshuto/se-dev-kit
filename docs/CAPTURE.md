@@ -34,7 +34,7 @@ The renderer hashes production files, config, catalogs, adapter, and allowlisted
 
 Every render writes a versioned `manifest.json` with:
 
-- Studio version.
+- `studio`: name and version, the engine commit and whether it was built from uncommitted changes (`commit`, `dirty`, from `dist/build-info.json`), and for a CLI render the options given on the command line (`cliFlags`, such as `["--recipe", "stills", "--keep-frames", "--output", "<path>"]`; path values are recorded as `<path>`). Hosted jobs record the deployment's commit and no `cliFlags`. `doctor` warns when that build is dirty or older than its checkout.
 - Relative production filenames and SHA-256 input hashes.
 - Resolved recipe and marketplace preset.
 - Browser path/version.

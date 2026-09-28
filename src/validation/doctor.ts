@@ -1,6 +1,7 @@
 import {access} from "node:fs/promises";
 import {constants} from "node:fs";
 import type {Diagnostic, ResolvedProject} from "../types.js";
+import {buildFreshness, type BuildFreshness} from "../build-info.js";
 import {detectBrowser, type BrowserDetection} from "../capture/browser.js";
 import {nearestExistingAncestor} from "../shared/paths.js";
 import {findExecutable, toolVersion} from "./tools.js";
@@ -44,11 +45,20 @@ export interface DoctorReport {
   };
 }
 
+/** The engine build as manifests will record it, with a warning when dist/ is dirty, stale, or unidentified. */
+export function buildDiagnostics(freshness: BuildFreshness): Diagnostic[] {
+  if (freshness.warnings.length > 0) return freshness.warnings.map(({code, detail, hint}) => ({status: "warning", code, detail, hint}));
+  const {version, commit} = freshness.info;
+  return [{status: "ok", code: "BUILD", detail: `Engine ${version} was built from commit ${commit ?? "unknown"} without uncommitted changes.`}];
+}
+
 export async function runDoctor(options: {
   project?: ResolvedProject;
   browserPath?: string;
   ffmpegPath?: string;
   ffprobePath?: string;
+  /** For tests: the dist/ folder whose build to check. */
+  distDirectory?: string;
 } = {}): Promise<DoctorReport> {
   const diagnostics: Diagnostic[] = [];
   const nodeSupported = satisfiesNodeRange(process.versions.node);
@@ -57,6 +67,7 @@ export async function runDoctor(options: {
     code: "NODE_VERSION",
     detail: `Node.js ${process.versions.node} is ${nodeSupported ? "supported" : "outside the supported >=22.20 <23 or >=24 <25 ranges"}.`
   });
+  diagnostics.push(...buildDiagnostics(await buildFreshness(options.distDirectory)));
 
   const browser = await detectBrowser(options.browserPath);
   diagnostics.push(

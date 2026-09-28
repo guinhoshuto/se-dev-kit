@@ -101,6 +101,8 @@ export interface RenderOptions {
   browser?: {browser: Browser; detection: BrowserDetection};
   /** Receives one timestamped event per phase, so a render that hangs shows the phase it stopped in. */
   trace?: (event: RenderTraceEvent) => void;
+  /** The CLI options of this render, recorded as `studio.cliFlags` in the manifest; hosted jobs have none. */
+  cliFlags?: string[];
 }
 
 export interface RenderTraceEvent {
@@ -1057,7 +1059,13 @@ export async function renderRecipe(
       schemaVersion: 1,
       status,
       generatedAt: new Date().toISOString(),
-      studio: {name: "se-widget-studio", version: STUDIO_VERSION, commit: buildInfo().commit, dirty: buildInfo().dirty},
+      studio: {
+        name: "se-widget-studio",
+        version: STUDIO_VERSION,
+        commit: buildInfo().commit,
+        dirty: buildInfo().dirty,
+        ...(options.cliFlags ? {cliFlags: options.cliFlags} : {})
+      },
       runtime: {seed: DEFAULT_SEED, fixedTime: DEFAULT_FIXED_TIME, locale: "en-US", timezone: "UTC"},
       ...(options.fonts ? {fonts: jobFonts(options.fonts, fontAccount)} : {}),
       widget: {

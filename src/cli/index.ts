@@ -16,6 +16,7 @@ import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser} from "..
 import {planRecipe, renderRecipe, singleSceneRecipe, type RenderResult, type RenderTraceEvent} from "../capture/renderer.js";
 import {assertSupportedNode} from "../shared/node-support.js";
 import {STUDIO_VERSION} from "../version.js";
+import {cliFlags} from "./flags.js";
 
 interface GlobalOptions {
   config?: string;
@@ -293,6 +294,7 @@ async function runSingleMedia(
   const trace = options.dryRun === true ? undefined : renderTrace(command);
   const result = await renderRecipe(project, recipe, {
     ...(trace ? {trace} : {}),
+    cliFlags: cliFlags(command),
     ...(typeof options.output === "string" ? {outputRoot: resolve(options.output)} : {}),
     force: options.force === true,
     dryRun: options.dryRun === true,
@@ -385,6 +387,7 @@ program
       return recipe;
     });
     const renderOptions = {
+      cliFlags: cliFlags(command),
       ...(options.output ? {outputRoot: resolve(options.output)} : {}),
       ...(options.browserPath ? {browserPath: options.browserPath} : {}),
       ...(options.ffmpegPath ? {ffmpegPath: options.ffmpegPath} : {}),
