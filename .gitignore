@@ -18,3 +18,4 @@ public/engine/
 .worker/
 /.swc
 .vercel
+.cache/
