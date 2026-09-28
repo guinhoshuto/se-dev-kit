@@ -5,7 +5,7 @@ import {realpathSync} from 'node:fs';
 import {lstat, mkdir, readFile, realpath, writeFile} from 'node:fs/promises';
 import {homedir, platform} from 'node:os';
 import {basename, dirname, extname, isAbsolute, posix, relative, resolve} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
 const DEFAULT_ORIGIN = 'https://se-dev-kit.vercel.app';
 const JSON_LIMIT = 4_000_000;
@@ -17,6 +17,10 @@ const SAMPLE_SCHEME = 'sws-sample:';
 // The Studio repository's sample-media manifest, reached when the skill runs from a checkout or a linked skill
 // directory (Node resolves the entry point's real path). A copied skill has none and relies on the server check.
 const SAMPLE_MANIFEST = resolve(dirname(fileURLToPath(import.meta.url)), '../../../sample-media/manifest.json');
+// The same checkout's engine build, which --config uses to read a se-widget-studio.config.mjs as the local CLI does.
+const ENGINE_DIST = resolve(dirname(fileURLToPath(import.meta.url)), '../../../dist');
+// Per-revision catalog limit of the hosted API (lib/schema.ts).
+const CATALOG_LIMIT = 48;
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
 function fail(message) {throw new Error(message);}
@@ -90,22 +94,28 @@ async function localAsset(root, entry) {
   return {path, contentType: contentType(path, entry.contentType), bytes: await readFile(actual)};
 }
 
-async function buildImportDefinition(widgetRoot, {catalog, name} = {}) {
+const LAYOUTS = [
+  {html: 'widget.html', css: 'widget.css', js: 'widget.js', fields: 'widget.json'},
+  {html: 'index.html', css: 'style.css', js: 'script.js', fields: 'fields.json'}
+];
+
+/** `catalog` is a JSON file; `catalogData` and `layout` come from a config flattened by the engine (--config). */
+async function buildImportDefinition(widgetRoot, {catalog, catalogData, layout: configured, name} = {}) {
   const root = await realpath(resolve(widgetRoot));
-  const layouts = [
-    {html: 'widget.html', css: 'widget.css', js: 'widget.js', fields: 'widget.json'},
-    {html: 'index.html', css: 'style.css', js: 'script.js', fields: 'fields.json'}
-  ];
-  const matches = [];
-  for (const layout of layouts) {
-    if ((await Promise.all(Object.values(layout).map(file => exists(resolve(root, file))))).every(Boolean)) matches.push(layout);
+  let layout = configured && LAYOUTS.find(candidate => Object.keys(candidate).every(kind => candidate[kind] === configured[kind]));
+  if (!configured) {
+    const matches = [];
+    for (const candidate of LAYOUTS) {
+      if ((await Promise.all(Object.values(candidate).map(file => exists(resolve(root, file))))).every(Boolean)) matches.push(candidate);
+    }
+    check(matches.length === 1, matches.length ? 'Widget root is ambiguous; both supported production layouts are complete.' : 'Widget root does not contain a supported complete production layout.');
+    layout = matches[0];
   }
-  check(matches.length === 1, matches.length ? 'Widget root is ambiguous; both supported production layouts are complete.' : 'Widget root does not contain a supported complete production layout.');
-  const layout = matches[0];
+  check(layout, 'The config names production files that hosted import does not read.');
   const [html, css, js, fieldsText] = await Promise.all([safeSource(root, layout.html), safeSource(root, layout.css), safeSource(root, layout.js), safeSource(root, layout.fields)]);
   let fields;
   try {fields = JSON.parse(fieldsText);} catch {fail(`${layout.fields} is not valid JSON.`);}
-  let extra = {};
+  let extra = catalogData ?? {};
   if (catalog) {
     try {extra = JSON.parse(await readFile(resolve(catalog), 'utf8'));} catch (error) {fail(`Catalog is not valid readable JSON: ${error instanceof Error ? error.message : String(error)}`);}
     check(extra && typeof extra === 'object' && !Array.isArray(extra), 'Catalog must be a JSON object.');
@@ -125,6 +135,31 @@ async function buildImportDefinition(widgetRoot, {catalog, name} = {}) {
   const bytes = Buffer.byteLength(JSON.stringify(snapshot));
   check(bytes <= JSON_LIMIT, `Snapshot is ${bytes} bytes; the hosted JSON limit is ${JSON_LIMIT}. Use upload reservations for large assets.`);
   return {snapshot, localAssets};
+}
+
+function recipeIds(value) {
+  const ids = [...new Set(value.split(',').map(id => id.trim()).filter(Boolean))];
+  check(ids.length > 0 && ids.every(id => ID.test(id)), '--recipes must be a comma-separated list of recipe IDs.');
+  return ids;
+}
+
+/**
+ * Reads a se-widget-studio.config.mjs with the engine of the Studio checkout this skill runs from, exactly as
+ * the local CLI loads it, and flattens it into an import catalog. The config is trusted local code, as for the
+ * CLI; nothing is sent anywhere. Warns when that engine build is dirty or older than its source.
+ */
+export async function configCatalog(configPath, {recipes, engineDist = ENGINE_DIST} = {}) {
+  const entry = resolve(engineDist, 'config/hosted-catalog.js');
+  check(await exists(entry), `--config reads the config with the engine of the SE Widget Studio checkout this skill runs from, and ${entry} is missing. Run npm run build:engine in that checkout. A copied skill has no engine: build a JSON catalog by hand as references/hosted-workflow.md describes, and pass --catalog.`);
+  const {buildFreshness} = await import(pathToFileURL(resolve(engineDist, 'build-info.js')).href);
+  for (const warning of (await buildFreshness(engineDist)).warnings) process.stderr.write(`[se-widget-studio] Warning ${warning.code}: ${warning.detail} ${warning.hint}\n`);
+  const {hostedCatalogFromConfig} = await import(pathToFileURL(entry).href);
+  let result;
+  try {result = await hostedCatalogFromConfig(resolve(configPath), recipes ? {recipes} : {});}
+  catch (error) {fail(`${error instanceof Error ? error.message : String(error)}${error?.hint ? ` ${error.hint}` : ''}`);}
+  const over = ['themes', 'fixtures', 'scenes', 'scenarios', 'recipes'].filter(kind => result.catalog[kind].length > CATALOG_LIMIT);
+  check(over.length === 0, `A hosted revision holds at most ${CATALOG_LIMIT} of each catalog kind, and this config has ${over.map(kind => `${result.catalog[kind].length} ${kind}`).join(', ')}. Pass --recipes <id,...> to keep only those recipes and the scenes, themes, and fixtures they use.`);
+  return result;
 }
 
 export async function buildSnapshot(widgetRoot, options = {}) {
@@ -251,7 +286,16 @@ async function readPrivate(path, {purposes = [ACCESS_PURPOSE]} = {}) {
 async function importWidget(flags) {
   const origin = normalizeOrigin(flags['--origin'] ?? process.env.SE_WIDGET_STUDIO_URL ?? DEFAULT_ORIGIN);
   if (flags['--access-out']) await requireAbsent(flags['--access-out'], 'Access output');
-  const {snapshot, localAssets} = await buildImportDefinition(required(flags, '--widget-root'), {catalog: flags['--catalog'], name: flags['--name']});
+  let source;
+  if (flags['--config']) {
+    check(!flags['--widget-root'] && !flags['--catalog'], '--config replaces --widget-root and --catalog; pass it alone.');
+    const config = await configCatalog(flags['--config'], flags['--recipes'] ? {recipes: recipeIds(flags['--recipes'])} : {});
+    source = [config.widgetRoot, {catalogData: config.catalog, layout: config.files, name: flags['--name']}];
+  } else {
+    check(!flags['--recipes'], '--recipes needs --config.');
+    source = [required(flags, '--widget-root'), {catalog: flags['--catalog'], name: flags['--name']}];
+  }
+  const {snapshot, localAssets} = await buildImportDefinition(...source);
   check(localAssets.length <= 128 && localAssets.reduce((total, asset) => total + asset.bytes.length, 0) <= 100 * 1024 * 1024, 'Local asset upload exceeds the hosted revision limits.');
   await checkSampleMedia(origin, snapshot);
   const result = await api(origin, '/api/v1/projects', {method: 'POST', body: snapshot, headers: process.env.STUDIO_CREATE_KEY ? {'X-Studio-Key': process.env.STUDIO_CREATE_KEY} : {}});
@@ -278,6 +322,16 @@ async function importWidget(flags) {
   if (status === 'blocked' && !localAssets.length) diagnostics = (await projectView(access).catch(() => undefined))?.revision?.diagnostics;
   const blocked = status === 'blocked' && Array.isArray(diagnostics) ? {diagnostics} : {};
   console.log(JSON.stringify({status, projectId: created.projectId, revisionId, accessFile, uploadedAssets: localAssets.length, editorAvailable: true, ...blocked}));
+}
+
+async function writeCatalog(flags) {
+  const out = resolve(required(flags, '--out'));
+  await requireAbsent(out, 'Catalog output');
+  const config = await configCatalog(required(flags, '--config'), flags['--recipes'] ? {recipes: recipeIds(flags['--recipes'])} : {});
+  await mkdir(dirname(out), {recursive: true});
+  await writeFile(out, JSON.stringify(config.catalog, null, 2) + '\n', {flag: 'wx'});
+  const counts = Object.fromEntries(['themes', 'fixtures', 'scenes', 'scenarios', 'recipes', 'assets'].map(kind => [kind, config.catalog[kind].length]));
+  console.log(JSON.stringify({status: 'written', catalog: out, widgetRoot: config.widgetRoot, counts}));
 }
 
 async function uploadLocalAsset(access, asset) {
@@ -417,6 +471,8 @@ function help() {
 
 Usage:
   studio-client.mjs import --widget-root <absolute-dir> [--name <name>] [--catalog <json>] [--origin <url>] [--access-out <private-json>]
+  studio-client.mjs import --config <se-widget-studio.config.mjs> [--recipes <id,...>] [--name <name>] [--origin <url>] [--access-out <private-json>]
+  studio-client.mjs catalog --config <se-widget-studio.config.mjs> [--recipes <id,...>] --out <new-json>
   studio-client.mjs status --access <private-json>
   studio-client.mjs open-editor --access <private-json>
   studio-client.mjs pull --access <private-json> --draft-out <new-json>
@@ -427,6 +483,10 @@ The default origin is ${DEFAULT_ORIGIN}. Set SE_WIDGET_STUDIO_URL or pass --orig
 Creation reads STUDIO_CREATE_KEY from the environment when configured. Capabilities are never printed.
 Open-editor also accepts the access.private.json that scripts/verify-hosted.mjs writes; no other command does.
 Import reads but never modifies production widget files. Pull/push use complete snapshots and optimistic concurrency.
+--config reads a local Studio config with the engine of the Studio checkout this client belongs to, as the local CLI does:
+catalog globs become arrays, the files the local Studio serves become private uploads, and /__sws/widget/<path> values
+become <path>. --recipes keeps only those recipes and the scenes, themes, and fixtures they use, and leaves scenarios out.
+Catalog writes that flattened catalog, the JSON that import --catalog takes, without contacting any Studio.
 Import and push check sws-sample: references against the selected deployment before any change; a blocked import prints its diagnostics.
 Run refuses an existing output directory, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.`);
 }
@@ -434,7 +494,8 @@ Run refuses an existing output directory, polls one job, verifies artifact hashe
 export async function main(argv = process.argv.slice(2)) {
   const [command, ...args] = argv;
   if (!command || command === '--help' || command === '-h') return help();
-  if (command === 'import') return importWidget(parseFlags(args, new Set(['--widget-root', '--name', '--catalog', '--origin', '--access-out'])));
+  if (command === 'import') return importWidget(parseFlags(args, new Set(['--widget-root', '--name', '--catalog', '--config', '--recipes', '--origin', '--access-out'])));
+  if (command === 'catalog') return writeCatalog(parseFlags(args, new Set(['--config', '--recipes', '--out'])));
   if (command === 'status') return status(parseFlags(args, new Set(['--access'])));
   if (command === 'open-editor') return openEditor(parseFlags(args, new Set(['--access'])));
   if (command === 'pull') return pull(parseFlags(args, new Set(['--access', '--draft-out'])));

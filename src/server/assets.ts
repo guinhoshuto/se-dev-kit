@@ -4,6 +4,7 @@ import fg from "fast-glob";
 import type {ResolvedProject} from "../types.js";
 import {StudioError} from "../shared/errors.js";
 import {isInside} from "../shared/paths.js";
+import {widgetRoutePath} from "../shared/widget-route.js";
 
 export interface AssetEntry {
   key: string;
@@ -123,7 +124,7 @@ export async function buildAssetMap(project: ResolvedProject): Promise<Map<strin
 }
 
 export function assetUrlPath(key: string): string {
-  return `/__sws/widget/${key.split("/").map(encodeURIComponent).join("/")}`;
+  return widgetRoutePath(key);
 }
 
 export function lookupAsset(map: Map<string, AssetEntry>, encodedKey: string): AssetEntry {

@@ -7,7 +7,7 @@ import chokidar, {type FSWatcher} from "chokidar";
 import type {AddressInfo} from "node:net";
 import type {JsonObject, JsonValue, ResolvedProject} from "../types.js";
 import {StudioError, toErrorMessage} from "../shared/errors.js";
-import {buildAssetMap, lookupAsset, type AssetEntry} from "./assets.js";
+import {assetUrlPath, buildAssetMap, lookupAsset, type AssetEntry} from "./assets.js";
 import {renderCapturePage} from "./capture-page.js";
 import {renderTutorialPage} from "./tutorial-page.js";
 import {renderFrameDocument} from "./html.js";
@@ -137,12 +137,26 @@ function publicProject(
   };
 }
 
-/** Placeholder values as the frame sees them: sample references become frame-origin URLs, as the runtime maps them. */
-function frameFieldValues(fieldData: JsonObject, frameOrigin: string): JsonObject {
+/**
+ * The widget's files by widget-relative key (`studio/media/a.jpg`), as absolute frame-origin URLs. The
+ * frame runtime replaces a whole string equal to a key in field data, channel, recents, field updates,
+ * and events, as hosted previews replace captured asset paths with data URLs, so a widget that resolves
+ * media with `new URL(value, location.href)` gets the file. Production sources and the adapter are left out.
+ */
+function runtimeAssetUrls(assets: Map<string, AssetEntry>, project: ResolvedProject, frameOrigin: string): Record<string, string> {
+  const sources = new Set([...Object.values(project.files), ...(project.adapterPath ? [project.adapterPath] : [])]);
+  const urls: Record<string, string> = {};
+  for (const entry of assets.values()) if (!sources.has(entry.filePath)) urls[entry.key] = `${frameOrigin}${assetUrlPath(entry.key)}`;
+  return urls;
+}
+
+/** Placeholder values as the frame sees them: sample references and widget file keys become frame-origin URLs, as the runtime maps them. */
+function frameFieldValues(fieldData: JsonObject, frameOrigin: string, assetUrls: Record<string, string>): JsonObject {
   const mapped: JsonObject = {};
   for (const [key, value] of Object.entries(fieldData)) {
     const file = typeof value === "string" ? sampleMediaFile(value) : undefined;
-    mapped[key] = file ? `${frameOrigin}${SAMPLE_MEDIA_ROUTE}${file}` : (value as JsonValue);
+    const asset = typeof value === "string" && Object.hasOwn(assetUrls, value) ? assetUrls[value] : undefined;
+    mapped[key] = file ? `${frameOrigin}${SAMPLE_MEDIA_ROUTE}${file}` : asset ?? (value as JsonValue);
   }
   return mapped;
 }
@@ -227,9 +241,10 @@ export async function startStudioServer(
   const sampleMedia = (): Promise<SampleMediaCatalog> => loadSampleMediaCatalog();
   // In-memory only; oldest keys are dropped first. Values never leave this process except as page content.
   const frameDocuments = new Map<string, JsonObject>();
+  const assetUrls = (): Record<string, string> => runtimeAssetUrls(assetMap, activeProject, frameOrigin);
   /** `undefined` for an unknown key; the defaults when no key is given (the local dev UI). */
   const frameValues = (docKey: string | null): JsonObject | undefined => {
-    if (docKey === null) return frameFieldValues(activeProject.fieldDefaults, frameOrigin);
+    if (docKey === null) return frameFieldValues(activeProject.fieldDefaults, frameOrigin, assetUrls());
     return /^[a-f0-9]{32}$/.test(docKey) ? frameDocuments.get(docKey) : undefined;
   };
 
@@ -272,6 +287,10 @@ export async function startStudioServer(
       if (runtimeFile) {
         const source = await readFile(resolve(distributionRoot, "runtime", runtimeFile));
         send(request, response, 200, "text/javascript; charset=utf-8", source, frameHeaders);
+        return;
+      }
+      if (pathname === "/__sws/asset-map.json") {
+        sendJson(request, response, 200, assetUrls());
         return;
       }
       if (pathname === "/__sws/version.js") {
@@ -455,7 +474,7 @@ export async function startStudioServer(
       return `${frameOrigin}/__sws/sample/${entry.file}`;
     },
     registerFrameDocument: async (fieldData) => {
-      const values = frameFieldValues(fieldData, frameOrigin);
+      const values = frameFieldValues(fieldData, frameOrigin, assetUrls());
       const project = activeProject;
       const [html, css, js] = await Promise.all([project.files.html, project.files.css, project.files.js].map((file) => readFile(file, "utf8")));
       // Build once so unsafe values fail here, with a clear error, instead of as a frame that never boots.

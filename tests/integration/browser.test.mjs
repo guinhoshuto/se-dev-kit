@@ -207,26 +207,8 @@ test("timer-based readiness advances in fixed quanta and unmanaged previews keep
   }
 });
 
-test("built-in sample media reach widgets as absolute same-origin URLs in fields, arrays, events, and backgrounds", {timeout: 120_000}, async (t) => {
-  const detection = await detectBrowser();
-  if (!detection.executablePath) {
-    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
-    return;
-  }
-
-  const root = await mkdtemp(join(tmpdir(), "sws-sample-integration-"));
-  t.after(() => rm(root, {recursive: true, force: true}));
-  await Promise.all([
-    writeFile(join(root, "widget.html"), '<main id="widget"><div id="single"></div><div id="gallery"></div></main>\n'),
-    writeFile(join(root, "widget.css"), "body{margin:0;background:transparent}img{width:40px;height:30px}\n"),
-    writeFile(
-      join(root, "widget.json"),
-      JSON.stringify({image: {type: "image-input", label: "Image", value: ""}, gallery: {type: "image-input", label: "Gallery", multiple: true, value: []}})
-    ),
-    // Like se-windows, media values are normalized with new URL(value, location.href) and only http(s)/blob survive.
-    writeFile(
-      join(root, "widget.js"),
-      `const toUrl = (value) => {
+// Like se-windows, media values are normalized with new URL(value, location.href) and only http(s)/blob survive.
+const MEDIA_WIDGET_JS = `const toUrl = (value) => {
   try {
     const url = new URL(value, window.location.href);
     return ["http:", "https:", "blob:"].includes(url.protocol) ? url.href : "";
@@ -250,9 +232,30 @@ window.addEventListener("onWidgetLoad", apply);
 window.addEventListener("onWidgetUpdate", apply);
 window.addEventListener("onEventReceived", ({detail}) => {
   if (detail.listener === "avatar") render("single", [detail.event.data.avatar]);
-});\n`
-    )
+});\n`;
+
+async function mediaWidget(root, js = MEDIA_WIDGET_JS) {
+  await Promise.all([
+    writeFile(join(root, "widget.html"), '<main id="widget"><div id="single"></div><div id="gallery"></div></main>\n'),
+    writeFile(join(root, "widget.css"), "body{margin:0;background:transparent}img{width:40px;height:30px}\n"),
+    writeFile(
+      join(root, "widget.json"),
+      JSON.stringify({image: {type: "image-input", label: "Image", value: ""}, gallery: {type: "image-input", label: "Gallery", multiple: true, value: []}})
+    ),
+    writeFile(join(root, "widget.js"), js)
   ]);
+}
+
+test("built-in sample media reach widgets as absolute same-origin URLs in fields, arrays, events, and backgrounds", {timeout: 120_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "sws-sample-integration-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await mediaWidget(root);
 
   const project = await loadProject({inputDirectory: root});
   const scene = {
@@ -300,6 +303,69 @@ window.addEventListener("onEventReceived", ({detail}) => {
       openScene(project, server, browser, {...scene, background: {id: "remote", image: "https://example.com/a.jpg"}}),
       {code: "EXTERNAL_BACKGROUND_BLOCKED"}
     );
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+// A 3x2 PNG, so a decoded widget file is told apart from a sample (1600 wide) or a failed load (0).
+const PNG_3X2 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGM4YVMBQQxwFgBbBAjpVFBn5QAAAABJRU5ErkJggg==", "base64");
+
+test("widget files named by their widget-relative path reach widgets as absolute URLs in fields, arrays, placeholders, updates, and events", {timeout: 120_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "sws-widget-media-integration-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await mediaWidget(root, `window.fromPlaceholder = "{{image}}";\n${MEDIA_WIDGET_JS}`);
+  await mkdir(join(root, "studio/media"), {recursive: true});
+  await Promise.all([writeFile(join(root, "studio/media/a.png"), PNG_3X2), writeFile(join(root, "studio/media/b c.png"), PNG_3X2)]);
+
+  const project = await loadProject({inputDirectory: root});
+  // As se-windows declares its test media: outside the default assets/, fonts/, and media/ folders.
+  project.config.widget.assets = ["studio/media/**/*"];
+  const scene = {
+    schemaVersion: 1,
+    id: "widget-files",
+    name: "Widget files",
+    viewport: {width: 320, height: 240},
+    output: {width: 320, height: 240, format: "png"},
+    // The old /__sws/widget/ spelling keeps working next to the plain relative one.
+    fieldData: {image: "studio/media/a.png", gallery: ["studio/media/b c.png", "/__sws/widget/studio/media/a.png"]}
+  };
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  try {
+    const assetMap = await (await fetch(`${server.frameOrigin}/__sws/asset-map.json`)).json();
+    assert.deepEqual(assetMap, {
+      "studio/media/a.png": `${server.frameOrigin}/__sws/widget/studio/media/a.png`,
+      "studio/media/b c.png": `${server.frameOrigin}/__sws/widget/studio/media/b%20c.png`
+    }, "the production HTML, CSS, JS, and FIELDS are not media");
+
+    const opened = await openScene(project, server, browser, scene);
+    try {
+      const frame = opened.frame();
+      const a = `${server.frameOrigin}/__sws/widget/studio/media/a.png`;
+      const bc = `${server.frameOrigin}/__sws/widget/studio/media/b%20c.png`;
+      const images = await frame.locator("img").evaluateAll((nodes) => nodes.map((node) => ({src: node.src, width: node.naturalWidth})));
+      assert.deepEqual(images, [{src: a, width: 3}, {src: bc, width: 3}, {src: a, width: 3}]);
+      assert.equal(await frame.evaluate(() => window.fromPlaceholder), a, "{{image}} is substituted with the URL the runtime maps it to");
+
+      await captureHostUpdateFields(opened.page, {gallery: ["studio/media/a.png"]});
+      await frame.locator(`#gallery img[src="${a}"][data-width="3"]`).waitFor({state: "attached"});
+      await captureHostDispatch(opened.page, "avatar", {data: {avatar: "studio/media/b c.png"}});
+      await frame.locator(`#single img[src="${bc}"][data-width="3"]`).waitFor({state: "attached"});
+
+      const runtimeErrors = (await frameEvents(opened.page)).filter(({type}) => type === "frame:error" || type === "frame:unhandled-rejection");
+      assert.deepEqual(runtimeErrors, []);
+      assert.deepEqual(opened.issues.errors, []);
+    } finally {
+      await opened.context.close();
+    }
   } finally {
     await browser.close();
     await server.close();

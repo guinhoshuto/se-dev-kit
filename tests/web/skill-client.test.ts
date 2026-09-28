@@ -4,9 +4,9 @@ import {execFile} from 'node:child_process';
 import {createServer} from 'node:http';
 import {mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join, resolve} from 'node:path';
+import {dirname, join, resolve} from 'node:path';
 import {promisify} from 'node:util';
-import {buildSnapshot, main, normalizeOrigin} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
+import {buildSnapshot, configCatalog, main, normalizeOrigin} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
 
 const exec = promisify(execFile);
 const script = resolve('skills/se-widget-studio/scripts/studio-client.mjs');
@@ -211,6 +211,131 @@ test('hosted import stores the capability privately and never prints it', async 
     await assert.rejects(main(['run', '--access', access, '--kind', 'test', '--selection', 'all', '--output-dir', existing]), /already exists/);
   } finally {
     await new Promise<void>(done => server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+const PNG_3X2 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGM4YVMBQQxwFgBbBAjpVFBn5QAAAABJRU5ErkJggg==', 'base64');
+
+/** A widget with a local Studio config shaped like se-windows: catalog and media under studio/, scenes with /__sws/widget/ media. */
+async function configuredWidget(root: string, scenes = 2) {
+  const files: Record<string, string | Buffer> = {
+    'index.html': '<main id="stage"></main>', 'style.css': 'body{margin:0}', 'script.js': 'window.ready = true;',
+    'fields.json': JSON.stringify({gallery: {type: 'image-input', multiple: true, value: []}}),
+    'se-widget-studio.config.mjs': `export default {schemaVersion: 1, widget: {root: ".", assets: ["studio/media/**/*"], viewport: {width: 640, height: 360}}, themes: {glob: "studio/themes/*.json"}, scenes: {glob: "studio/scenes/*.json"}, recipes: {glob: "studio/recipes/*.json"}, output: {root: "thumb-assets"}};\n`,
+    'studio/themes/night.json': JSON.stringify({schemaVersion: 1, id: 'night', name: 'Night', fieldData: {accent: '#123456'}}),
+    'studio/recipes/stills.json': JSON.stringify({schemaVersion: 1, id: 'stills', name: 'Stills', scenes: ['scene-0'], outputs: {screenshots: true}}),
+    'studio/media/a.png': PNG_3X2, 'studio/media/b.png': PNG_3X2
+  };
+  for (let index = 0; index < scenes; index += 1) {
+    files[`studio/scenes/scene-${index}.json`] = JSON.stringify({schemaVersion: 1, id: `scene-${index}`, name: `Scene ${index}`, theme: 'night', fieldData: {gallery: ['/__sws/widget/studio/media/a.png', 'studio/media/b.png']}});
+  }
+  for (const [path, body] of Object.entries(files)) {
+    await mkdir(dirname(join(root, path)), {recursive: true});
+    await writeFile(join(root, path), body);
+  }
+  return join(root, 'se-widget-studio.config.mjs');
+}
+
+test('catalog flattens a local Studio config with the checkout engine, and refuses what a hosted revision cannot hold', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-catalog-'));
+  try {
+    const config = await configuredWidget(join(root, 'widget'));
+    const out = join(root, 'catalog.json');
+    const {stdout} = await exec(process.execPath, [script, 'catalog', '--config', config, '--out', out]);
+    assert.deepEqual(JSON.parse(stdout).counts, {themes: 1, fixtures: 0, scenes: 2, scenarios: 0, recipes: 1, assets: 2});
+    const catalog = JSON.parse(await readFile(out, 'utf8'));
+    assert.deepEqual(catalog.scenes[0].fieldData.gallery, ['studio/media/a.png', 'studio/media/b.png']);
+    assert.deepEqual(catalog.assets, [{path: 'studio/media/a.png', file: 'studio/media/a.png', contentType: 'image/png'}, {path: 'studio/media/b.png', file: 'studio/media/b.png', contentType: 'image/png'}]);
+    // The written catalog is what import --catalog takes.
+    const snapshot = await buildSnapshot(join(root, 'widget'), {catalog: out}).catch((error: Error) => error);
+    assert.match(String(snapshot), /Catalog contains local file assets\. Use the import command/);
+    await assert.rejects(exec(process.execPath, [script, 'catalog', '--config', config, '--out', out]), failure(/Catalog output already exists\. Nothing was overwritten\./));
+
+    const large = await configuredWidget(join(root, 'large'), 49);
+    await assert.rejects(exec(process.execPath, [script, 'catalog', '--config', large, '--out', join(root, 'large.json')]), failure(/holds at most 48 of each catalog kind, and this config has 49 scenes\. Pass --recipes <id,\.\.\.>/));
+    const {stdout: narrowed} = await exec(process.execPath, [script, 'catalog', '--config', large, '--recipes', 'stills', '--out', join(root, 'stills.json')]);
+    assert.deepEqual(JSON.parse(narrowed).counts, {themes: 1, fixtures: 0, scenes: 1, scenarios: 0, recipes: 1, assets: 2});
+    await assert.rejects(exec(process.execPath, [script, 'catalog', '--config', large, '--recipes', 'stills,nope', '--out', join(root, 'nope.json')]), failure(/Recipe not found: nope/));
+    await assert.rejects(stat(join(root, 'large.json')), {code: 'ENOENT'});
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test('import --config uploads the widget files and submits the flattened catalog with widget-relative media', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-import-config-'));
+  let submitted: any; let finalized: any;
+  const uploads = new Map<string, Buffer>(); const reservations: unknown[] = [];
+  const server = createServer(async (request, response) => {
+    const chunks = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const bytes = Buffer.concat(chunks);
+    response.setHeader('Content-Type', 'application/json');
+    if (request.method === 'POST' && request.url === '/api/v1/projects') {
+      submitted = JSON.parse(bytes.toString('utf8')); response.statusCode = 201;
+      return response.end(JSON.stringify({projectId: 'project-test', revisionId: 'revision-test', status: 'blocked', token: TEST_TOKEN, editorUrl: `/p/project-test#key=${TEST_TOKEN}`, etag: 'etag-test'}));
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/projects/project-test/uploads') {
+      reservations.push(JSON.parse(bytes.toString('utf8'))); response.statusCode = 201;
+      const uploadId = `upload-${reservations.length}`;
+      return response.end(JSON.stringify({uploadId, url: `/api/v1/projects/project-test/uploads/${uploadId}`, method: 'PUT', headers: {}, requiresAuthorization: true}));
+    }
+    if (request.method === 'PUT' && request.url?.startsWith('/api/v1/projects/project-test/uploads/')) {uploads.set(request.url.split('/').at(-1)!, bytes); response.statusCode = 201; return response.end('{}');}
+    if (request.method === 'GET' && request.url === '/api/v1/projects/project-test') return response.end(JSON.stringify({etag: 'etag-test', revision: {id: 'revision-test', status: 'blocked', snapshot: submitted}}));
+    if (request.method === 'PUT' && request.url === '/api/v1/projects/project-test') {finalized = JSON.parse(bytes.toString('utf8')); return response.end(JSON.stringify({revision: {id: 'revision-ready', status: 'ready', diagnostics: []}}));}
+    response.statusCode = 500; response.end(JSON.stringify({error: 'Unexpected test route.'}));
+  });
+  try {
+    const config = await configuredWidget(join(root, 'widget'), 3);
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const origin = `http://127.0.0.1:${address.port}`;
+    const access = join(root, 'access.private.json');
+    const {stdout} = await exec(process.execPath, [script, 'import', '--config', config, '--recipes', 'stills', '--origin', origin, '--access-out', access], {env: {...process.env, STUDIO_CREATE_KEY: undefined}});
+    assert.deepEqual(JSON.parse(stdout), {status: 'ready', projectId: 'project-test', revisionId: 'revision-ready', accessFile: access, uploadedAssets: 2, editorAvailable: true});
+    assert.equal(submitted.name, 'widget');
+    assert.equal(submitted.widget.html, '<main id="stage"></main>');
+    assert.deepEqual(submitted.widget.viewport, {width: 640, height: 360});
+    assert.deepEqual(submitted.scenes.map((scene: {id: string}) => scene.id), ['scene-0']);
+    assert.deepEqual(submitted.scenes[0].fieldData.gallery, ['studio/media/a.png', 'studio/media/b.png']);
+    assert.deepEqual(submitted.themes.map((theme: {id: string}) => theme.id), ['night']);
+    assert.deepEqual(submitted.assets, []);
+    assert.deepEqual(reservations, [{bytes: PNG_3X2.length, contentType: 'image/png'}, {bytes: PNG_3X2.length, contentType: 'image/png'}]);
+    assert.deepEqual([...uploads.values()], [PNG_3X2, PNG_3X2]);
+    assert.deepEqual(finalized.assets, [{path: 'studio/media/a.png', contentType: 'image/png', uploadId: 'upload-1'}, {path: 'studio/media/b.png', contentType: 'image/png', uploadId: 'upload-2'}]);
+
+    await assert.rejects(main(['import', '--config', config, '--widget-root', join(root, 'widget'), '--origin', origin]), /--config replaces --widget-root and --catalog/);
+    await assert.rejects(main(['import', '--widget-root', join(root, 'widget'), '--recipes', 'stills', '--origin', origin]), /--recipes needs --config\./);
+  } finally {
+    await new Promise<void>(done => server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('--config warns when the checkout engine it reads the config with is dirty or older than its source', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-engine-'));
+  const stderr: string[] = [];
+  const write = process.stderr.write;
+  try {
+    const config = await configuredWidget(join(root, 'widget'));
+    // A checkout whose dist/ re-exports the real engine but records its own build: dirty, and older than src/.
+    const dist = join(root, 'checkout/dist');
+    await mkdir(join(dist, 'config'), {recursive: true});
+    await mkdir(join(root, 'checkout/src'), {recursive: true});
+    await writeFile(join(dist, 'build-info.js'), `export {buildFreshness} from ${JSON.stringify(resolve('dist/build-info.js'))};\n`);
+    await writeFile(join(dist, 'config/hosted-catalog.js'), `export {hostedCatalogFromConfig} from ${JSON.stringify(resolve('dist/config/hosted-catalog.js'))};\n`);
+    await writeFile(join(dist, 'build-info.json'), JSON.stringify({version: '0.2.0', commit: 'c'.repeat(40), dirty: true}));
+    await writeFile(join(root, 'checkout/src/index.ts'), '// newer than the build\n');
+    const past = new Date(Date.now() - 60_000);
+    const {utimes} = await import('node:fs/promises');
+    await utimes(join(dist, 'build-info.json'), past, past);
+    process.stderr.write = ((chunk: string) => {stderr.push(String(chunk)); return true;}) as typeof process.stderr.write;
+    const result = await configCatalog(config, {engineDist: dist});
+    process.stderr.write = write;
+    assert.equal(result.catalog.scenes.length, 2);
+    assert.match(stderr.join(''), /Warning BUILD_DIRTY: dist\/ was built from uncommitted changes on top of cccccccccccc/);
+    assert.match(stderr.join(''), /Warning BUILD_STALE: dist\/ is older than src\/: src\/index\.ts changed after the build/);
+    await assert.rejects(configCatalog(config, {engineDist: join(root, 'no-checkout/dist')}), /--config reads the config with the engine of the SE Widget Studio checkout this skill runs from, and .* is missing\. Run npm run build:engine in that checkout\. A copied skill has no engine/);
+  } finally {
+    process.stderr.write = write;
     await rm(root, {recursive: true, force: true});
   }
 });

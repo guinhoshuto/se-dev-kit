@@ -13,6 +13,7 @@ import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/stud
 import {deployedSampleMedia, type SampleMediaSource} from './sample-media';
 import {hasPlaceholder, refusedHtmlElement} from '../src/config/placeholders';
 import {canonicalGoogleFontsUrl} from '../src/runtime/google-fonts-url';
+import {widgetRouteKey} from '../src/shared/widget-route';
 
 type Node = DefaultTreeAdapterMap['node'];
 type Element = DefaultTreeAdapterMap['element'];
@@ -302,6 +303,8 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
       }
     } else {
       const clean = reference.split(/[?#]/, 1)[0]!;
+      const localKey = widgetRouteKey(clean);
+      if (localKey) throw new Error(`${reference} is a local Studio URL. Use the widget-relative path ${localKey}, which local runs accept too.`);
       if (clean.startsWith('/')) throw new Error(`Absolute local asset paths are not supported: ${reference}`);
       path = posix.normalize(posix.join(base ? posix.dirname(base) : '', clean));
       safeAssetPath(path);
@@ -349,14 +352,22 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
   snapshot.widget.html = serialize(document);
   snapshot.widget.css = await rewriteCss(snapshot.widget.css, ref => resolveReference(ref));
   const mediaFields = new Set(normalizeFields(snapshot.widget.fields).fields.filter(field => ['image-input', 'video-input', 'sound-input'].includes(field.type)).map(field => field.id));
-  // Sample references stay literal; arrays (multiple fields) stay literal as before, and their samples were pinned above.
-  const rewriteFieldData = async (data: Record<string, JsonValue>) => { for (const key of mediaFields) if (typeof data[key] === 'string' && data[key] && !claimsSampleMediaScheme(data[key])) data[key] = await resolveReference(String(data[key])); };
+  // A media value is one reference or, for a `multiple` field, an array of them; each is captured and
+  // validated alike, in order. Sample references stay literal: they were validated and pinned above.
+  const resolveMediaItem = async (item: JsonValue): Promise<JsonValue> => typeof item === 'string' && item && !claimsSampleMediaScheme(item) ? await resolveReference(item) : item;
+  const resolveMedia = async (value: JsonValue): Promise<JsonValue> => {
+    if (!Array.isArray(value)) return resolveMediaItem(value);
+    const resolved: JsonValue[] = [];
+    for (const item of value) resolved.push(await resolveMediaItem(item));
+    return resolved;
+  };
+  const rewriteFieldData = async (data: Record<string, JsonValue>) => { for (const key of mediaFields) { const value = data[key]; if (value !== undefined) data[key] = await resolveMedia(value); } };
   const raw = snapshot.widget.fields;
   const fields = raw && typeof raw === 'object' && !Array.isArray(raw) && 'fields' in raw ? raw.fields : raw;
   if (fields && typeof fields === 'object') for (const [key, value] of Object.entries(fields)) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     const id = Array.isArray(fields) ? String(value.id ?? value.name ?? key) : key;
-    if (mediaFields.has(id)) for (const property of ['value', 'default']) if (typeof value[property] === 'string' && value[property]) value[property] = await resolveReference(String(value[property]));
+    if (mediaFields.has(id)) for (const property of ['value', 'default']) { const media = value[property]; if (media !== undefined) value[property] = await resolveMedia(media); }
   }
   for (const item of [...snapshot.themes, ...snapshot.fixtures, ...snapshot.scenes]) if (item.fieldData) await rewriteFieldData(item.fieldData);
   const backgrounds = [...snapshot.scenes.flatMap(scene => scene.background ? [scene.background] : []), ...snapshot.recipes.flatMap(recipe => recipe.matrix?.backgrounds ?? [])];

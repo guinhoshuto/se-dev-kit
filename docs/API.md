@@ -42,6 +42,8 @@ All catalog entries require `schemaVersion: 1`, `id`, and `name`, and accept opt
 Scene and recipe presentation objects use these keys:
 
 - `background`: required `id`; optional `label`, `color`, `image`, `checkerboard`. Images must be captured project resources, supported image data URLs, or built-in `sws-sample:` references (see [Sample media](#sample-media)). The editor stage displays the verified background image returned by preview.
+
+Values of `image-input`, `video-input`, and `sound-input` fields in FIELDS `value`/`default` and in theme, fixture, and scene `fieldData` are prepared like HTML references, whether one string or an array (a `multiple` field): a relative path must name a declared asset and is normalized (`./media/a.png` becomes `media/a.png`), and a public HTTPS URL is captured as an asset. Empty strings, data URLs, non-string items, and `sws-sample:` references stay as written. A `/__sws/widget/<path>` value, the local Studio's own URL for a widget file, blocks the revision with a message naming `<path>`, which local runs accept too. Preview and jobs hand the widget a URL it can load for every whole string equal to a captured asset path.
 - `viewport`: `width`, `height`, optional `deviceScaleFactor`. Recipe matrix viewports also require `id`, with optional `label`.
 - `output`: `width`, `height`, optional `format` (`png` or `jpeg`) and `quality` (1–100).
 - `camera`: required `id`, `scale` (0.05–20), `x`, `y`; optional `label` and `origin`.

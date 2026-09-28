@@ -102,6 +102,31 @@ test('preparation captures dependencies without mutating source and defers class
   assert.doesNotMatch(html, /<script[^>]*src="scripts/);
 });
 
+test('media arrays in FIELDS and catalog field data are captured item by item, like single values', async () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>';
+  const source = snapshot();
+  source.widget.fields = {gallery: {type: 'image-input', multiple: true, value: ['./media/a.svg']}, clips: {type: 'video-input', multiple: true, value: []}, caption: {type: 'text', value: './media/a.svg'}};
+  source.assets = [{path: 'media/a.svg', content: svg}, {path: 'media/b.svg', content: svg}];
+  source.themes = [{schemaVersion: 1, id: 'dark', name: 'Dark', fieldData: {gallery: ['./media/b.svg', '', 'data:image/png;base64,AAAA', 7]}}];
+  source.fixtures = [{schemaVersion: 1, id: 'chat', name: 'Chat', fieldData: {clips: ['media/b.svg']}, events: []}];
+  source.scenes = [{schemaVersion: 1, id: 'hero', name: 'Hero', fieldData: {gallery: ['media/a.svg', './media/b.svg'], caption: './media/b.svg'}}];
+  const original = structuredClone(source);
+  const prepared = await prepareSnapshot(source, new MemoryStore(), 'fixture');
+  assert.deepEqual(source, original);
+  assert.deepEqual((prepared.snapshot.widget.fields as Record<string, {value: unknown}>).gallery!.value, ['media/a.svg']);
+  assert.deepEqual(prepared.snapshot.themes[0]?.fieldData.gallery, ['media/b.svg', '', 'data:image/png;base64,AAAA', 7], 'empty, data:, and non-string items stay as written');
+  assert.deepEqual(prepared.snapshot.fixtures[0]?.fieldData?.clips, ['media/b.svg']);
+  assert.deepEqual(prepared.snapshot.scenes[0]?.fieldData, {gallery: ['media/a.svg', 'media/b.svg'], caption: './media/b.svg'}, 'only media fields are resolved');
+
+  const missing = snapshot();
+  missing.widget.fields = source.widget.fields;
+  missing.assets = [{path: 'media/a.svg', content: svg}];
+  missing.scenes = [{schemaVersion: 1, id: 'hero', name: 'Hero', fieldData: {gallery: ['media/a.svg', 'media/missing.svg']}}];
+  await assert.rejects(prepareSnapshot(missing, new MemoryStore(), 'fixture'), /Missing asset: media\/missing\.svg/);
+  missing.scenes[0]!.fieldData = {gallery: ['/__sws/widget/media/a%20b.svg']};
+  await assert.rejects(prepareSnapshot(missing, new MemoryStore(), 'fixture'), /is a local Studio URL\. Use the widget-relative path media\/a b\.svg/);
+});
+
 test('unsupported active HTML and missing assets fail preparation explicitly', async () => {
   for (const html of ['<iframe src="https://example.com"></iframe>', '<img onerror="alert(1)">', '<script type="module">export const x=1</script>', '<img src="missing.png">', '<img srcset="a.png 1x,b.png 2x">']) {
     const source = snapshot(); source.widget.html = html;

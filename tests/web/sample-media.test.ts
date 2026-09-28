@@ -83,11 +83,17 @@ test('import rejects unknown samples, samples in widget source, and samples save
   await assert.rejects(prepareSnapshot(fields, new MemoryStore(), 'p'), /cannot be saved as FIELDS defaults/);
 });
 
-test('arrays of ordinary media paths keep their existing literal import behavior', async () => {
+test('a media array keeps its sample references literal and captures its widget asset paths', async () => {
   const source = snapshot();
-  source.scenes[0]!.fieldData = {gallery: ['/__sws/widget/studio/media/gallery/01-x.jpg', 'undeclared.png', NEON]};
+  source.assets = [{path: 'studio/media/gallery/01-x.svg', content: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'}];
+  source.scenes[0]!.fieldData = {gallery: ['./studio/media/gallery/01-x.svg', NEON]};
   const prepared = await prepareSnapshot(source, new MemoryStore(), 'p');
-  assert.deepEqual(prepared.snapshot.scenes[0]!.fieldData?.gallery, ['/__sws/widget/studio/media/gallery/01-x.jpg', 'undeclared.png', NEON]);
+  assert.deepEqual(prepared.snapshot.scenes[0]!.fieldData?.gallery, ['studio/media/gallery/01-x.svg', NEON]);
+  assert.deepEqual(prepared.assets.map(asset => asset.path), ['studio/media/gallery/01-x.svg']);
+  source.scenes[0]!.fieldData = {gallery: [NEON, '/__sws/widget/studio/media/gallery/01-x.svg']};
+  await assert.rejects(prepareSnapshot(source, new MemoryStore(), 'p'), /\/__sws\/widget\/studio\/media\/gallery\/01-x\.svg is a local Studio URL\. Use the widget-relative path studio\/media\/gallery\/01-x\.svg/);
+  source.scenes[0]!.fieldData = {gallery: [NEON, 'undeclared.png']};
+  await assert.rejects(prepareSnapshot(source, new MemoryStore(), 'p'), /Missing asset: undeclared\.png/);
 });
 
 test('preview embeds only the samples the effective state and scene fixture use, as verified data URLs', async () => {

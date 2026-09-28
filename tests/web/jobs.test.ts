@@ -8,6 +8,7 @@ import {LocalStore, readJson, writeJson} from '../../lib/storage';
 import {materializeSnapshot, safeAssetPath, relocateProject} from '../../lib/materialize';
 import {executionMode, hostedSandboxName, patchJob, remainingJobTime, runJob} from '../../lib/jobs';
 import {buildAssetMap} from '../../src/server/assets';
+import {prepareSnapshot} from '../../lib/importer';
 import type {WidgetSnapshot, Revision, Job, ObjectStore} from '../../lib/model';
 
 function snapshot(): WidgetSnapshot {
@@ -115,6 +116,33 @@ test('[browser] local worker runs the real browser and publishes verified screen
     assert.equal(tested.artifacts[0]?.name, 'test-report.json');
     const report = await store.get(tested.artifacts[0]!.key);
     assert.equal(JSON.parse(Buffer.from(report!.body).toString()).scenarios[0].status, 'passed');
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+// Like se-windows: media values are normalized with new URL(value, location.href), so a relative path only
+// loads when the runtime hands the widget an absolute URL.
+const LOCATION_MEDIA_WIDGET = 'window.addEventListener("onWidgetLoad",({detail})=>{const list=Array.isArray(detail.fieldData.gallery)?detail.fieldData.gallery:[];document.querySelector("#gallery").replaceChildren(...list.map(value=>{const url=new URL(value,window.location.href);const image=document.createElement("img");image.addEventListener("load",()=>{image.dataset.width=String(image.naturalWidth);});image.src=["http:","https:"].includes(url.protocol)?url.href:"";return image;}));});';
+const PNG_3X2 = 'iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGM4YVMBQQxwFgBbBAjpVFBn5QAAAABJRU5ErkJggg==';
+
+test('[browser] a job loads the widget files a media array names, in a widget that resolves media against its location', {timeout: 120_000}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-worker-media-'));
+  try {
+    const store = new LocalStore(join(root, 'store'));
+    const source: WidgetSnapshot = {
+      schemaVersion: 1, name: 'Media arrays',
+      widget: {html: '<main id="widget"><div id="gallery"></div></main>', css: 'body{margin:0}img{width:40px;height:30px}', js: LOCATION_MEDIA_WIDGET, fields: {gallery: {type: 'image-input', multiple: true, value: []}}, viewport: {width: 160, height: 120}, ready: {selector: '#widget', timeoutMs: 5000}},
+      channel: {}, themes: [], fixtures: [],
+      scenes: [{schemaVersion: 1, id: 'default', name: 'Default', output: {width: 160, height: 120}, fieldData: {gallery: ['./studio/media/a.png', 'studio/media/b.png']}, captureAtMs: 0}],
+      scenarios: [{schemaVersion: 1, id: 'media', name: 'Media', steps: [{action: 'assert', selector: '#gallery img[data-width="3"]', count: 2}]}],
+      recipes: [],
+      assets: [{path: 'studio/media/a.png', content: PNG_3X2, encoding: 'base64'}, {path: 'studio/media/b.png', content: PNG_3X2, encoding: 'base64'}]
+    };
+    const prepared = await prepareSnapshot(source, store, 'projects/project-test/prepared/revision-media');
+    const media: Revision = {id: 'revision-media', projectId: 'project-test', createdAt: new Date().toISOString(), snapshot: source, status: 'ready', diagnostics: [], prepared};
+    const tested = await runJob({...job('test', 'all'), id: 'job-media', revisionId: 'revision-media'}, media, store);
+    assert.equal(tested.status, 'completed', tested.error);
+    const report = JSON.parse(Buffer.from((await store.get(tested.artifacts[0]!.key))!.body).toString());
+    assert.equal(report.scenarios[0].status, 'passed', JSON.stringify(report.scenarios[0]));
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
