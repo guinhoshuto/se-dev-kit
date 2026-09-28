@@ -125,3 +125,127 @@ test("recipe schema requires a tutorial script only in tutorial mode", () => {
     false
   );
 });
+
+test("presses record each release: clicks match presses, and slider and picker drags hold until they end", () => {
+  const timeline = compile([
+    {action: "setField", field: "title", value: "Hi"},
+    {action: "setField", field: "accent", value: "#ff7ad9"},
+    {action: "setField", field: "opacity", value: 80},
+    {action: "setField", field: "style", value: "b"}
+  ]);
+  assert.deepEqual(timeline.clicks, timeline.presses.map((press) => press.downMs));
+  const downs = timeline.presses.map((press) => press.downMs);
+  assert.deepEqual([...downs].sort((left, right) => left - right), downs, "presses are sorted by downMs");
+  const targetsAt = (press) => timeline.moves.filter((move) => move.endMs === press.downMs).map((move) => move.to);
+  const dragOf = (target) => timeline.presses.find((press) => targetsAt(press).includes(target));
+  const drags = ["field:opacity", "picker:hue", "picker:grab"];
+  for (const press of timeline.presses) {
+    if (drags.some((target) => targetsAt(press).includes(target))) continue;
+    assert.equal(press.upMs, press.downMs, `a plain click at ${press.downMs} releases at once`);
+  }
+  const slider = dragOf("field:opacity");
+  assert.equal(slider.upMs, slider.downMs + 900, "the slider is held for its 900 ms drag");
+  const pickers = timeline.patches.filter((entry) => entry.patch.colorPicker).map((entry) => ({atMs: entry.atMs, ...entry.patch.colorPicker}));
+  const hue = dragOf("picker:hue");
+  const hueEnd = pickers.filter((state) => state.drag === "hue").at(-1).atMs;
+  assert.ok(hueEnd > hue.downMs);
+  assert.equal(hue.upMs, hueEnd, "the hue press ends with its drag");
+  assert.ok(pickers.some((state) => state.atMs === hueEnd && state.drag === null), "the drag ends with a {drag: null} emit");
+  const grab = dragOf("picker:grab");
+  assert.equal(grab.upMs, pickers.filter((state) => state.drag === "spectrum").at(-1).atMs, "the spectrum press ends with its drag");
+});
+
+test("cues give the camera popups, typing, the toast, and widget reveals at exact times", () => {
+  const timeline = compile([
+    {action: "setField", field: "title", value: "Hi"},
+    {action: "setField", field: "accent", value: "#ff7ad9"},
+    {action: "setField", field: "style", value: "b"},
+    {action: "chat", user: "Mira", text: "hello"},
+    {action: "chat", user: "Me", text: "yo", typed: true},
+    {action: "emulate", event: "tip", option: "$50", name: "Nova"},
+    {action: "save"}
+  ]);
+  const patchTimes = (predicate) => timeline.patches.filter((entry) => predicate(entry.patch)).map((entry) => entry.atMs);
+  const pressAfter = (target) => timeline.presses.find((press) => timeline.moves.some((move) => move.to === target && move.endMs === press.downMs)).downMs;
+  const cue = (kind) => timeline.cues.filter((entry) => entry.kind === kind);
+  const commit = (field) => timeline.widget.find((action) => action.kind === "fields" && field in action.fieldData).atMs;
+
+  const [picker] = cue("picker");
+  const opened = timeline.patches.find((entry) => entry.patch.colorPicker).patch.colorPicker.openedAtMs;
+  assert.deepEqual(picker, {kind: "picker", field: "accent", startMs: opened, endMs: commit("accent")});
+  assert.equal(patchTimes((patch) => patch.colorPicker === null).at(-1), commit("accent"));
+
+  assert.deepEqual(cue("select"), [{
+    kind: "select",
+    field: "style",
+    startMs: patchTimes((patch) => patch.select?.field === "style" && patch.select.hover === null)[0],
+    endMs: patchTimes((patch) => patch.select === null)[0]
+  }]);
+
+  const menuOpen = patchTimes((patch) => patch.menu);
+  assert.deepEqual(cue("menu"), [{kind: "menu", startMs: menuOpen[0], endMs: patchTimes((patch) => patch.menu === null)[0], probeMs: menuOpen.at(-1)}]);
+  assert.ok(timeline.patches.find((entry) => entry.atMs === menuOpen.at(-1) && entry.patch.menu)?.patch.menu.hoverOption === 1, "the probe is the fullest menu: submenu open, $50 hovered");
+
+  const toast = patchTimes((patch) => patch.toast === "Overlay saved")[0];
+  assert.deepEqual(cue("toast"), [{kind: "toast", startMs: toast, endMs: toast + 2200}]);
+
+  const dispatches = timeline.widget.filter((action) => action.kind === "dispatch");
+  assert.deepEqual(cue("typing"), [
+    {kind: "typing", region: "field:title", startMs: pressAfter("field:title"), endMs: patchTimes((patch) => patch.focusField === null)[0]},
+    {kind: "typing", region: "chat-input", startMs: pressAfter("chat-input"), endMs: dispatches[1].atMs}
+  ], "the untyped chat has no typing cue");
+
+  assert.deepEqual(cue("reveal"), [
+    {kind: "reveal", site: "field:title", atMs: commit("title")},
+    {kind: "reveal", site: "field:accent", atMs: commit("accent")},
+    {kind: "reveal", site: "field:style", atMs: commit("style")},
+    {kind: "reveal", site: "chat-line", atMs: dispatches[0].atMs},
+    {kind: "reveal", site: "chat-line", atMs: dispatches[1].atMs},
+    {kind: "reveal", site: "emulate", atMs: dispatches[2].atMs}
+  ]);
+  const starts = timeline.cues.map((entry) => (entry.kind === "reveal" ? entry.atMs : entry.startMs));
+  assert.deepEqual([...starts].sort((left, right) => left - right), starts, "cues are sorted by start time");
+});
+
+test("fixture events never create camera cues", () => {
+  const fixture = {events: [{atMs: 100, listener: "message", event: {data: {displayName: "Fan", text: "hi"}}}]};
+  const timeline = compileTutorial({tutorial: {steps: [{action: "wait", ms: 500}]}, fields, fieldData, channel: "streamer", fixture});
+  assert.ok(timeline.patches.some((entry) => entry.patch.chatAppend?.text === "hi"));
+  assert.deepEqual(timeline.cues, []);
+});
+
+test("a move works until the next move of its step, and the step's last move until the step ends", () => {
+  const timeline = compile([{action: "setField", field: "title", value: "Hey"}, {action: "wait", ms: 1000}]);
+  const [layer, settings, group, field] = timeline.moves;
+  assert.equal(layer.workEndMs, settings.startMs);
+  assert.equal(settings.workEndMs, group.startMs);
+  assert.equal(group.workEndMs, field.startMs);
+  assert.equal(field.workEndMs, timeline.endMs - 1000, "typing, the commit, and the pause after it belong to the field move");
+  assert.ok(field.workEndMs > field.endMs);
+});
+
+test("autoZoom resolves to the close-up zoom, 1.8 by default, or null when off", () => {
+  const step = [{action: "wait", ms: 10}];
+  assert.deepEqual(compile(step).autoZoom, {zoom: 1.8});
+  assert.deepEqual(compile(step, {autoZoom: true}).autoZoom, {zoom: 1.8});
+  assert.deepEqual(compile(step, {autoZoom: {}}).autoZoom, {zoom: 1.8});
+  assert.deepEqual(compile(step, {autoZoom: {zoom: 1.5}}).autoZoom, {zoom: 1.5});
+  assert.equal(compile(step, {autoZoom: false}).autoZoom, null);
+  assert.equal(compile(step, {autoZoom: false}).endMs, compile(step).endMs, "the camera adds no time");
+});
+
+test("the recipe schema accepts autoZoom as a switch or a zoom from 1.2 to 2.5", () => {
+  const recipe = (autoZoom) => ({
+    schemaVersion: 1,
+    id: "r",
+    name: "R",
+    scenes: ["s"],
+    outputs: {screenshots: false, video: {enabled: true, durationMs: 5000, fps: 30, mode: "tutorial", tutorial: {autoZoom, steps: [{action: "wait", ms: 10}]}}}
+  });
+  for (const value of [false, true, {}, {zoom: 1.2}, {zoom: 2.5}]) {
+    assert.equal(recipeSchema.safeParse(recipe(value)).success, true, JSON.stringify(value));
+  }
+  for (const value of [{zoom: 1.1}, {zoom: 2.6}, {zoom: "2"}, {enabled: true}, "yes"]) {
+    assert.equal(recipeSchema.safeParse(recipe(value)).success, false, JSON.stringify(value));
+  }
+});

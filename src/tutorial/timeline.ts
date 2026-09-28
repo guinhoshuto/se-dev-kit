@@ -87,7 +87,31 @@ export interface TutorialCursorMove {
   startMs: number;
   endMs: number;
   to: TimelineTarget;
+  /** The cursor keeps working at `to` (typing, dragging, pressing) until this time; after it, it is idle until the next move. */
+  workEndMs: number;
 }
+
+export interface TutorialPress {
+  downMs: number;
+  /** Release: equals downMs for a click; the drag end for slider and picker drags. */
+  upMs: number;
+}
+
+/**
+ * Time semantics the tutorial camera plans from. The host measures each cue's rectangles in its
+ * setup pre-pass; fixture events never create cues.
+ */
+export type TutorialCue =
+  /** Color picker dialog, drawn on [startMs, endMs). */
+  | {kind: "picker"; field: string; startMs: number; endMs: number}
+  /** Emulate menu; probeMs is its fullest state (submenu and hovered option). */
+  | {kind: "menu"; startMs: number; endMs: number; probeMs: number}
+  /** Dropdown option list. */
+  | {kind: "select"; field: string; startMs: number; endMs: number}
+  | {kind: "toast"; startMs: number; endMs: number}
+  | {kind: "typing"; region: `field:${string}` | "chat-input"; startMs: number; endMs: number}
+  /** A widget action (field commit or dispatch) the viewer must see the widget react to. */
+  | {kind: "reveal"; site: `field:${string}` | "chat-line" | "emulate"; atMs: number};
 
 export type TutorialWidgetAction =
   | {atMs: number; kind: "dispatch"; listener: string; event: JsonValue}
@@ -120,11 +144,20 @@ export interface TutorialTimeline {
   initialValues: Record<string, JsonPrimitive>;
   patches: {atMs: number; patch: TutorialUiPatch}[];
   moves: TutorialCursorMove[];
+  /** Press times; equals `presses.map((press) => press.downMs)`. */
   clicks: number[];
+  /** Sorted by downMs. */
+  presses: TutorialPress[];
+  /** Sorted by start time (atMs for reveals), ties in emission order. */
+  cues: TutorialCue[];
+  /** The resolved `tutorial.autoZoom`; null keeps the full editor. */
+  autoZoom: {zoom: number} | null;
   widget: TutorialWidgetAction[];
 }
 
 export const DEFAULT_GROUP = "General";
+/** Close-up zoom of the tutorial camera when `autoZoom` does not set one. */
+export const DEFAULT_AUTO_ZOOM = 1.8;
 const DEFAULT_MOVE_MS = 650;
 const PRESS_MS = 140;
 const AFTER_CLICK_MS = 260;
@@ -378,6 +411,10 @@ function panelFields(fields: NormalizedField[]): TutorialPanelField[] {
     });
 }
 
+function cueStart(cue: TutorialCue): number {
+  return cue.kind === "reveal" ? cue.atMs : cue.startMs;
+}
+
 function asPrimitive(value: JsonValue | undefined): JsonPrimitive {
   if (value === undefined) return null;
   if (value === null || typeof value !== "object") return value;
@@ -409,7 +446,8 @@ export function compileTutorial(options: {
 
   const patches: TutorialTimeline["patches"] = [];
   const moves: TutorialCursorMove[] = [];
-  const clicks: number[] = [];
+  const presses: TutorialPress[] = [];
+  const cues: TutorialCue[] = [];
   const widget: TutorialWidgetAction[] = [];
   let t = 0;
   let selected = false;
@@ -418,17 +456,22 @@ export function compileTutorial(options: {
 
   const patch = (atMs: number, value: TutorialUiPatch) => patches.push({atMs, patch: value});
   const move = (to: TimelineTarget, durationMs = DEFAULT_MOVE_MS) => {
-    moves.push({startMs: t, endMs: t + durationMs, to});
+    moves.push({startMs: t, endMs: t + durationMs, to, workEndMs: t + durationMs});
     t += durationMs;
   };
-  const press = (pressedId: string) => {
-    clicks.push(t);
+  /** Presses at the current time; returns the press index so drags can set their release. */
+  const press = (pressedId: string): number => {
+    presses.push({downMs: t, upMs: t});
     patch(t, {pressed: pressedId});
     patch(t + PRESS_MS, {pressed: null});
+    return presses.length - 1;
   };
-  const click = (to: TimelineTarget, pressedId: string, durationMs?: number) => {
+  const click = (to: TimelineTarget, pressedId: string, durationMs?: number): number => {
     move(to, durationMs);
-    press(pressedId);
+    return press(pressedId);
+  };
+  const release = (index: number, atMs: number) => {
+    presses[index]!.upMs = atMs;
   };
   const targetId = (target: TimelineTarget) => (typeof target === "string" ? target : `point:${target.x},${target.y}`);
 
@@ -509,7 +552,8 @@ export function compileTutorial(options: {
       }
       patch(atMs, {colorPicker: state});
     };
-    const drag = (distancePx: number, at: (progress: number) => Partial<TutorialColorPicker>) => {
+    /** Drags from the current time; returns the release time, the `{drag: null}` emit. */
+    const drag = (distancePx: number, at: (progress: number) => Partial<TutorialColorPicker>): number => {
       const durationMs = pickerDragMs(distancePx);
       const samples = Math.max(1, Math.round(durationMs / SLIDER_SAMPLE_MS));
       for (let index = 1; index <= samples; index += 1) {
@@ -518,13 +562,16 @@ export function compileTutorial(options: {
       }
       t += durationMs;
       emit(t, {drag: null});
+      const releasedAtMs = t;
       t += PICKER_HOLD_MS;
+      return releasedAtMs;
     };
 
     const swatch = `swatch:${field.id}` as const;
     move(swatch);
     press(swatch);
     t += PICKER_CLICK_MS;
+    const openedAtMs = t;
     emit(t, {openedAtMs: t});
     t += PICKER_OPEN_MS + PICKER_READ_MS;
 
@@ -534,9 +581,9 @@ export function compileTutorial(options: {
     const hueDistance = (Math.abs(goalHue - from.h) / 360) * PICKER_SIZE;
     if (hueDistance >= 0.5) {
       move("picker:hue", PICKER_MOVE_MS);
-      press("picker:hue");
+      const hue = press("picker:hue");
       emit(t, {drag: "hue", selected: false});
-      drag(hueDistance, (progress) => ({h: lerp(from.h, goalHue, progress)}));
+      release(hue, drag(hueDistance, (progress) => ({h: lerp(from.h, goalHue, progress)})));
     }
 
     const svDistance = Math.hypot((to.s - from.s) * PICKER_SIZE, (to.v - from.v) * PICKER_SIZE);
@@ -545,18 +592,18 @@ export function compileTutorial(options: {
       const grab = {s: to.s + (from.s - to.s) * reach, v: to.v + (from.v - to.v) * reach};
       emit(t, {grab});
       move("picker:grab", PICKER_MOVE_MS);
-      press("picker:grab");
+      const spectrum = press("picker:grab");
       emit(t, {drag: "spectrum", selected: false, grab: null, s: grab.s, v: grab.v});
       move("picker:spectrum", 0);
-      drag(svDistance * reach, (progress) => ({s: lerp(grab.s, to.s, progress), v: lerp(grab.v, to.v, progress)}));
+      release(spectrum, drag(svDistance * reach, (progress) => ({s: lerp(grab.s, to.s, progress), v: lerp(grab.v, to.v, progress)})));
     }
 
     const alphaDistance = Math.abs(goal.a - start.a) * PICKER_SIZE;
     if (alphaDistance >= 0.5) {
       move("picker:alpha", PICKER_MOVE_MS);
-      press("picker:alpha");
+      const alpha = press("picker:alpha");
       emit(t, {drag: "alpha", selected: false});
-      drag(alphaDistance, (progress) => ({a: lerp(start.a, goal.a, progress)}));
+      release(alpha, drag(alphaDistance, (progress) => ({a: lerp(start.a, goal.a, progress)})));
     }
 
     // The grid cannot reach every color; the header settles on the exact requested string.
@@ -584,6 +631,7 @@ export function compileTutorial(options: {
     // md-color-picker writes the model when the close animation ends; ng-change then updates the widget.
     t += PICKER_CLOSE_MS;
     patch(t, {colorPicker: null, fieldValue: {id: field.id, value}});
+    cues.push({kind: "picker", field: field.id, startMs: openedAtMs, endMs: t});
   };
   const lookupField = (id: string) => {
     const field = fields.find((candidate) => candidate.id === id);
@@ -594,6 +642,7 @@ export function compileTutorial(options: {
   };
 
   for (const step of tutorial.steps) {
+    const first = moves.length;
     switch (step.action) {
       case "wait":
         t += step.ms;
@@ -621,7 +670,7 @@ export function compileTutorial(options: {
         const target = `field:${field.id}` as const;
         if (field.type === "slider") {
           move(target);
-          press(target);
+          const sliderPress = press(target);
           patch(t, {pressed: target});
           const from = Number(values[field.id] ?? field.min ?? 0);
           const samples = Math.max(1, Math.round(SLIDER_DRAG_MS / SLIDER_SAMPLE_MS));
@@ -634,10 +683,12 @@ export function compileTutorial(options: {
             patch(t + Math.round(progress * SLIDER_DRAG_MS), {fieldValue: {id: field.id, value: Number(snapped.toFixed(6))}});
           }
           t += SLIDER_DRAG_MS;
+          release(sliderPress, t);
           patch(t, {pressed: null});
         } else if (field.type === "dropdown") {
           click(target, target);
           patch(t, {select: {field: field.id, hover: null}});
+          const openedAtMs = t;
           t += AFTER_CLICK_MS;
           const index = field.options.findIndex((option) => option.value === value);
           move(`option:${field.id}:${index}`, 500);
@@ -645,13 +696,14 @@ export function compileTutorial(options: {
           press(`option:${field.id}:${index}`);
           t += PRESS_MS;
           patch(t, {select: null, fieldValue: {id: field.id, value}});
+          cues.push({kind: "select", field: field.id, startMs: openedAtMs, endMs: t});
         } else if (field.type === "checkbox") {
           click(target, target);
           patch(t, {fieldValue: {id: field.id, value}});
         } else if (field.type === "colorpicker") {
           pickColor(field, value as string);
         } else if (TEXT_TYPES.has(field.type)) {
-          click(target, target);
+          const typingAtMs = presses[click(target, target)]!.downMs;
           patch(t, {focusField: field.id, selectAll: field.id});
           t += 320;
           patch(t, {selectAll: null, fieldValue: {id: field.id, value: ""}});
@@ -659,6 +711,7 @@ export function compileTutorial(options: {
           typeInto((partial) => ({fieldValue: {id: field.id, value: partial}}), String(shown));
           t += 220;
           patch(t, {focusField: null, fieldValue: {id: field.id, value: shown}});
+          cues.push({kind: "typing", region: target, startMs: typingAtMs, endMs: t});
         } else {
           throw new StudioError(
             "TUTORIAL_FIELD_UNSUPPORTED",
@@ -667,6 +720,7 @@ export function compileTutorial(options: {
         }
         values[field.id] = value;
         widget.push({atMs: t, kind: "fields", fieldData: {[field.id]: value}});
+        cues.push({kind: "reveal", site: target, atMs: t});
         t += AFTER_CLICK_MS;
         break;
       }
@@ -687,21 +741,26 @@ export function compileTutorial(options: {
         }
         click("emulate", "emulate");
         patch(t, {menu: {hover: null, submenu: null, hoverOption: null}});
+        const openedAtMs = t;
         t += AFTER_CLICK_MS;
         move(`menu:${entry.kind}`, 500);
         patch(t, {menu: {hover: entry.kind, submenu: optionIndex >= 0 ? entry.kind : null, hoverOption: null}});
+        let probeMs = t;
         if (optionIndex >= 0) {
           t += 220;
           move(`menu-option:${entry.kind}:${optionIndex}`, 420);
           patch(t, {menu: {hover: entry.kind, submenu: entry.kind, hoverOption: optionIndex}});
+          probeMs = t;
           press(`menu-option:${entry.kind}:${optionIndex}`);
         } else {
           press(`menu:${entry.kind}`);
         }
         t += PRESS_MS;
         patch(t, {menu: null});
+        cues.push({kind: "menu", startMs: openedAtMs, endMs: t, probeMs});
         const payload = emulatePayload(step, optionIndex >= 0 ? entry.options[optionIndex] : undefined);
         widget.push({atMs: t, kind: "dispatch", listener: payload.listener, event: payload.event});
+        cues.push({kind: "reveal", site: "emulate", atMs: t});
         t += AFTER_CLICK_MS;
         break;
       }
@@ -710,8 +769,9 @@ export function compileTutorial(options: {
         const id = `tutorial-chat-${chatCount}`;
         const badges = step.badges ?? (step.typed ? ["broadcaster"] : []);
         const color = step.color ?? colorFor(step.user);
+        let typingAtMs: number | null = null;
         if (step.typed) {
-          click("chat-input", "chat-input");
+          typingAtMs = presses[click("chat-input", "chat-input")]!.downMs;
           patch(t, {chatFocus: true});
           t += 200;
           typeInto((partial) => ({chatDraft: partial}), step.text);
@@ -719,6 +779,8 @@ export function compileTutorial(options: {
         }
         const line: TutorialChatLine = {id, user: step.user, color, badges, text: step.text};
         patch(t, {chatAppend: line, ...(step.typed ? {chatDraft: "", chatFocus: false} : {})});
+        if (typingAtMs !== null) cues.push({kind: "typing", region: "chat-input", startMs: typingAtMs, endMs: t});
+        cues.push({kind: "reveal", site: "chat-line", atMs: t});
         widget.push({
           atMs: t,
           kind: "dispatch",
@@ -741,8 +803,14 @@ export function compileTutorial(options: {
         click("save", "save");
         patch(t, {toast: "Overlay saved"});
         patch(t + 2200, {toast: null});
+        cues.push({kind: "toast", startMs: t, endMs: t + 2200});
         t += AFTER_CLICK_MS;
         break;
+    }
+    // Inside a step the cursor works at a target until the next move starts; the step's last move
+    // works until the step ends (typing, dragging, the press and its pause).
+    for (let index = first; index < moves.length; index += 1) {
+      moves[index]!.workEndMs = index + 1 < moves.length ? moves[index + 1]!.startMs : t;
     }
   }
 
@@ -798,7 +866,15 @@ export function compileTutorial(options: {
     initialValues,
     patches: ordered,
     moves,
-    clicks,
+    clicks: presses.map((press) => press.downMs),
+    presses,
+    cues: cues
+      .map((cue, index) => ({cue, index}))
+      .sort((left, right) => cueStart(left.cue) - cueStart(right.cue) || left.index - right.index)
+      .map(({cue}) => cue),
+    autoZoom: tutorial.autoZoom === false
+      ? null
+      : {zoom: (typeof tutorial.autoZoom === "object" ? tutorial.autoZoom.zoom : undefined) ?? DEFAULT_AUTO_ZOOM},
     widget: widget.sort((left, right) => left.atMs - right.atMs)
   };
 }

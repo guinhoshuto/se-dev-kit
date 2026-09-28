@@ -60,6 +60,7 @@ const uiAssets = new Map([
   ["bridge.js", resolve(distributionRoot, "studio-ui/bridge.js")],
   ["capture-host.js", resolve(distributionRoot, "studio-ui/capture-host.js")],
   ["tutorial-host.js", resolve(distributionRoot, "studio-ui/tutorial-host.js")],
+  ["tutorial-camera.js", resolve(distributionRoot, "studio-ui/tutorial-camera.js")],
   ["sample-media.js", resolve(distributionRoot, "studio-ui/sample-media.js")]
 ]);
 

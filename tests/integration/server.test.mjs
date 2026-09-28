@@ -192,3 +192,21 @@ test("the frame server serves the frame runtime modules from a fixed list, inclu
     await server.close();
   }
 });
+
+test("the control server serves every module the tutorial host imports", async () => {
+  const host = await readFile(new URL("../../dist/studio-ui/tutorial-host.js", import.meta.url), "utf8");
+  const imports = [...host.matchAll(/from\s+["']\.\/([\w-]+\.js)["']/g)].map((match) => match[1]);
+  assert.ok(imports.includes("tutorial-camera.js"), `the tutorial host imports the camera module: ${imports.join(", ")}`);
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  try {
+    // A missing module 404s, __SWS_TUTORIAL__ never exists, and every tutorial render fails.
+    for (const file of ["tutorial-host.js", ...imports]) {
+      const response = await requestBuffer(`${server.origin}/__sws/ui/${file}`);
+      assert.equal(response.status, 200, file);
+      assert.match(String(response.headers["content-type"]), /javascript/, file);
+    }
+  } finally {
+    await server.close();
+  }
+});

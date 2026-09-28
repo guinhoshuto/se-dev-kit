@@ -15,7 +15,7 @@ FIELDS defaults → theme → fixture → scene → temporary preview override
 - A **scene** selects a theme/fixture and presentation: background, viewport, output, camera, crop, and capture time.
 - A **scenario** performs deterministic dispatch, field update, wait, and DOM assertion steps.
 - A **recipe** selects scenes and optional theme/background/viewport/camera matrices, then requests screenshots, thumbnails, contact sheets, or video.
-- A video with `"mode": "tutorial"` records a "how to configure" video inside a StreamElements overlay editor replica, driven by `outputs.video.tutorial.steps` (`selectLayer`, `openGroup`, `setField`, `chat`, `emulate`, `save`, `caption`, `wait`, `move`, `click`). Read `docs/TUTORIAL.md` in the Studio repository before authoring one; dry-run to learn the required `durationMs`.
+- A video with `"mode": "tutorial"` records a "how to configure" video inside a StreamElements overlay editor replica, driven by `outputs.video.tutorial.steps` (`selectLayer`, `openGroup`, `setField`, `chat`, `emulate`, `save`, `caption`, `wait`, `move`, `click`). Read `docs/TUTORIAL.md` in the Studio repository before authoring one; dry-run to learn the required `durationMs`. It zooms on the cursor like Screen Studio by default; set `tutorial.autoZoom` to `false` or `{"zoom": 1.5}`.
 
 Never put background, crop, zoom, or output dimensions in `fieldData` unless they are genuine widget FIELDS.
 

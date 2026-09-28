@@ -1,3 +1,19 @@
+import {
+  cameraTransform,
+  captionOpacity,
+  captionTop,
+  cursorPoint,
+  planCamera,
+  pointerStyle,
+  type CameraCue,
+  type CameraInput,
+  type CameraPlan,
+  type Frame,
+  type Point,
+  type Rect,
+  type View
+} from "./tutorial-camera.js";
+
 type Primitive = string | number | boolean | null;
 type Target = string | {x: number; y: number};
 
@@ -66,6 +82,23 @@ interface MenuEntry {
   options: string[];
 }
 
+/** Mirrors TutorialCue in src/tutorial/timeline.ts. */
+type Cue =
+  | {kind: "picker"; field: string; startMs: number; endMs: number}
+  | {kind: "menu"; startMs: number; endMs: number; probeMs: number}
+  | {kind: "select"; field: string; startMs: number; endMs: number}
+  | {kind: "toast"; startMs: number; endMs: number}
+  | {kind: "typing"; region: string; startMs: number; endMs: number}
+  | {kind: "reveal"; site: string; atMs: number};
+
+/** Where the pointer is for a move, measured in the setup pre-pass (stage px, camera at identity). */
+interface Anchor {
+  from: Point;
+  approach: Point;
+  arrive: Point;
+  leave: Point;
+}
+
 interface Timeline {
   endMs: number;
   chrome: {
@@ -81,8 +114,11 @@ interface Timeline {
   groups: string[];
   initialValues: Record<string, Primitive>;
   patches: {atMs: number; patch: UiPatch}[];
-  moves: {startMs: number; endMs: number; to: Target}[];
+  moves: {startMs: number; endMs: number; to: Target; workEndMs: number}[];
   clicks: number[];
+  presses: {downMs: number; upMs: number}[];
+  cues: Cue[];
+  autoZoom: {zoom: number} | null;
 }
 
 interface SetupOptions {
@@ -90,6 +126,8 @@ interface SetupOptions {
   menu: MenuEntry[];
   viewport: {width: number; height: number};
   output: {width: number; height: number};
+  /** The scene crop in stage px, the window the video exports; the camera frames it. */
+  crop?: Frame | null;
 }
 
 interface UiState {
@@ -184,10 +222,6 @@ function attr(value: string): string {
 const COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$|^rgba?\([^)]*\)$/i;
 const BADGE_COLORS: Record<string, string> = {broadcaster: "#e91916", moderator: "#00ad03", vip: "#e005b9", subscriber: "#8205b4"};
 
-function ease(progress: number): number {
-  return progress < 0.5 ? 4 * progress ** 3 : 1 - (-2 * progress + 2) ** 3 / 2;
-}
-
 /** CSS cubic-bezier timing function, solved by bisection so every frame is a pure function of time. */
 function cubicBezier(x1: number, y1: number, x2: number, y2: number): (progress: number) => number {
   const curve = (p1: number, p2: number, t: number) => 3 * p1 * t * (1 - t) ** 2 + 3 * p2 * t * t * (1 - t) + t ** 3;
@@ -240,13 +274,12 @@ const SELECT_BUTTON = {x: 181.5, y: 403, width: 157.5, height: 36};
 const CURSOR_HOTSPOTS = {arrow: {x: 5, y: 2.5}, crosshair: {x: 12, y: 12}} as const;
 /** Cursor sizes in editor pixels; the crosshair is smaller, and its open center keeps the 11px spectrum marker visible. */
 const CURSOR_SIZES: Record<keyof typeof CURSOR_HOTSPOTS, number> = {arrow: 28, crosshair: 24};
-/** Space kept between a caption and the open picker dialog, wide enough to stay out of the dialog's shadow. */
-const CAPTION_DIALOG_GAP = 20;
-/** Closest a shifted caption may come to the editor's bottom edge or the toolbar. */
-const CAPTION_EDGE = 8;
 
 class TutorialController {
   readonly stage = document.querySelector<HTMLElement>("#capture-stage")!;
+  readonly cameraLayer = document.querySelector<HTMLElement>("#se-camera")!;
+  readonly hud = document.querySelector<HTMLElement>("#se-hud")!;
+  readonly hudCanvas = document.querySelector<HTMLElement>("#se-hud-canvas")!;
   readonly editor = document.querySelector<HTMLElement>("#se-editor")!;
   readonly toolbar = document.querySelector<HTMLElement>("#se-toolbar")!;
   readonly sidebar = document.querySelector<HTMLElement>("#se-sidebar")!;
@@ -267,12 +300,14 @@ class TutorialController {
   viewport = {width: 0, height: 0};
   scale = 1;
   #rendered: Record<string, string> = {};
-  #positions = new Map<string, {x: number; y: number}>();
+  /** The pointer's stage position in the frame being drawn; never read by a later frame. */
   #cursor = {x: 0, y: 0};
   /** Where the cursor rests before the first scripted move. */
   #home = {x: 0, y: 0};
   /** Logical editor size: the browser window the StreamElements dialogs center in. */
   #editorSize = {width: 0, height: 0};
+  #anchors: Anchor[] = [];
+  #plan?: CameraPlan;
 
   setup(options: SetupOptions): void {
     this.timeline = options.timeline;
@@ -310,10 +345,210 @@ class TutorialController {
       `<span class="se-btn ghost" data-target="preview">Preview</span>`,
       `<span class="se-btn raised" data-target="save">Save</span>`
     ].join("");
+    // Captions live in the HUD above the camera, laid out like the editor canvas so they keep their place.
+    this.hud.style.width = `${width}px`;
+    this.hud.style.height = `${height}px`;
+    this.hud.style.transform = `scale(${this.scale})`;
+    this.hudCanvas.style.right = `${chatWidth}px`;
+    this.cameraLayer.style.transform = "none";
     this.#home = {x: options.output.width * 0.62, y: options.output.height * 0.58};
     this.#cursor = {...this.#home};
-    this.#positions.clear();
     this.#rendered = {};
+    // Pre-pass: measure the editor once at the times the camera plans from, then plan it.
+    this.#anchors = this.#measureAnchors();
+    const cues = this.#measureCues();
+    const captions = this.#measureCaptions();
+    const timeline = options.timeline;
+    this.#plan = planCamera({
+      width: options.output.width,
+      height: options.output.height,
+      ...(options.crop ? {frame: options.crop} : {}),
+      uiScale: this.scale,
+      zoom: timeline.autoZoom?.zoom ?? null,
+      endMs: timeline.endMs,
+      home: this.#home,
+      moves: timeline.moves.map((move, index) => ({
+        startMs: move.startMs,
+        endMs: move.endMs,
+        workEndMs: move.workEndMs,
+        ...this.#anchors[index]!
+      })),
+      cues,
+      captions
+    });
+    // The first frame rewrites every slot the pre-pass left behind.
+    this.#rendered = {};
+  }
+
+  /** Lays the editor out as it is at `timeMs`, with the camera at identity. */
+  #measureAt(timeMs: number): void {
+    this.#layout(this.#state(timeMs), timeMs);
+  }
+
+  /**
+   * Each move's pointer positions: the target just before the click, right after it (a group
+   * header can jump when it opens), and when the next move starts (the end of a drag). A target
+   * that is gone keeps the previous position, as a vanished menu row stays where it was clicked.
+   */
+  #measureAnchors(): Anchor[] {
+    const timeline = this.timeline!;
+    const anchors: Anchor[] = [];
+    let from: Point = {...this.#home};
+    timeline.moves.forEach((move, index) => {
+      this.#measureAt(Math.max(move.startMs, move.endMs - 1));
+      const approach = this.#live(move.to) ?? from;
+      this.#measureAt(move.endMs);
+      const arrive = this.#live(move.to) ?? approach;
+      this.#measureAt(timeline.moves[index + 1]?.startMs ?? timeline.endMs);
+      const leave = this.#live(move.to) ?? arrive;
+      anchors.push({from, approach, arrive, leave});
+      from = leave;
+    });
+    return anchors;
+  }
+
+  /** Stage px rect of an element; undefined when it is missing or has no size. */
+  #rectOf(element: Element | null | undefined): Rect | undefined {
+    if (!element) return undefined;
+    const box = element.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) return undefined;
+    const stage = this.stage.getBoundingClientRect();
+    return {x0: box.left - stage.left, y0: box.top - stage.top, x1: box.right - stage.left, y1: box.bottom - stage.top};
+  }
+
+  #hullOf(elements: (Element | null | undefined)[]): Rect | undefined {
+    const rects = elements.map((element) => this.#rectOf(element)).filter((rect): rect is Rect => rect !== undefined);
+    if (rects.length === 0) return undefined;
+    return rects.reduce((hull, rect) => ({
+      x0: Math.min(hull.x0, rect.x0),
+      y0: Math.min(hull.y0, rect.y0),
+      x1: Math.max(hull.x1, rect.x1),
+      y1: Math.max(hull.y1, rect.y1)
+    }));
+  }
+
+  #targetElement(target: string): HTMLElement | undefined {
+    for (const element of this.editor.querySelectorAll<HTMLElement>("[data-target]")) {
+      if (element.dataset.target === target) return element;
+    }
+    return undefined;
+  }
+
+  /** A field's whole row in the sidebar: label, value, and control. */
+  #row(field: string): Element | null | undefined {
+    return this.#targetElement(`field:${field}`)?.closest(".se-field");
+  }
+
+  /** The widget as seen in the canvas: its box clipped by the canvas. */
+  #widgetRect(): Rect | undefined {
+    const widget = this.#rectOf(this.widgetBox);
+    const canvas = this.#rectOf(this.canvas);
+    if (!widget || !canvas) return undefined;
+    const clipped = {
+      x0: Math.max(widget.x0, canvas.x0),
+      y0: Math.max(widget.y0, canvas.y0),
+      x1: Math.min(widget.x1, canvas.x1),
+      y1: Math.min(widget.y1, canvas.y1)
+    };
+    return clipped.x1 > clipped.x0 && clipped.y1 > clipped.y0 ? clipped : undefined;
+  }
+
+  /**
+   * Measures what the camera must show for each cue: open popups, the toast, the text being typed,
+   * and the widget with what made it react. Missing elements are skipped; a cue with nothing to
+   * show is dropped.
+   */
+  #measureCues(): CameraCue[] {
+    const cues: CameraCue[] = [];
+    const u = this.scale;
+    let widget: Rect | undefined;
+    let widgetMeasured = false;
+    for (const cue of this.timeline!.cues) {
+      const rects: CameraCue["rects"] = [];
+      const add = (rect: Rect | undefined, obstacle: boolean) => {
+        if (rect) rects.push({rect, obstacle});
+      };
+      let kind: CameraCue["kind"];
+      let startMs: number;
+      let endMs: number;
+      switch (cue.kind) {
+        case "picker": {
+          this.#measureAt(cue.startMs);
+          const dialog = this.#pickerFrame();
+          add({x0: dialog.left * u, y0: dialog.top * u, x1: dialog.right * u, y1: dialog.bottom * u}, true);
+          add(this.#rectOf(this.#row(cue.field)), false);
+          [kind, startMs, endMs] = ["popup", cue.startMs, cue.endMs];
+          break;
+        }
+        case "menu":
+          this.#measureAt(cue.probeMs);
+          add(this.#hullOf([
+            this.menuLayer.querySelector(".se-emu .live"),
+            this.menuLayer.querySelector(".se-emu .card"),
+            this.menuLayer.querySelector(".se-emu .sub"),
+            this.#targetElement("emulate")
+          ]), true);
+          [kind, startMs, endMs] = ["popup", cue.startMs, cue.endMs];
+          break;
+        case "select":
+          this.#measureAt(cue.startMs);
+          add(this.#hullOf([this.popupLayer.querySelector(".se-select-menu"), this.#row(cue.field)]), true);
+          [kind, startMs, endMs] = ["popup", cue.startMs, cue.endMs];
+          break;
+        case "toast":
+          this.#measureAt(cue.startMs);
+          add(this.#rectOf(this.toast), true);
+          [kind, startMs, endMs] = ["toast", cue.startMs, cue.endMs];
+          break;
+        case "typing":
+          this.#measureAt(cue.startMs);
+          add(this.#rectOf(cue.region === "chat-input"
+            ? this.#targetElement("chat-input")
+            : this.#row(cue.region.slice("field:".length))), true);
+          [kind, startMs, endMs] = ["typing", cue.startMs, cue.endMs];
+          break;
+        case "reveal": {
+          this.#measureAt(cue.atMs);
+          if (!widgetMeasured) {
+            widget = this.#widgetRect();
+            widgetMeasured = true;
+          }
+          add(widget, true);
+          const site = cue.site === "chat-line"
+            ? [...this.chat.querySelectorAll(".msg")].at(-1)
+            : cue.site === "emulate"
+              ? this.#targetElement("emulate")
+              : this.#row(cue.site.slice("field:".length));
+          add(this.#rectOf(site), true);
+          [kind, startMs, endMs] = ["reveal", cue.atMs, cue.atMs];
+          break;
+        }
+      }
+      if (rects.length > 0) cues.push({kind, startMs, endMs, rects});
+    }
+    return cues;
+  }
+
+  /** One window per shown caption, with its laid-out height in HUD px. */
+  #measureCaptions(): CameraInput["captions"] {
+    const windows: {startMs: number; endMs: number; text: string}[] = [];
+    let open: {startMs: number; text: string} | null = null;
+    for (const {atMs, patch} of this.timeline!.patches) {
+      if (!("caption" in patch)) continue;
+      if (open) windows.push({...open, endMs: atMs});
+      open = patch.caption ? {startMs: atMs, text: patch.caption} : null;
+    }
+    if (open) windows.push({...open, endMs: Infinity});
+    const heights = new Map<string, number>();
+    for (const {text} of windows) {
+      if (heights.has(text)) continue;
+      this.caption.innerHTML = escapeHtml(text);
+      this.caption.style.display = "block";
+      heights.set(text, this.caption.offsetHeight);
+    }
+    this.caption.style.display = "none";
+    this.caption.innerHTML = "";
+    return windows.map(({startMs, endMs, text}) => ({startMs, endMs, height: heights.get(text)!}));
   }
 
   #state(timeMs: number): UiState {
@@ -541,16 +776,12 @@ class TutorialController {
     if (!picker) return {backdrop: "", dialog: ""};
     const {width, height} = this.#editorSize;
     const {fit, center} = this.#pickerFrame();
-    const swatchKey = `picker-origin:${picker.field}`;
+    // The dialog grows out of the swatch as laid out in this frame (the dialog center without one).
     const swatch = this.#rect(`swatch:${picker.field}`);
-    if (swatch) {
-      const editor = this.editor.getBoundingClientRect();
-      this.#positions.set(swatchKey, {
-        x: (swatch.left + swatch.width / 2 - editor.left) / this.scale,
-        y: (swatch.top + swatch.height / 2 - editor.top) / this.scale
-      });
-    }
-    const origin = this.#positions.get(swatchKey) ?? center;
+    const editor = this.editor.getBoundingClientRect();
+    const origin = swatch
+      ? {x: (swatch.left + swatch.width / 2 - editor.left) / this.scale, y: (swatch.top + swatch.height / 2 - editor.top) / this.scale}
+      : center;
     const open = this.#pickerOpen(picker, timeMs);
     const backdropIn = CSS_EASE(clamp((timeMs - picker.openedAtMs) / PICKER_BACKDROP_IN_MS, 0, 1));
     const backdropOut = picker.closedAtMs === null ? 1 : 1 - CSS_EASE(clamp((timeMs - picker.closedAtMs) / PICKER_ANIMATION_MS, 0, 1));
@@ -609,31 +840,25 @@ class TutorialController {
   }
 
   /**
-   * Keeps a caption clear of the open color picker. The dialog stays centered as in the real
-   * editor; a caption that would run under it (or into its shadow) slides below it, or above it
-   * when only that fits, in step with the dialog's open and close animation. Layout offsets
-   * ignore transforms, so the shift depends only on the caption text and the time.
+   * Keeps the caption readable: it slides clear of open popups, the reacting widget, and the text
+   * being typed, as projected through this frame's camera (see captionTop). Layout offsets ignore
+   * transforms, so the default box depends only on the caption text.
    */
-  #placeCaption(state: UiState, timeMs: number): void {
-    let shift = 0;
-    const picker = state.colorPicker;
-    if (picker && state.caption) {
-      const dialog = this.#pickerFrame();
-      const width = this.caption.offsetWidth;
-      const height = this.caption.offsetHeight;
-      const left = this.canvas.offsetLeft + this.caption.offsetLeft - width / 2;
-      const top = this.canvas.offsetTop + this.caption.offsetTop;
-      const crosses = left < dialog.right && left + width > dialog.left
-        && top < dialog.bottom + CAPTION_DIALOG_GAP && top + height > dialog.top - CAPTION_DIALOG_GAP;
-      if (crosses) {
-        const below = dialog.bottom + CAPTION_DIALOG_GAP;
-        const above = dialog.top - CAPTION_DIALOG_GAP - height;
-        if (below + height <= this.#editorSize.height - CAPTION_EDGE) shift = below - top;
-        else if (above >= this.canvas.offsetTop + CAPTION_EDGE) shift = above - top;
-      }
-      shift *= this.#pickerOpen(picker, timeMs);
+  #placeCaption(state: UiState, timeMs: number, view: View): void {
+    if (!state.caption) {
+      this.caption.style.transform = "";
+      this.caption.style.opacity = "";
+      return;
     }
-    this.caption.style.transform = shift === 0 ? "" : `translate(-50%, ${px(shift)})`;
+    const width = this.caption.offsetWidth;
+    const height = this.caption.offsetHeight;
+    const left = this.hudCanvas.offsetLeft + this.caption.offsetLeft - width / 2;
+    const top = this.hudCanvas.offsetTop + this.caption.offsetTop;
+    const placed = captionTop(this.#plan!, view, timeMs, {left, top, width, height}, this.#editorSize.height);
+    this.caption.style.transform = placed === top ? "" : `translate(-50%, ${px(placed - top)})`;
+    // A popup with no room for the caption on either side fades it out: the popup stays whole.
+    const opacity = captionOpacity(this.#plan!, view, timeMs, {left, top: placed, width, height});
+    this.caption.style.opacity = opacity >= 1 ? "" : opacity.toFixed(4);
   }
 
   #chatHtml(state: UiState, timeMs: number): string {
@@ -659,18 +884,17 @@ class TutorialController {
     return undefined;
   }
 
-  #resolve(target: Target): {x: number; y: number} | undefined {
-    const stage = this.stage.getBoundingClientRect();
+  /** A target's pointer position in stage px as laid out now; undefined when it is not on screen. */
+  #live(target: Target): Point | undefined {
     if (typeof target !== "string") return {x: target.x * this.scale, y: target.y * this.scale};
     const rect = this.#rect(target);
-    if (!rect) return this.#positions.get(target);
+    if (!rect) return undefined;
+    const stage = this.stage.getBoundingClientRect();
     const wide = rect.width > 220 * this.scale;
-    const point = {
+    return {
       x: rect.left - stage.left + (wide ? Math.min(rect.width / 2, 110 * this.scale) : rect.width / 2),
       y: rect.top - stage.top + rect.height / 2
     };
-    this.#positions.set(target, point);
-    return point;
   }
 
   /**
@@ -687,80 +911,86 @@ class TutorialController {
     return hit?.closest("[data-cursor='crosshair']") ? "crosshair" : "arrow";
   }
 
-  #placeCursor(state: UiState, timeMs: number): void {
-    const timeline = this.timeline!;
+  /**
+   * The pointer in stage px with the camera at identity. A move starts from the previous target as
+   * laid out in this frame, not from whatever frame was rendered last, and a target that is gone
+   * falls back to the position measured in setup; frames stay a function of time at any fps and
+   * seek order.
+   */
+  #pointerAt(timeMs: number): Point {
+    const moves = this.timeline!.moves;
     let index = -1;
-    for (let candidate = 0; candidate < timeline.moves.length; candidate += 1) {
-      if (timeline.moves[candidate]!.startMs <= timeMs) index = candidate;
+    for (let candidate = 0; candidate < moves.length; candidate += 1) {
+      if (moves[candidate]!.startMs <= timeMs) index = candidate;
       else break;
     }
-    if (index >= 0) {
-      const move = timeline.moves[index]!;
-      // Between moves the cursor rests on the previous target, so a move starts from that target
-      // as laid out at this frame, not from whatever frame was rendered last: a marker that was
-      // mid-drag in the previous frame has already settled. Frames stay a function of time at any fps.
-      const previous = index > 0 ? timeline.moves[index - 1]! : undefined;
-      const from = previous ? this.#resolve(previous.to) ?? this.#cursor : this.#home;
-      const destination = this.#resolve(move.to) ?? this.#cursor;
-      const span = move.endMs - move.startMs;
-      const progress = span <= 0 ? 1 : Math.min(1, Math.max(0, (timeMs - move.startMs) / span));
-      const eased = ease(progress);
-      const arc = Math.sin(Math.PI * progress) * Math.min(40, Math.hypot(destination.x - from.x, destination.y - from.y) * 0.08);
-      this.#cursor = progress >= 1
-        ? {...destination}
-        : {x: from.x + (destination.x - from.x) * eased, y: from.y + (destination.y - from.y) * eased - arc * this.scale};
-    } else {
-      this.#cursor = {...this.#home};
+    if (index < 0) return {...this.#home};
+    const move = moves[index]!;
+    const anchor = this.#anchors[index]!;
+    const span = move.endMs - move.startMs;
+    if (span > 0 && timeMs < move.endMs) {
+      const from = index > 0 ? this.#live(moves[index - 1]!.to) ?? anchor.from : this.#home;
+      return cursorPoint(from, this.#live(move.to) ?? anchor.approach, (timeMs - move.startMs) / span, this.scale);
     }
-    const lastClick = [...timeline.clicks].reverse().find((clickMs) => clickMs <= timeMs);
-    const sinceClick = lastClick === undefined ? Infinity : timeMs - lastClick;
-    const pressScale = sinceClick < 140 ? 0.86 : 1;
-    const shape = this.#cursorShape(state, timeMs);
-    const size = CURSOR_SIZES[shape] * this.scale;
-    const hotspot = CURSOR_HOTSPOTS[shape];
+    return this.#live(move.to) ?? anchor.leave;
+  }
+
+  /** Draws the pointer, scaled with the camera and pulsing on clicks, and the click ripple. `screen` is the tip in stage px. */
+  #placeCursor(state: UiState, timeMs: number, shape: keyof typeof CURSOR_HOTSPOTS, screen: Point, zoom: number): void {
+    const style = pointerStyle({size: CURSOR_SIZES[shape], hotspot: CURSOR_HOTSPOTS[shape]}, screen, this.scale, zoom, this.timeline!.presses, timeMs);
     this.cursor.dataset.shape = shape;
-    this.cursor.style.width = `${size}px`;
-    this.cursor.style.transformOrigin = `${(hotspot.x * size) / 24}px ${(hotspot.y * size) / 24}px`;
-    this.cursor.style.height = `${size}px`;
-    this.cursor.style.transform = `translate(${this.#cursor.x - (hotspot.x * size) / 24}px, ${this.#cursor.y - (hotspot.y * size) / 24}px) scale(${pressScale})`;
+    this.cursor.style.width = `${style.size}px`;
+    this.cursor.style.transformOrigin = style.origin;
+    this.cursor.style.height = `${style.size}px`;
+    this.cursor.style.transform = style.transform;
     // While a picker marker is dragged, the click ripple is drawn as a ring so the marker shows through it.
     this.ripple.classList.toggle("ring", Boolean(state.colorPicker?.drag));
-    if (sinceClick < 420) {
-      const progress = sinceClick / 420;
-      this.ripple.style.opacity = String(0.9 * (1 - progress));
-      this.ripple.style.transform = `translate(${this.#cursor.x}px, ${this.#cursor.y}px) scale(${(0.3 + progress * 0.9) * this.scale})`;
+    if (style.ripple) {
+      this.ripple.style.opacity = String(style.ripple.opacity);
+      this.ripple.style.transform = style.ripple.transform;
     } else {
       this.ripple.style.opacity = "0";
     }
   }
 
-  render(timeMs: number): void {
-    if (!this.timeline) throw new Error("Tutorial host is not set up.");
-    const state = this.#state(timeMs);
+  /** Everything but the camera, the pointer, and the caption position: sidebar, menus, picker, chat, widget box, toast. */
+  #layout(state: UiState, timeMs: number): void {
+    const timeline = this.timeline!;
     this.#update("sidebar", this.sidebar, this.#sidebarHtml(state, timeMs));
     this.#update("bottom", this.bottom, this.#bottomHtml(state));
-    if (this.timeline.chrome.chat.enabled) this.#update("chat", this.chat, this.#chatHtml(state, timeMs));
+    if (timeline.chrome.chat.enabled) this.#update("chat", this.chat, this.#chatHtml(state, timeMs));
     this.#update("menu", this.menuLayer, this.#menuHtml(state));
     const picker = this.#pickerHtml(state, timeMs);
     this.#update("backdrop", this.backdropLayer, picker.backdrop);
     this.#update("popup", this.popupLayer, this.#selectHtml(state) + picker.dialog);
-    // Captions annotate the video, so they stay readable above the picker backdrop; #placeCaption keeps them off the dialog.
-    this.caption.classList.toggle("above-modal", state.colorPicker !== null);
     const box = state.selected
       ? `<span class="dims">${this.#dims()}</span>`
-      : `<span class="tag">${escapeHtml(this.timeline.chrome.layerName)}</span>`;
+      : `<span class="tag">${escapeHtml(timeline.chrome.layerName)}</span>`;
     this.#update("box", this.widgetBox, box);
     this.widgetBox.classList.toggle("selected", state.selected);
     this.caption.style.display = state.caption ? "block" : "none";
     this.#update("caption", this.caption, state.caption ? escapeHtml(state.caption) : "");
-    this.#placeCaption(state, timeMs);
     this.toast.style.display = state.toast ? "block" : "none";
     this.#update("toast", this.toast, state.toast ? escapeHtml(state.toast) : "");
     for (const target of ["preview", "save"]) {
       const element = this.toolbar.querySelector<HTMLElement>(`[data-target="${target}"]`);
       element?.classList.toggle("pressed", state.pressed === target);
     }
-    this.#placeCursor(state, timeMs);
+  }
+
+  render(timeMs: number): void {
+    if (!this.timeline || !this.#plan) throw new Error("Tutorial host is not set up.");
+    const state = this.#state(timeMs);
+    // Measure with the camera removed: getBoundingClientRect and elementFromPoint then see stage px.
+    this.cameraLayer.style.transform = "none";
+    this.#layout(state, timeMs);
+    this.#cursor = this.#pointerAt(timeMs);
+    const shape = this.#cursorShape(state, timeMs);
+    // Apply the camera last. It frames the crop (or the whole stage) and never shows outside it.
+    const {zoom, tx, ty, css, view} = cameraTransform(this.#plan, timeMs);
+    this.cameraLayer.style.transform = css;
+    this.#placeCursor(state, timeMs, shape, {x: this.#cursor.x * zoom + tx, y: this.#cursor.y * zoom + ty}, zoom);
+    this.#placeCaption(state, timeMs, view);
   }
 
   #dims(): string {

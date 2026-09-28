@@ -220,6 +220,8 @@ export interface TutorialDefinition {
   chat?: {enabled?: boolean; title?: string; channel?: string};
   liveEmulation?: boolean;
   typingMsPerChar?: number;
+  /** Screen Studio-style camera for tutorial videos: zooms on the cursor. Default on, zoom 1.8. `false` keeps the full editor. */
+  autoZoom?: boolean | {zoom?: number};
   steps: TutorialStep[];
 }
 

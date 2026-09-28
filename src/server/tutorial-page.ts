@@ -2,6 +2,8 @@
  * Capture host variant that frames the widget inside a replica of the StreamElements
  * overlay editor. Every visual state is driven by `__SWS_TUTORIAL__.render(timeMs)`;
  * there are no CSS transitions, so each frame is a pure function of the timeline.
+ * The editor sits inside `#se-camera`, the tutorial's zoom; captions live in `#se-hud`
+ * above it, never scaled, and the cursor layer stays on top.
  * Colors and metrics were measured from the live editor on 2026-09-25. The color picker
  * dialog replicates md-color-picker 0.2.6 as bundled by the editor (Angular Material 1.1.20,
  * the editor's own CSS), measured in a headless reproduction on 2026-09-26 rather than live.
@@ -19,25 +21,27 @@ export function renderTutorialPage(frameOrigin: string): string {
 </head>
 <body data-frame-origin="${safeFrameOrigin}">
   <main id="capture-stage">
-    <div class="se-editor" id="se-editor">
-      <header class="se-toolbar" id="se-toolbar"></header>
-      <aside class="se-sidebar" id="se-sidebar"></aside>
-      <section class="se-canvas" id="se-canvas">
-        <div class="se-overlay" id="se-overlay">
-          <div id="widget-wrap">
-            <iframe id="widget-frame" title="Widget capture" sandbox="allow-scripts allow-same-origin"></iframe>
-            <div class="se-widget-box" id="se-widget-box"></div>
+    <div class="se-camera" id="se-camera">
+      <div class="se-editor" id="se-editor">
+        <header class="se-toolbar" id="se-toolbar"></header>
+        <aside class="se-sidebar" id="se-sidebar"></aside>
+        <section class="se-canvas" id="se-canvas">
+          <div class="se-overlay" id="se-overlay">
+            <div id="widget-wrap">
+              <iframe id="widget-frame" title="Widget capture" sandbox="allow-scripts allow-same-origin"></iframe>
+              <div class="se-widget-box" id="se-widget-box"></div>
+            </div>
           </div>
-        </div>
-        <div class="se-caption" id="se-caption"></div>
-        <div class="se-bottom" id="se-bottom"></div>
-        <div class="se-menu-layer" id="se-menu-layer"></div>
-        <div class="se-toast" id="se-toast"></div>
-      </section>
-      <aside class="se-chat" id="se-chat"></aside>
-      <div class="se-backdrop-layer" id="se-backdrop-layer"></div>
-      <div class="se-popup-layer" id="se-popup-layer"></div>
+          <div class="se-bottom" id="se-bottom"></div>
+          <div class="se-menu-layer" id="se-menu-layer"></div>
+          <div class="se-toast" id="se-toast"></div>
+        </section>
+        <aside class="se-chat" id="se-chat"></aside>
+        <div class="se-backdrop-layer" id="se-backdrop-layer"></div>
+        <div class="se-popup-layer" id="se-popup-layer"></div>
+      </div>
     </div>
+    <div class="se-hud" id="se-hud"><div class="se-hud-canvas" id="se-hud-canvas"><div class="se-caption" id="se-caption"></div></div></div>
     <div class="se-cursor-layer" id="se-cursor-layer">
       <div class="se-ripple" id="se-ripple"></div>
       <svg class="se-cursor" id="se-cursor" viewBox="0 0 24 24" aria-hidden="true" data-shape="arrow">
@@ -57,6 +61,16 @@ const TUTORIAL_CSS = `
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #020923; }
 #capture-stage { position: relative; overflow: hidden; isolation: isolate; background: #c0c0c0; }
+/* The tutorial camera. No will-change, so Chrome re-rasterizes text sharply at every zoom; z-index 0 keeps
+   it one stacking context below the HUD and the cursor layer whether its transform is none or not. */
+.se-camera { position: absolute; inset: 0; z-index: 0; transform-origin: 0 0; }
+/* Captions annotate the video: laid out like the editor canvas, above the camera, never scaled by it. */
+.se-hud {
+  position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; z-index: 15;
+  font-family: "Nunito Sans Variable", "Nunito Sans", "Nunito", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px; letter-spacing: 1px; -webkit-font-smoothing: antialiased;
+}
+.se-hud-canvas { position: absolute; top: 52px; bottom: 0; left: 320px; }
 .se-editor {
   --se-navy: #020923; --se-blue: #5787dc; --se-slider: #5771dc; --se-text: rgba(0,0,0,.87);
   --se-muted: rgba(0,0,0,.54); --se-line: rgba(0,0,0,.12); --se-header: #fafafa;
@@ -246,7 +260,6 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .se-chat .send { height: 30px; padding: 0 10px; border-radius: 4px; background: #9147ff; color: #fff; font-size: 13px; font-weight: 600; line-height: 30px; }
 .se-chat .send.pressed { background: #772ce8; }
 .se-backdrop-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 8; }
-.se-caption.above-modal { z-index: 9; }
 .se-popup-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 10; }
 .se-cp-backdrop { position: absolute; left: 0; top: 0; background: #212121; }
 .se-cp {

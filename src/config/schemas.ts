@@ -248,6 +248,7 @@ export const tutorialSchema = z
       .optional(),
     liveEmulation: z.boolean().optional(),
     typingMsPerChar: z.number().int().min(10).max(1_000).optional(),
+    autoZoom: z.union([z.boolean(), z.object({zoom: z.number().min(1.2).max(2.5).optional()}).strict()]).optional(),
     steps: z.array(tutorialStepSchema).min(1).max(500)
   })
   .strict();

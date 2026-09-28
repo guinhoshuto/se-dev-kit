@@ -557,7 +557,9 @@ async function renderVideoFrames(options: {
         timeline: tutorial,
         menu: EMULATE_MENU,
         viewport: {width: opened.resolved.viewport.width, height: opened.resolved.viewport.height},
-        output: {width: opened.resolved.output.width, height: opened.resolved.output.height}
+        output: {width: opened.resolved.output.width, height: opened.resolved.output.height},
+        // Frames are clipped to the scene crop, so the tutorial camera frames the crop.
+        crop: options.variant.scene.crop ?? null
       };
       await opened.page.evaluate(
         (value) => (window as unknown as {__SWS_TUTORIAL__: {setup: (options: unknown) => void}}).__SWS_TUTORIAL__.setup(value),

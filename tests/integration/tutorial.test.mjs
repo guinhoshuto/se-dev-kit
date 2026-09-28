@@ -63,6 +63,8 @@ test("colorpicker steps open the md-color-picker dialog on stage and commit the 
     ...base,
     tutorial: {
       ...base.tutorial,
+      // This test asserts editor geometry (a dialog centered at 960 px); the camera is tested below.
+      autoZoom: false,
       steps: [
         {action: "selectLayer"},
         {action: "chat", user: "Mira", text: "hi"},
@@ -238,4 +240,197 @@ test("colorpicker steps open the md-color-picker dialog on stage and commit the 
   const short = await renderAt(openedAtMs + 400);
   assert.ok(inside(short.dialog, 1920, 560), `dialog in a 1920x560 editor: ${JSON.stringify(short.dialog)}`);
   for (const [name, rect] of Object.entries(short.targets)) assert.ok(inside(rect, 1920, 560), `${name} target in a short editor`);
+});
+
+test("auto zoom frames are a function of time and keep popups, captions, and the widget in view", {timeout: 300_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const scene = project.scenes.find((item) => item.id === "tutorial-editor").value;
+  const video = project.recipes.find((item) => item.id === "tutorial-setup").value.outputs.video;
+  const timeline = compileVariantTutorial(project, {id: "zoom", scene}, video);
+  assert.deepEqual(timeline.autoZoom, {zoom: 1.8}, "the example keeps the default camera");
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+  });
+  const opened = await openScene(project, server, browser, scene, {
+    host: "tutorial",
+    camera: tutorialCamera(timeline),
+    background: {id: "tutorial-editor", color: "transparent"}
+  });
+  t.after(() => opened.context.close());
+  const {page} = opened;
+  const {width, height} = opened.resolved.output;
+  const uiScale = timeline.chrome.uiScale;
+  const probes = [];
+  for (let time = 0; time <= timeline.endMs; time += 100) probes.push(time);
+
+  // Renders `times` in order after a fresh setup and records the frames at `record` times.
+  const pass = (times, record, crop = null) => page.evaluate(({options, times, record}) => {
+    const host = window.__SWS_TUTORIAL__;
+    host.setup(options);
+    const wanted = new Set(record);
+    const box = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 ? {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom} : null;
+    };
+    const hull = (boxes) => {
+      const present = boxes.filter(Boolean);
+      if (present.length === 0) return null;
+      return {
+        left: Math.min(...present.map((item) => item.left)),
+        top: Math.min(...present.map((item) => item.top)),
+        right: Math.max(...present.map((item) => item.right)),
+        bottom: Math.max(...present.map((item) => item.bottom))
+      };
+    };
+    const frames = {};
+    for (const time of times) {
+      host.render(time);
+      if (!wanted.has(time)) continue;
+      const cursor = document.querySelector("#se-cursor");
+      const caption = document.querySelector("#se-caption");
+      const dialog = document.querySelector(".se-cp");
+      const hue = [...document.querySelectorAll("[data-target]")].find((element) => element.dataset.target === "picker:hue");
+      frames[time] = {
+        camera: document.querySelector("#se-camera").style.transform,
+        cursor: {transform: cursor.style.transform, width: cursor.style.width, shape: cursor.dataset.shape},
+        caption: caption.style.transform,
+        captionOpacity: caption.style.opacity,
+        captionBox: caption.style.display === "none" ? null : {...box(caption), offsetHeight: caption.offsetHeight},
+        editor: box(document.querySelector("#se-editor")),
+        popups: [
+          dialog && Number(dialog.style.opacity) === 1 ? box(dialog) : null,
+          hull([".se-emu .live", ".se-emu .card", ".se-emu .sub"].map((selector) => box(document.querySelector(selector)))),
+          box(document.querySelector(".se-select-menu"))
+        ].filter(Boolean),
+        widget: (() => {
+          const widget = box(document.querySelector("#se-widget-box"));
+          const canvas = box(document.querySelector("#se-canvas"));
+          return widget && canvas
+            ? {left: Math.max(widget.left, canvas.left), top: Math.max(widget.top, canvas.top), right: Math.min(widget.right, canvas.right), bottom: Math.min(widget.bottom, canvas.bottom)}
+            : null;
+        })(),
+        hue: box(hue)
+      };
+    }
+    return frames;
+  }, {options: {timeline, menu: EMULATE_MENU, viewport: opened.resolved.viewport, output: opened.resolved.output, crop}, times, record});
+
+  const grid = (fps) => {
+    const times = [];
+    for (let index = 0; (index * 1000) / fps <= timeline.endMs; index += 1) times.push(Math.round((index * 1000) / fps));
+    return times;
+  };
+  const reverse = await pass([...probes].reverse(), probes);
+  const tenFps = await pass(grid(10), probes);
+  const thirtyFps = await pass(grid(30), probes);
+  const parseCursor = (transform) => {
+    const match = /translate\(([-\d.e]+)px, ([-\d.e]+)px\) scale\(([-\d.e]+)\)/.exec(transform);
+    assert.ok(match, `cursor transform ${transform}`);
+    return match.slice(1).map(Number);
+  };
+  const zoomOf = (camera) => (camera === "none" ? 1 : Number(/scale\(([-\d.e]+)\)/.exec(camera)[1]));
+  // The pointer is drawn at the camera's zoom: 28 editor px for the arrow, 24 for the crosshair.
+  const cursorSize = (frame) => (frame.cursor.shape === "crosshair" ? 24 : 28) * uiScale * zoomOf(frame.camera);
+  // Chrome reads a CSS length back with six significant digits (37.333…px as "37.3333px"), so a
+  // pointer under 1000 px wide is within 0.0005 px of its size.
+  const sizedWithCamera = (frame) => Math.abs(Number.parseFloat(frame.cursor.width) - cursorSize(frame)) < 0.001;
+  let zoomed = 0;
+  for (const time of probes) {
+    const reference = tenFps[time];
+    if (zoomOf(reference.camera) > 1.2) zoomed += 1;
+    assert.ok(sizedWithCamera(reference),
+      `the pointer is ${reference.cursor.width} wide at ${time} ms, not scaled with the camera ${reference.camera}`);
+    for (const [label, other] of [["direct reverse seeks", reverse[time]], ["30 fps", thirtyFps[time]]]) {
+      assert.equal(other.camera, reference.camera, `${label}: camera at ${time} ms`);
+      assert.equal(other.caption, reference.caption, `${label}: caption at ${time} ms`);
+      assert.equal(other.captionOpacity, reference.captionOpacity, `${label}: caption opacity at ${time} ms`);
+      assert.equal(other.cursor.width, reference.cursor.width, `${label}: cursor size at ${time} ms`);
+      const [x1, y1, s1] = parseCursor(reference.cursor.transform);
+      const [x2, y2, s2] = parseCursor(other.cursor.transform);
+      assert.ok(Math.hypot(x1 - x2, y1 - y2) < 0.01, `${label}: cursor at ${time} ms is ${other.cursor.transform}, 10 fps has ${reference.cursor.transform}`);
+      assert.equal(s2, s1, `${label}: cursor pulse at ${time} ms`);
+    }
+  }
+  assert.ok(zoomed > probes.length / 4, `the camera zooms in: ${zoomed} of ${probes.length} probes above 1.2x`);
+
+  const inStage = (rect) => rect.left >= -1 && rect.top >= -1 && rect.right <= width + 1 && rect.bottom <= height + 1;
+  const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  let popupFrames = 0;
+  for (const time of probes) {
+    const frame = tenFps[time];
+    for (const popup of frame.popups) {
+      popupFrames += 1;
+      assert.ok(inStage(popup), `popup ${JSON.stringify(popup)} leaves the stage at ${time} ms (camera ${frame.camera})`);
+      // A caption with no room beside a popup fades out rather than covering it.
+      const faded = frame.captionOpacity !== "" && Number(frame.captionOpacity) === 0;
+      if (frame.captionBox && !faded) assert.ok(!overlaps(popup, frame.captionBox), `the caption covers a popup at ${time} ms`);
+    }
+    if (frame.captionBox && frame.captionOpacity !== "") {
+      assert.ok(Number(frame.captionOpacity) >= 0 && Number(frame.captionOpacity) < 1, `caption opacity ${frame.captionOpacity} at ${time} ms`);
+    }
+    if (frame.captionBox) {
+      const drawn = frame.captionBox.bottom - frame.captionBox.top;
+      assert.ok(Math.abs(drawn - frame.captionBox.offsetHeight * uiScale) <= uiScale, `caption scaled by the camera at ${time} ms: ${drawn}px tall`);
+    }
+  }
+  assert.ok(popupFrames > 20, `popup frames checked: ${popupFrames}`);
+
+  // The widget is in view whenever it reacts, and the pointer stays on the hue marker it drags.
+  const reveals = [];
+  for (const action of timeline.widget) for (let offset = 0; offset <= 500; offset += 100) reveals.push(action.atMs + offset);
+  const hueMove = timeline.moves.find((move) => move.to === "picker:hue");
+  const huePress = timeline.presses.find((press) => press.downMs === hueMove.endMs);
+  const drags = [];
+  for (let time = huePress.downMs + 50; time <= huePress.upMs; time += 50) drags.push(time);
+  // The pointer itself pulses: 70 ms after a plain click it is pressed to 0.8 of its size.
+  const pulses = timeline.presses.filter((press) => press.upMs === press.downMs).slice(0, 6).map((press) => press.downMs + 70);
+  assert.ok(pulses.length >= 3, "the example has plain clicks");
+  const seeks = [...new Set([...reveals, ...drags, ...pulses])].sort((left, right) => right - left);
+  const direct = await pass(seeks, seeks);
+  for (const time of pulses) {
+    const scale = parseCursor(direct[time].cursor.transform)[2];
+    assert.ok(Math.abs(scale - 0.8) < 1e-9, `the pointer is not pressed 70 ms after the click at ${time - 70} ms: ${direct[time].cursor.transform}`);
+    assert.ok(sizedWithCamera(direct[time]), `pointer size at ${time} ms: ${direct[time].cursor.width}, camera ${direct[time].camera}`);
+  }
+  for (const time of reveals) {
+    const {widget, camera} = direct[time];
+    assert.ok(widget && inStage(widget), `widget ${JSON.stringify(widget)} out of view at ${time} ms (camera ${camera})`);
+  }
+  for (const time of drags) {
+    const {cursor, hue, camera} = direct[time];
+    assert.ok(zoomOf(camera) > 1.3, `the hue drag at ${time} ms is framed close: ${camera}`);
+    const [x, y] = parseCursor(cursor.transform);
+    const size = Number.parseFloat(cursor.width);
+    const hotspot = cursor.shape === "crosshair" ? [12, 12] : [5, 2.5];
+    const tip = {x: x + (hotspot[0] * size) / 24, y: y + (hotspot[1] * size) / 24};
+    assert.ok(
+      hue && tip.x >= hue.left - 0.5 && tip.x <= hue.right + 0.5 && tip.y >= hue.top - 0.5 && tip.y <= hue.bottom + 0.5,
+      `the pointer ${JSON.stringify(tip)} leaves the hue marker ${JSON.stringify(hue)} at ${time} ms`
+    );
+  }
+
+  // With a scene crop (here the canvas), the camera frames the crop: the editor covers it in every
+  // frame, and the widget is inside it whenever it reacts.
+  const crop = {x: 427, y: 0, width: 1040, height: 1080};
+  const croppedTimes = [...new Set([...probes, ...reveals])].sort((left, right) => left - right);
+  const cropped = await pass(croppedTimes, croppedTimes, crop);
+  for (const time of croppedTimes) {
+    const {editor, camera} = cropped[time];
+    assert.ok(editor.left <= crop.x + 0.5 && editor.top <= crop.y + 0.5 && editor.right >= crop.x + crop.width - 0.5 && editor.bottom >= crop.y + crop.height - 0.5,
+      `the crop shows past the editor at ${time} ms: ${JSON.stringify(editor)} (camera ${camera})`);
+  }
+  for (const time of reveals) {
+    const {widget, camera} = cropped[time];
+    assert.ok(widget && widget.left >= crop.x - 1 && widget.right <= crop.x + crop.width + 1 && widget.top >= crop.y - 1 && widget.bottom <= crop.y + crop.height + 1,
+      `the widget ${JSON.stringify(widget)} leaves the crop at ${time} ms (camera ${camera})`);
+  }
 });
