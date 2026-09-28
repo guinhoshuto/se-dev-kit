@@ -1,6 +1,6 @@
 # Hosted workflow
 
-The helper uses only Node.js built-ins and the Studio HTTP API. In the examples, `SKILL_DIR` means the directory containing this skill. Do not create a shell variable named `HOME` or expose access-file contents.
+The helper uses only Node.js built-ins and the Studio HTTP API; `--config` also uses the engine of the Studio checkout the skill runs from. In the examples, `SKILL_DIR` means the directory containing this skill. Do not create a shell variable named `HOME` or expose access-file contents.
 
 ## Import a production widget
 
@@ -35,15 +35,20 @@ When the catalog uses `sws-sample:` references, `import` and `push` first check 
 
 ### Widgets with a local Studio config
 
-A `se-widget-studio.config.mjs` cannot be passed as `--catalog`. Build a JSON catalog from it and keep that file with the widget's other Studio-only files, never among its production files:
+Import a widget that has a `se-widget-studio.config.mjs` with `--config` in place of `--widget-root` and `--catalog`. The helper reads the config with the engine of the Studio checkout the skill runs from, exactly as the local CLI does, and nothing in the widget directory changes:
 
-- Copy only `widget.viewport` and `widget.ready`. Drop `widget.root`, `widget.files`, `widget.assets`, and the top-level `output`; the helper or the strict hosted schema rejects them.
-- Expand each `{glob}` into an array of the matching JSON objects. Wrap a plain field-data file, such as a production theme preset, as `{"schemaVersion": 1, "id": "<file name without .json>", "name": "<name>", "fieldData": <file contents>}`, because local mode derives that ID from the file name and scenes refer to it.
-- Replace asset globs with one `{path, file, contentType}` entry per file, keeping `path` equal to the file's path relative to the widget root.
-- Convert copies of the Studio's sample media first (next item), then rewrite the remaining local-only media values in `fieldData` from `/__sws/widget/<path>` to `<path>`; hosted import rejects absolute local paths. Hosted import rewrites only string media values, so check array-valued media fields (an `image-input` with `multiple: true`) that hold widget asset paths in a test job before rendering. Arrays of `sws-sample:` references need no check: import validates them and every mode resolves them.
-- Test images that are copies of the Studio's sample media become `sws-sample:` references instead of uploads. For the images an agent generated for se-windows, a gallery value `/__sws/widget/studio/media/gallery/NN-<name>.jpg` (or `studio/media/gallery/NN-<name>.jpg`, if the previous rewrite already ran) becomes `sws-sample:gallery/<name>.jpg`, dropping the `NN-` prefix; a `background.image` `studio/media/backdrops/bd-<name>.jpg` becomes `sws-sample:backdrops/<name>.jpg`, dropping `bd-`. Add the backdrop's paired `color` from [the sample table](catalog-authoring.md#sample-media) when the background has none, and drop the matching `assets` entries. The sample files were recompressed, so renders are not byte-identical to renders made from the generated originals. Do this only in the JSON catalog you build, never in the widget directory. Where a widget has no test media at all, use samples from [catalog-authoring.md](catalog-authoring.md#sample-media) rather than creating images.
-- Drop `outputs.video.keepFrames` from recipes: hosted jobs ignore it, and a deployment older than that key rejects it.
-- Check the result against the per-revision limits below before importing; split it as described in "Plan a large batch" when it does not fit.
+```sh
+node "$SKILL_DIR/scripts/studio-client.mjs" import \
+  --config /absolute/path/to/widget/se-widget-studio.config.mjs \
+  --recipes gallery-stills,hero-video
+```
+
+- Each catalog glob becomes an array; a plain field-data file, such as a production theme preset, gets the ID local mode derives from its file name. `widget.viewport` and `widget.ready` are kept; `widget.root`, `widget.files`, `widget.assets`, and `output` are not sent.
+- Every file the local Studio serves besides the production sources (the `widget.assets` matches and the files the widget source references) becomes a private upload under its path relative to the widget root. A field value such as `studio/media/gallery/01.jpg`, alone or in an array, names that file in the local CLI, the hosted preview, and hosted jobs alike. `/__sws/widget/<path>` values become `<path>`, a recipe matrix `"*"` becomes every theme ID, and `outputs.video.keepFrames` is dropped because hosted jobs ignore it.
+- `--recipes` keeps only those recipes and the scenes, themes, and fixtures they use, and leaves scenarios out. Without it, a config that exceeds a per-revision limit is refused with the counts; group recipes as in "Plan a large batch".
+- The helper refuses production files outside the two layouts above, `widget.adapter`, and `widget.assets` that match an HTML file. It warns on stderr when the checkout's engine build is dirty or older than its source: run `npm run build:engine` in the checkout, then import. A copied skill has no checkout, so `--config` fails there; build the catalog by hand following these rules and pass `--catalog`.
+- `catalog --config <file> [--recipes <ids>] --out <new-json>` writes the same catalog without contacting any Studio. Use it to inspect what an import would send, to take the arrays of the next recipe group when you `pull` and `push` (keep the draft's `assets`), or to edit before `import --widget-root <root> --catalog <json>`.
+- The editor preview embeds every captured asset within one 3 MiB budget, so a widget whose test media exceed it imports and renders but does not preview. Test images that are copies of the Studio's sample media can become `sws-sample:` references instead, which the preview embeds only for the scene it shows. For the images an agent generated for se-windows, a gallery value `studio/media/gallery/NN-<name>.jpg` becomes `sws-sample:gallery/<name>.jpg`, dropping the `NN-` prefix; a `background.image` `studio/media/backdrops/bd-<name>.jpg` becomes `sws-sample:backdrops/<name>.jpg`, dropping `bd-`. Add the backdrop's paired `color` from [the sample table](catalog-authoring.md#sample-media) when the background has none, and drop the matching `assets` entries. The sample files were recompressed, so renders are not byte-identical to renders made from the generated originals. Do this only in the JSON that `catalog` writes, never in the widget directory, then import it with `--catalog`. Where a widget has no test media at all, use samples from [catalog-authoring.md](catalog-authoring.md#sample-media) rather than creating images.
 
 ## Open and manipulate
 

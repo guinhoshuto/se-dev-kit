@@ -74,9 +74,13 @@ Rules:
 - Do not fill empty media fields silently. StreamElements shows an empty field as empty, so keep at least one scene with the media fields empty when the widget has an empty state, and put samples in the scenes that show media. The editors' **Fill empty image fields** button is an explicit, temporary choice.
 - `video-input` and `sound-input` have no samples yet, and there are no avatar, emote, transparent, animated, or portrait samples. Leave those fields empty or ask the user; do not generate replacements.
 
+## Widget media files
+
+Name a widget's own test media by its path relative to the widget root, such as `studio/media/gallery/01.jpg`, alone or in an array for a `multiple` field; in a local config, list it in `widget.assets` when it lives outside `assets/`, `fonts/`, and `media/`. Widgets receive the file's absolute URL in every mode, as with samples above. Do not write the local Studio's internal `/__sws/widget/<path>` URL: local runs still accept it, but hosted import refuses it.
+
 ## Hosted assets
 
-For hosted import, list local binary dependencies explicitly as `{path, file, contentType}`. `file` is relative to the production widget root and is consumed only by the skill helper; the server stores the resulting private upload ID. Never use broad directory globs or include credentials, source maps, development configuration, or unrelated repository files.
+For hosted import with `--catalog`, list local binary dependencies explicitly as `{path, file, contentType}`. `file` is relative to the production widget root and is consumed only by the skill helper; the server stores the resulting private upload ID. Never use broad directory globs or include credentials, source maps, development configuration, or unrelated repository files. `import --config` declares the files the config's `widget.assets` match, so keep those globs as narrow as the media the catalog uses.
 
 ## Compact example
 
