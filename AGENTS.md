@@ -17,6 +17,13 @@ This repository contains SE Widget Studio Web and its shared StreamElements simu
 - Use local storage only outside Vercel. Vercel deployments must fail clearly if Blob or Sandbox configuration is missing; never silently fall back to ephemeral disk.
 - Report local simulation separately from real StreamElements/OBS validation.
 
+## The live skill and `main`
+
+- The global `se-widget-studio` skill is a symlink to `skills/se-widget-studio/` in this checkout, and consumer sessions run this checkout's `dist/`. Whatever is on disk here is live for every agent session, committed or not.
+- Work on `main`, without a worktree. Before ending a session, run `npm run build:engine` and commit, so `main` is clean and `dist/build-info.json` reports `"dirty": false`.
+- Exception: work that waits for the owner's review (a render to watch, a UI to judge) is committed to a local branch (for example `tutorial-zoom`) and named in the final report, never left uncommitted on `main`. Return to `main` and rebuild `dist/` from it before ending the session.
+- Skill text that depends on a code change ships in the same commit as that change: on the branch while the change waits for review, on `main` only once it is pushed and deployed. The skill never tells an agent to use a field, flag, or behavior that production rejects.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know
