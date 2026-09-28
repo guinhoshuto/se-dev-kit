@@ -1,14 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {mkdtemp} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
 import {ImmutableReadCache, LocalStore, readJson, writeJson} from '../../lib/storage';
 import {FontMemory, lockForRevision, reserveFontBudget, resolveGoogleFont, servedDigest, writeLockEntry, type FontResolution, type ResolveGoogleFontOptions} from '../../lib/fonts';
 import {createProject, restoreProject} from '../../lib/projects';
 import type {PublicLookup, PublicTransport} from '../../lib/importer';
 import type {ObjectStore} from '../../lib/model';
 import {GOOGLE_FONTS_UA} from '../../src/runtime/google-fonts-url';
+import {temporaryDirectory} from './temporary';
 
 // Every test here injects DNS and transport: nothing reaches the network.
 const lookup: PublicLookup = async () => [{address: '8.8.8.8', family: 4}];
@@ -23,7 +21,7 @@ function upstream(handler: (url: string, call: number) => Reply | Promise<Reply>
   };
   return {calls, transport};
 }
-const tempStore = async () => new LocalStore(await mkdtemp(join(tmpdir(), 'studio-fonts-')));
+const tempStore = async () => new LocalStore(await temporaryDirectory('studio-fonts-'));
 const woff2 = (size = 64, seed = 0) => { const bytes = Buffer.alloc(size, seed); bytes.write('wOF2', 0, 'latin1'); return bytes; };
 const CSS_URL = 'https://fonts.googleapis.com/css2?family=Archivo:wght@400';
 const fileUrl = (index: number) => `https://fonts.gstatic.com/s/archivo/v19/file${index}.woff2`;

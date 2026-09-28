@@ -63,6 +63,13 @@ export async function detectBrowser(explicitPath?: string): Promise<BrowserDetec
   return {checked};
 }
 
+/**
+ * An inert Chrome switch on every browser this module starts, valued `<pid>-<launch>`. `npm run
+ * kill-stale` finds this checkout's orphans by it without touching another session's Chrome.
+ */
+export const BROWSER_MARKER = "--se-widget-studio";
+let launches = 0;
+
 export async function launchStudioBrowser(options: {
   browserPath?: string;
   headed?: boolean;
@@ -75,9 +82,11 @@ export async function launchStudioBrowser(options: {
       "Install a system Chrome/Chromium yourself, then pass --browser-path /absolute/path or set SE_WIDGET_STUDIO_BROWSER. The Studio never downloads browsers automatically."
     );
   }
+  launches += 1;
   const browser = await chromium.launch({
     executablePath: detection.executablePath,
-    headless: !options.headed
+    headless: !options.headed,
+    args: [`${BROWSER_MARKER}=${process.pid}-${launches}`]
   });
   return {browser, detection};
 }

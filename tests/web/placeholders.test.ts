@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
-import {mkdtemp} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import postcss from 'postcss';
 import {prepareSnapshot, rewriteCss, type PublicLookup, type PublicTransport} from '../../lib/importer';
@@ -10,6 +8,7 @@ import {previewDocument} from '../../lib/preview';
 import {createProject} from '../../lib/projects';
 import {FontMemory, lockForRevision, prewarmGoogleFonts, staticGoogleFontUrls} from '../../lib/fonts';
 import {LocalStore} from '../../lib/storage';
+import {temporaryDirectory} from './temporary';
 import type {ObjectStore, ObjectValue, WidgetSnapshot} from '../../lib/model';
 
 // Excerpts of real store widgets (tests/fixtures/placeholders, read-only copies). Nothing here reaches the network.
@@ -64,7 +63,7 @@ test('rewriteCss parses real placeholder CSS through sentinels and round-trips i
 });
 
 test('placeholder widgets import as ready: unquoted CSS, calc(), keywords, @import, Google <link>, and <source> with a sound-input', async () => {
-  const store = await mkdtemp(join(tmpdir(), 'studio-placeholders-')).then(root => new LocalStore(root));
+  const store = await temporaryDirectory('studio-placeholders-').then(root => new LocalStore(root));
   const google = upstream(url => url.startsWith('https://fonts.gstatic.com/') ? {status: 200, body: woff2(), contentType: 'font/woff2'} : {status: 200, body: googleCss(new URL(url).searchParams.get('family')!.split(':')[0]!)});
   const input = snapshot({
     html: `${CUSTOM_CHAT_HTML}${DREAMY_HTML}${LAVA_HTML}`,
@@ -107,7 +106,7 @@ test('prewarm runs only on save: the draft preview path prepares and previews wi
 });
 
 test('prewarm failures become diagnostics warnings and the revision stays ready', async () => {
-  const store = await mkdtemp(join(tmpdir(), 'studio-placeholders-')).then(root => new LocalStore(root));
+  const store = await temporaryDirectory('studio-placeholders-').then(root => new LocalStore(root));
   const google = upstream(url => url.includes('Nope') ? {status: 400, body: 'bad family'} : {status: 503});
   const input = snapshot({html: '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family={{font}}">', fields: {font: {type: 'googleFont', value: 'Roboto'}}});
   input.themes = [{schemaVersion: 1, id: 'nope', name: 'Nope', fieldData: {font: 'Nope'}}];

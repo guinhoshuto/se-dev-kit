@@ -97,7 +97,7 @@ test('execution budgets include queue time and cannot outlive concurrency reserv
 test('hosted workers have a deterministic provider-safe Sandbox name', () => {
   assert.equal(hostedSandboxName('job_ABC-123'), 'sws-job_ABC-123');
 });
-test('local worker runs the real browser and publishes verified screenshots and test reports', {timeout: 120_000}, async () => {
+test('[browser] local worker runs the real browser and publishes verified screenshots and test reports', {timeout: 120_000}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-worker-test-'));
   try {
     const store = new LocalStore(join(root, 'store'));
@@ -450,7 +450,7 @@ window.addEventListener("onWidgetUpdate",e=>setFont(e.detail.fieldData.font));`,
 }
 const artifactJson = async (store: ObjectStore, done: Job, name: string) => JSON.parse(Buffer.from((await store.get(done.artifacts.find(item => item.name.endsWith(name))!.key))!.body).toString());
 
-test('the local runJob renders Google Fonts in two passes, and re-renders from the lock without upstream', {timeout: 240_000}, async () => {
+test('[browser] the local runJob renders Google Fonts in two passes, and re-renders from the lock without upstream', {timeout: 240_000}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-local-fonts-'));
   try {
     const store = new LocalStore(join(root, 'store'));
@@ -477,7 +477,7 @@ test('the local runJob renders Google Fonts in two passes, and re-renders from t
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
-test('a test job whose scenario switches googleFont through updateFields discovers the font and passes', {timeout: 240_000}, async () => {
+test('[browser] a test job whose scenario switches googleFont through updateFields discovers the font and passes', {timeout: 240_000}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-local-font-test-'));
   try {
     const store = new LocalStore(join(root, 'store'));

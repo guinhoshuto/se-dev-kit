@@ -1,11 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,symlink} from 'node:fs/promises';
+import {symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {BlobStore,LocalStore,mutateJson,readJson,getStore} from '../../lib/storage';
+import {temporaryDirectory} from './temporary';
 test('immutable objects, atomic concurrency and path boundaries',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'studio-store-test-'));const store=new LocalStore(dir);
+  const dir=await temporaryDirectory('studio-store-test-');const store=new LocalStore(dir);
   const {etag}=await store.put('projects/a.json',Buffer.from('first'));
   await assert.rejects(()=>store.put('projects/a.json',Buffer.from('second')),/changed elsewhere/);
   const results=await Promise.allSettled([store.put('projects/a.json',Buffer.from('left'),{ifMatch:etag}),store.put('projects/a.json',Buffer.from('right'),{ifMatch:etag})]);
@@ -15,7 +16,7 @@ test('immutable objects, atomic concurrency and path boundaries',async()=>{
   assert.deepEqual(await store.list('projects/'),['projects/a.json']);
 });
 test('CAS reservations cannot lose concurrent increments',async()=>{
-  const store=new LocalStore(await mkdtemp(join(tmpdir(),'studio-cas-test-')));
+  const store=new LocalStore(await temporaryDirectory('studio-cas-test-'));
   await Promise.all(Array.from({length:4},()=>mutateJson(store,'usage/day.json',{count:0},v=>({count:v.count+1}))));
   assert.deepEqual(await readJson(store,'usage/day.json'),{count:4});
 });

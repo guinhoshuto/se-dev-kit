@@ -176,7 +176,7 @@ const settle = (frame: Frame) => frame.evaluate(() => Promise.race([
 const probe = (frame: Frame) => frame.evaluate(() => (window as unknown as {__probe: {loads: number; errors: number}}).__probe);
 const face = (report: FontReport | undefined, family: string) => report?.families.find(entry => entry.family === family);
 
-test('the preview broker loads runtime and static Google Fonts through the editor bridge, in a real sandboxed iframe', {timeout: 90_000}, async t => {
+test('[browser] the preview broker loads runtime and static Google Fonts through the editor bridge, in a real sandboxed iframe', {timeout: 90_000}, async t => {
   if (!(await detectBrowser()).executablePath) { t.skip('No compatible local Chromium executable is installed; the Studio must not download one implicitly.'); return; }
   const studio = await startStudio();
   const {browser} = await launchStudioBrowser({});
@@ -241,7 +241,7 @@ test('the preview broker loads runtime and static Google Fonts through the edito
   }
 });
 
-test('text that arrives after the first load gets its subsets without touching the widget\'s link again', {timeout: 60_000}, async t => {
+test('[browser] text that arrives after the first load gets its subsets without touching the widget\'s link again', {timeout: 60_000}, async t => {
   if (!(await detectBrowser()).executablePath) { t.skip('No compatible local Chromium executable is installed; the Studio must not download one implicitly.'); return; }
   const studio = await startStudio();
   const {browser} = await launchStudioBrowser({});
@@ -275,7 +275,7 @@ test('text that arrives after the first load gets its subsets without touching t
   }
 });
 
-test('an answer that arrives after the preview became ready updates the font report', {timeout: 60_000}, async t => {
+test('[browser] an answer that arrives after the preview became ready updates the font report', {timeout: 60_000}, async t => {
   if (!(await detectBrowser()).executablePath) { t.skip('No compatible local Chromium executable is installed; the Studio must not download one implicitly.'); return; }
   const studio = await startStudio();
   const {browser} = await launchStudioBrowser({});

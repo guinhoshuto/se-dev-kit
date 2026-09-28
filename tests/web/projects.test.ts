@@ -1,12 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
 import {LocalStore} from '../../lib/storage';
+import {temporaryDirectory} from './temporary';
 import {createProject,getProjectAuthorized,getRevision,projectView,replaceProject,createJob} from '../../lib/projects';
 const snapshot={schemaVersion:1,name:'Sample',widget:{html:'<main id="chat"></main>',css:'body{margin:0}',js:'window.addEventListener("onWidgetLoad",()=>{});',fields:{}},themes:[{schemaVersion:1,id:'day',name:'Day',fieldData:{}}]};
-async function store(){return new LocalStore(await mkdtemp(join(tmpdir(),'studio-projects-')));}
+async function store(){return new LocalStore(await temporaryDirectory('studio-projects-'));}
 test('create, authorize, immutable revisions, full replacement, and concurrency',async()=>{
   const storage=await store();const created=await createProject(storage,snapshot);
   assert.equal(created.revision.status,'ready');assert.equal(created.revision.snapshot.widget.html,snapshot.widget.html);
