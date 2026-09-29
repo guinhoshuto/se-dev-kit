@@ -27,19 +27,27 @@ const functions = [
 ];
 
 const failures = [];
-for (const name of functions) {
+/** The repository paths traced into one function, or undefined (with a failure) when it has no trace. */
+async function tracedFiles(name) {
   const nftPath = resolve(root, '.next/server', `${name}.js.nft.json`);
   try {
     await access(nftPath);
   } catch {
     failures.push(`${name}: trace file is missing; run npm run build first.`);
-    continue;
+    return undefined;
   }
   const {files} = JSON.parse(await readFile(nftPath, 'utf8'));
-  const traced = new Set(files.map(file => relative(root, resolve(dirname(nftPath), file)).split(sep).join('/')));
+  return new Set(files.map(file => relative(root, resolve(dirname(nftPath), file)).split(sep).join('/')));
+}
+for (const name of functions) {
+  const traced = await tracedFiles(name);
+  if (!traced) continue;
   const missing = required.filter(file => !traced.has(file));
   if (missing.length) failures.push(`${name}: ${missing.length} sample-media file(s) not traced, for example ${missing[0]}.`);
 }
+// GET /api/v1/version reads the build's dist/build-info.json at runtime (verify-hosted --wait-for polls it).
+const versionTrace = await tracedFiles('app/api/v1/version/route');
+if (versionTrace && !versionTrace.has('dist/build-info.json')) failures.push('app/api/v1/version/route: dist/build-info.json is not traced, so the route answers 503.');
 
 const {stdout} = await exec('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {cwd: root, maxBuffer: 16 * 1024 * 1024});
 const packed = new Set(JSON.parse(stdout)[0].files.map(file => file.path));
@@ -47,7 +55,7 @@ const unpacked = required.filter(file => !packed.has(file));
 if (unpacked.length) failures.push(`npm package: ${unpacked.length} sample-media file(s) missing, for example ${unpacked[0]}.`);
 
 if (failures.length) {
-  console.error(`Sample media bundle check failed:\n- ${failures.join('\n- ')}`);
+  console.error(`Bundle check failed:\n- ${failures.join('\n- ')}`);
   process.exit(1);
 }
-console.log(`Sample media bundle check passed: ${required.length} files traced into ${functions.length} functions and present in the npm package.`);
+console.log(`Sample media bundle check passed: ${required.length} files traced into ${functions.length} functions and present in the npm package; dist/build-info.json traced into the version route.`);

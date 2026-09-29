@@ -116,6 +116,8 @@ node scripts/verify-hosted.mjs \
 
 It creates one synthetic project and at most three jobs (smoke, one 320×240 PNG, and one one-second silent MP4), then verifies authorization, optimistic concurrency, iframe policy, artifact hashes, image dimensions, and video streams. Evidence and the private resume capability are written under ignored `.studio-data/`; never publish `access.private.json`. The command neither downloads tools nor deletes remote data. Use `--resume` with that private file after an interrupted run instead of creating another project.
 
+To wait for a push to go live instead of sleeping, run it first with `--wait-for $(git rev-parse HEAD)` in place of `--ffprobe`: it asks `GET /api/v1/version` every 10 seconds (`--wait-interval`), creates nothing, returns when the deployed commit matches, and exits 1 with the last answer after 10 minutes (`--wait-timeout`, in seconds). Chain the verification after it with `&&`.
+
 With `--integration`, the same script calls no hosted API: it runs `tests/integration` inside a clone of the renderer snapshot, on its HeadlessChrome, to reproduce a failure of that browser without downloading it (see [Vercel](docs/VERCEL.md)).
 
 ## Known pitfalls

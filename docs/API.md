@@ -198,6 +198,10 @@ Preparation validates every reference against the deployed `sample-media/manifes
 
 `GET /api/v1/sample-media` needs no capability and returns `{schemaVersion: 1, items: [{reference, kind, contentType, width, height, bytes, sha256, label, alt, color, tone?}]}` for the verified files this deployment ships. It never returns the image bytes. A deployment that predates sample media answers 404, and one whose files do not match the manifest answers 503. Call it before creating or replacing a project that uses `sws-sample:` references, because an older deployment either blocks the revision with an unrelated path error or passes array values through unresolved; the skill client does this and refuses to continue.
 
+## Deployed version
+
+`GET /api/v1/version` needs no capability and returns `{schemaVersion: 1, version, commit, dirty}`: the `dist/build-info.json` written while this deployment was built (`commit` is the Git SHA Vercel built, and `dirty` is `false` there). It is never cached, answers 503 when the file is missing or malformed, and a deployment that predates it answers 404. `node scripts/verify-hosted.mjs --base-url <origin> --allow-hosted --wait-for <sha>` polls it until a push is live.
+
 ## Interactive preview
 
 `POST /api/studio/projects/:id/preview` takes an object with optional `snapshot` (a complete unsaved draft), `sceneId`, `themeId`, and `fieldData`. `{}` previews the saved revision. Success returns `{html, state, backgroundImage?, sessionId, nonce}`; the response contains no project capability.

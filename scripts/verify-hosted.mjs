@@ -32,10 +32,18 @@ const INTEGRATION_DIR = 'tests/integration';
 const INTEGRATION_TEST = /^[a-z0-9-]+\.test\.mjs$/;
 const INTEGRATION_LIMIT_MS = 15 * 60_000;
 const SANDBOX_FLAGS = ['--snapshot-id', '--expected-team-id', '--expected-project-id'];
+// --wait-for: GET /api/v1/version until the deployed commit matches. Read-only, needs no capability.
+const WAIT_FLAGS = ['--wait-for', '--wait-timeout', '--wait-interval'];
+const WAIT_REQUEST_MS = 10_000;
+const wholeSeconds = (flag, value, min, max) => {
+  const number = Number(value);
+  check(Number.isInteger(number) && number >= min && number <= max, `${flag} takes whole seconds from ${min} to ${max}.`);
+  return number;
+};
 
 export function parseOptions(args) {
   const options = {allowHosted: false, pollMs: 5000, ffprobe: process.env.STUDIO_FFPROBE_PATH || 'ffprobe', tests: []};
-  const values = new Map([['--base-url', 'baseUrl'], ['--resume', 'resume'], ['--ffprobe', 'ffprobe'], ['--snapshot-id', 'snapshotId'], ['--expected-team-id', 'expectedTeamId'], ['--expected-project-id', 'expectedProjectId']]);
+  const values = new Map([['--base-url', 'baseUrl'], ['--resume', 'resume'], ['--ffprobe', 'ffprobe'], ['--wait-for', 'waitFor'], ['--wait-timeout', 'waitTimeout'], ['--wait-interval', 'waitInterval'], ['--snapshot-id', 'snapshotId'], ['--expected-team-id', 'expectedTeamId'], ['--expected-project-id', 'expectedProjectId']]);
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -60,7 +68,7 @@ export function parseOptions(args) {
     check(options.allowSandbox, '--integration clones the renderer snapshot and consumes Sandbox quota: pass --allow-sandbox explicitly.');
     check(SANDBOX_FLAGS.every(flag => seen.has(flag)), '--integration requires --snapshot-id, --expected-team-id, and --expected-project-id.');
     check([options.snapshotId, options.expectedTeamId, options.expectedProjectId].every(value => ID.test(value)), 'Snapshot, team, and project IDs must match [a-zA-Z0-9_-]{1,100}.');
-    check(!options.fonts && !options.allowHosted && !['--base-url', '--resume', '--ffprobe'].some(flag => seen.has(flag)), '--integration calls no hosted API: drop --base-url, --resume, --ffprobe, --fonts, and --allow-hosted.');
+    check(!options.fonts && !options.allowHosted && !['--base-url', '--resume', '--ffprobe', ...WAIT_FLAGS].some(flag => seen.has(flag)), '--integration calls no hosted API: drop --base-url, --resume, --ffprobe, --fonts, --allow-hosted, and the --wait-* flags.');
     check(new Set(options.tests).size === options.tests.length, 'Each --test may only appear once.');
     for (const name of options.tests) check(INTEGRATION_TEST.test(name), `--test takes a file name from ${INTEGRATION_DIR}, such as font-readiness.test.mjs.`);
     return options;
@@ -74,6 +82,15 @@ export function parseOptions(args) {
   check(['http:', 'https:'].includes(url.protocol), '--base-url must use HTTP(S).');
   check(loopback || (url.protocol === 'https:' && options.allowHosted), 'Hosted verification requires HTTPS and explicit --allow-hosted.');
   options.origin = url.origin;
+  if (!seen.has('--wait-for')) {
+    check(!WAIT_FLAGS.some(flag => seen.has(flag)), '--wait-timeout and --wait-interval belong to --wait-for.');
+    return options;
+  }
+  check(/^[0-9a-f]{7,40}$/i.test(options.waitFor), '--wait-for takes a commit SHA: 7 to 40 hexadecimal characters.');
+  check(!options.fonts && !['--resume', '--ffprobe'].some(flag => seen.has(flag)), '--wait-for only waits for the deployment and creates nothing: drop --fonts, --resume, and --ffprobe, and run the verification as a second command after it.');
+  options.waitFor = options.waitFor.toLowerCase();
+  options.waitTimeoutMs = wholeSeconds('--wait-timeout', options.waitTimeout ?? '600', 1, 3600) * 1000;
+  options.waitIntervalMs = wholeSeconds('--wait-interval', options.waitInterval ?? '10', 1, 300) * 1000;
   return options;
 }
 
@@ -539,10 +556,45 @@ export async function verifyIntegration(options, {Sandbox, env = process.env, ro
   return report;
 }
 
+/** One read of GET /api/v1/version: the deployed commit, or what came back instead. */
+async function deployedCommit(get, origin, timeoutMs) {
+  let response;
+  try {response = await get(`${origin}/api/v1/version`, {redirect: 'manual', headers: {accept: 'application/json'}, signal: AbortSignal.timeout(timeoutMs)});}
+  catch {return {answer: 'nothing (the request failed or timed out)'};}
+  if (response.status !== 200) {
+    await response.body?.cancel().catch(() => {});
+    return {answer: `HTTP ${response.status}`};
+  }
+  let body;
+  try {body = JSON.parse((await boundedBody(response, 16_384)).toString('utf8'));}
+  catch {return {answer: 'an unreadable body'};}
+  if (typeof body?.commit !== 'string' || !/^[0-9a-f]{40}$/.test(body.commit)) return {answer: 'no commit'};
+  return {answer: `commit ${body.commit.slice(0, 12)}`, commit: body.commit, version: body.version, dirty: body.dirty};
+}
+
+/**
+ * --wait-for: asks GET /api/v1/version every `waitIntervalMs` until the deployed commit starts with
+ * `waitFor`, and fails at `waitTimeoutMs` naming the last answer. Each check waits up to 10 s of its own,
+ * so the last one, at the deadline, still gets an answer. A deployment older than the route answers 404,
+ * which counts as not yet. Creates nothing. `fetch`, `now` and `sleep` are for tests.
+ */
+export async function waitForDeployment({origin, waitFor, waitTimeoutMs, waitIntervalMs}, {fetch: get = globalThis.fetch, now = Date.now, sleep = pause} = {}) {
+  const started = now();
+  const deadline = started + waitTimeoutMs;
+  for (let checks = 1; ; checks++) {
+    const last = await deployedCommit(get, origin, WAIT_REQUEST_MS);
+    if (last.commit?.startsWith(waitFor)) return {status: 'deployed', commit: last.commit, version: last.version, dirty: last.dirty, checks, waitedSeconds: Math.round((now() - started) / 1000)};
+    const remaining = deadline - now();
+    if (remaining <= 0) throw new Error(`The deployment of ${waitFor} did not appear within ${waitTimeoutMs / 1000} s: ${checks} checks of /api/v1/version, the last answered ${last.answer}.`);
+    await sleep(Math.min(waitIntervalMs, remaining));
+  }
+}
+
 async function main() {
   const options = parseOptions(process.argv.slice(2));
   if (options.help) {
     console.log(`Usage: node scripts/verify-hosted.mjs --base-url <origin> [--allow-hosted] [--fonts] [--resume <private-file>] [--ffprobe <executable>]
+       node scripts/verify-hosted.mjs --base-url <origin> [--allow-hosted] --wait-for <commit-sha> [--wait-timeout <seconds>] [--wait-interval <seconds>]
        node scripts/verify-hosted.mjs --integration --allow-sandbox --snapshot-id <snapshot> --expected-team-id <team> --expected-project-id <project> [--test <file>]...
 
 Creates one synthetic project and at most three jobs: smoke, 320×240 PNG, and one-second MP4.
@@ -558,6 +610,11 @@ Existing artifacts are never overwritten; resumed evidence goes into a new direc
 No remote data is deleted. Do not publish access.private.json. Project tokens and signed URLs are never logged.
 This verifies the API and media pipeline, not interactive editor behavior or real StreamElements/OBS.
 
+With --wait-for, nothing is created: GET /api/v1/version is asked every --wait-interval seconds
+(default 10) until the deployed commit starts with <commit-sha>, and the deployed build is printed.
+After --wait-timeout seconds (default 600) it fails with the last answer. A deployment older than the
+version route answers 404, which counts as not yet. Chain the verification after it with &&.
+
 With --integration, no hosted API is called: a Vercel Sandbox cloned from the renderer snapshot
 (deny-all) receives this checkout's built dist/ and runs tests/integration on the snapshot's
 HeadlessChrome and FFmpeg, to reproduce a failure of that Chromium without downloading a browser.
@@ -565,6 +622,10 @@ Every integration test runs unless --test names files. Build dist/ first (npm ru
 Needs VERCEL_OIDC_TOKEN for the expected team and project, and consumes Sandbox quota. A failed,
 cancelled, or skipped test, or an empty run, fails the check. The output and report.json are
 saved under ignored .studio-data/sandbox-integration-*/.`);
+    return;
+  }
+  if (options.waitFor) {
+    console.log(JSON.stringify(await waitForDeployment(options)));
     return;
   }
   const report = options.integration ? await verifyIntegration(options) : await verify(options);
