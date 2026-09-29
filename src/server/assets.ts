@@ -10,6 +10,8 @@ export interface AssetEntry {
   key: string;
   filePath: string;
   contentType: string;
+  /** Found through a reference in the widget's own source (HTML, CSS, JavaScript, or FIELDS), not only a `widget.assets` match. */
+  referenced?: boolean;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -116,6 +118,7 @@ export async function buildAssetMap(project: ResolvedProject): Promise<Map<strin
       const normalized = posix.normalize(posix.join(sourceDirectory, reference.replaceAll("\\", "/")));
       if (normalized === ".." || normalized.startsWith("../") || posix.isAbsolute(normalized)) continue;
       const candidate = await addFile(assets, project, resolve(project.widgetRoot, normalized));
+      if (candidate) candidate.referenced = true;
       if (candidate && !scanned.has(candidate.filePath)) scanQueue.push(candidate);
     }
   }

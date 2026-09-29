@@ -159,6 +159,11 @@ export async function configCatalog(configPath, {recipes, engineDist = ENGINE_DI
   catch (error) {fail(`${error instanceof Error ? error.message : String(error)}${error?.hint ? ` ${error.hint}` : ''}`);}
   const over = ['themes', 'fixtures', 'scenes', 'scenarios', 'recipes'].filter(kind => result.catalog[kind].length > CATALOG_LIMIT);
   check(over.length === 0, `A hosted revision holds at most ${CATALOG_LIMIT} of each catalog kind, and this config has ${over.map(kind => `${result.catalog[kind].length} ${kind}`).join(', ')}. Pass --recipes <id,...> to keep only those recipes and the scenes, themes, and fixtures they use.`);
+  // An engine build older than sample-copy detection returns no samples and uploads every widget file, as before.
+  for (const sample of result.samples ?? []) {
+    const how = sample.identical ? 'a copy of' : 'the original of the recompressed';
+    process.stderr.write(`[se-widget-studio] Sample copy: ${sample.path} is ${how} ${sample.reference}, so the catalog names that sample and the file is not uploaded.\n`);
+  }
   return result;
 }
 
@@ -498,7 +503,9 @@ Open-editor also accepts the access.private.json that scripts/verify-hosted.mjs 
 Import reads but never modifies production widget files. Pull/push use complete snapshots and optimistic concurrency.
 --config reads a local Studio config with the engine of the Studio checkout this client belongs to, as the local CLI does:
 catalog globs become arrays, the files the local Studio serves become private uploads, and /__sws/widget/<path> values
-become <path>. --recipes keeps only those recipes and the scenes, themes, and fixtures they use, and leaves scenarios out.
+become <path>. A test image that copies a built-in sample becomes its sws-sample: reference instead of an upload, unless
+the widget source references it. --recipes keeps only those recipes and the scenes, themes, and fixtures they use, and
+leaves scenarios out.
 Catalog writes that flattened catalog, the JSON that import --catalog takes, without contacting any Studio.
 Import and push check sws-sample: references against the selected deployment before any change; a blocked import prints its diagnostics.
 Run refuses an existing output directory, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.`);
