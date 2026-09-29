@@ -577,6 +577,8 @@ async function renderVideoFrames(options: {
     })),
     ...(tutorial?.widget ?? [])
   ].sort((left, right) => left.atMs - right.atMs);
+  // Where the recording is, for the message of a FONT_SETTLE_TIMEOUT.
+  let step = tutorial ? "the first settle, before the tutorial setup" : "the first settle";
   try {
     noteFonts(await captureHostSettle(opened.page), true);
     if (tutorial) {
@@ -597,6 +599,7 @@ async function renderVideoFrames(options: {
       const timestampMs = Math.round((index * 1000) / options.video.fps);
       while (events[eventIndex] && events[eventIndex]!.atMs <= timestampMs) {
         const timelineEvent = events[eventIndex]!;
+        step = timelineEvent.kind === "fields" ? `the field change at ${timelineEvent.atMs} ms` : `the ${timelineEvent.listener} event at ${timelineEvent.atMs} ms`;
         const delta = timelineEvent.atMs - currentTime;
         if (delta > 0) await opened.page.clock.fastForward(delta);
         await sampleFrameAnimations(opened.page, timelineEvent.atMs);
@@ -618,6 +621,7 @@ async function renderVideoFrames(options: {
         currentTime = settledAtMs + 1;
         eventIndex += 1;
       }
+      step = `frame ${index} (${timestampMs} ms)`;
       if (timestampMs > currentTime) {
         await opened.page.clock.fastForward(timestampMs - currentTime);
         currentTime = timestampMs;
@@ -653,6 +657,11 @@ async function renderVideoFrames(options: {
         [...opened.issues.errors, ...runtimeErrors.map((event) => JSON.stringify(event.payload))].join("; ")
       );
     }
+  } catch (error) {
+    if (error instanceof StudioError && error.code === "FONT_SETTLE_TIMEOUT") {
+      throw new StudioError(error.code, `${error.message} It happened at ${step}.`, error.hint, {cause: error});
+    }
+    throw error;
   } finally {
     await opened.context.close();
   }

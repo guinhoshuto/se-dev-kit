@@ -374,6 +374,12 @@ export interface FontReport {
   referencedStylesheets: string[];
   /** False when the preview's font budget expired before every face settled. */
   complete: boolean;
+  /**
+   * `document.fonts.ready` did not resolve by itself although no face was loading: it did after a
+   * forced layout (`forced`), or settle() went on without it (`abandoned`). A frame the browser does
+   * not render never runs the layout Chrome waits for.
+   */
+  readyStall?: "forced" | "abandoned";
 }
 
 export interface Diagnostic {

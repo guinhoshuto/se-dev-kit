@@ -262,6 +262,8 @@ interface StylesheetLoad {
   settle: (outcome: "load" | "error" | "superseded") => void;
   /** A Google Fonts stylesheet the preview broker holds back until the editor answers. */
   broker?: BrokeredLink;
+  /** The wait has not ended yet; ended waits stay in the map, so a timeout names only these. */
+  pending: boolean;
 }
 
 /**
@@ -295,27 +297,44 @@ function reportedHref(link: HTMLLinkElement, href: string): string {
 
 const stylesheetLoads = new Map<HTMLLinkElement, StylesheetLoad>();
 
+function addStylesheetLoad(link: HTMLLinkElement, load: Omit<StylesheetLoad, "pending">): void {
+  const entry: StylesheetLoad = {...load, pending: true};
+  const ended = () => {
+    entry.pending = false;
+  };
+  entry.promise.then(ended, ended);
+  stylesheetLoads.set(link, entry);
+}
+
 /** A snapshot of what settle() waits on, for timeout messages. */
 export interface FontWaitState {
   phase: string;
   pendingStylesheets: string[];
   fontsStatus: string;
   loadingFaces: string[];
+  /** The faces of `document.fonts` by status. */
+  faces: Record<FontFaceLoadStatus, number>;
 }
 let settlePhase = "idle";
 
 export function fontWaitState(): FontWaitState {
   const loadingFaces: string[] = [];
+  const faces: Record<FontFaceLoadStatus, number> = {unloaded: 0, loading: 0, loaded: 0, error: 0};
   if (document.fonts) {
     for (const face of document.fonts) {
+      faces[face.status] += 1;
       if (face.status === "loading" && loadingFaces.length < 20) loadingFaces.push(`${unquoteFamily(face.family)} ${face.weight} ${face.style}`);
     }
   }
   return {
     phase: settlePhase,
-    pendingStylesheets: Array.from(stylesheetLoads.values(), (load) => load.href).slice(0, 20),
+    pendingStylesheets: Array.from(stylesheetLoads.values())
+      .filter((load) => load.pending)
+      .map((load) => load.href)
+      .slice(0, 20),
     fontsStatus: document.fonts?.status ?? "unsupported",
-    loadingFaces
+    loadingFaces,
+    faces
   };
 }
 
@@ -511,7 +530,7 @@ function trackStylesheet(link: HTMLLinkElement, reassigned = false): void {
     }
   });
   promise.catch(() => undefined);
-  stylesheetLoads.set(link, {href, promise, settle});
+  addStylesheetLoad(link, {href, promise, settle});
 }
 
 function isStylesheetRel(link: HTMLLinkElement): boolean {
@@ -528,7 +547,7 @@ function holdForBroker(link: HTMLLinkElement, entry: BrokeredLink): void {
   const promise = new Promise<void>((resolve) => {
     settle = () => resolve();
   });
-  stylesheetLoads.set(link, {href: entry.original, promise, settle, broker: entry});
+  addStylesheetLoad(link, {href: entry.original, promise, settle, broker: entry});
 }
 
 function releaseBrokerHold(link: HTMLLinkElement, entry: BrokeredLink): void {
@@ -591,6 +610,61 @@ export async function waitForStylesheets(): Promise<void> {
 function forceLayout(): void {
   // Web fonts from a just-loaded sheet only start loading once layout uses them.
   void document.body?.offsetHeight;
+}
+
+type PostTask = (callback: () => void, options: {delay: number}) => Promise<void>;
+// The capture clock fakes timers, requestAnimationFrame, performance and Event.timeStamp, but not
+// scheduler.postTask: its delay is the frame's only real-time wait.
+const nativePostTask = ((): PostTask | undefined => {
+  const scheduler = (globalThis as {scheduler?: {postTask?: PostTask}}).scheduler;
+  return scheduler?.postTask ? scheduler.postTask.bind(scheduler) : undefined;
+})();
+
+/** Waits `ms` of real time, or one task where the browser has no scheduler.postTask. */
+function realTimeDelay(ms: number): Promise<void> {
+  if (!nativePostTask) return nextTask();
+  return nativePostTask(() => undefined, {delay: ms}).catch(() => undefined);
+}
+
+/** Real time the browser gets to resolve document.fonts.ready by itself once no face is loading. */
+const READY_GRACE_MS = 250;
+/** Layouts settle() forces before it stops waiting for a document.fonts.ready that nothing is left to resolve. */
+const READY_FORCED_LAYOUTS = 2;
+/** How the current settle got past document.fonts.ready when the browser did not resolve it by itself. */
+let readyStall: FontReport["readyStall"];
+
+/**
+ * `document.fonts.ready`, also in a frame the browser does not render. Chrome resolves it only after a
+ * layout that follows the last font load, which such a frame never runs by itself; its status stays
+ * "loading" with no face loading. Once no face is loading and the grace has passed, force the
+ * layout; after a few, stop waiting, since nothing is left to load.
+ */
+async function fontsReady(): Promise<void> {
+  const fonts = document.fonts;
+  if (!fonts) return;
+  let resolved = false;
+  const ready = fonts.ready.then(() => {
+    resolved = true;
+  });
+  let forced = 0;
+  for (;;) {
+    await Promise.race([ready, nextTask()]);
+    if (resolved) break;
+    const loading = Array.from(fonts).filter((face) => face.status === "loading");
+    if (loading.length > 0) {
+      await Promise.race([ready, Promise.allSettled(loading.map((face) => face.loaded))]);
+      continue;
+    }
+    await Promise.race([ready, realTimeDelay(READY_GRACE_MS)]);
+    if (resolved) break;
+    if (forced === READY_FORCED_LAYOUTS) {
+      readyStall = "abandoned";
+      return;
+    }
+    forceLayout();
+    forced += 1;
+  }
+  if (forced > 0 && readyStall !== "abandoned") readyStall = "forced";
 }
 
 const MAX_SAMPLE_CHARACTERS = 200;
@@ -936,7 +1010,15 @@ function fontReport(wanted: Map<string, WantedFace>, complete: boolean): FontRep
   const failedStylesheets = Array.from(googleStylesheets, ([href, state]) => ({href, state}))
     .filter(({state}) => state.state === "failed")
     .map(({href, state}) => ({href, reason: state.reason ?? "stylesheet-blocked"}));
-  return {families, redrawNeeded, failedStylesheets, issues: [...fontIssues], referencedStylesheets: referencedGoogleStylesheets(), complete};
+  return {
+    families,
+    redrawNeeded,
+    failedStylesheets,
+    issues: [...fontIssues],
+    referencedStylesheets: referencedGoogleStylesheets(),
+    complete,
+    ...(readyStall ? {readyStall} : {})
+  };
 }
 
 export interface SettleOptions {
@@ -950,13 +1032,14 @@ export interface SettleOptions {
 
 async function settleUntilQuiet(options: SettleOptions): Promise<FontReport> {
   let wanted = new Map<string, WantedFace>();
+  readyStall = undefined;
   for (let round = 0; round < 8; round += 1) {
     const awaited = new Set(Array.from(stylesheetLoads.values(), (load) => load.promise));
     settlePhase = `round ${round + 1}: stylesheets`;
     await waitForStylesheets();
     forceLayout();
     settlePhase = `round ${round + 1}: document.fonts.ready`;
-    if (document.fonts) await document.fonts.ready;
+    await fontsReady();
     if (options.light) {
       settlePhase = "idle";
       return fontReport(wanted, true);
@@ -974,9 +1057,10 @@ async function settleUntilQuiet(options: SettleOptions): Promise<FontReport> {
     await nextTask();
     forceLayout();
     settlePhase = `round ${round + 1}: document.fonts.ready after loads`;
-    if (document.fonts) await document.fonts.ready;
+    await fontsReady();
     const newStylesheet = Array.from(stylesheetLoads.values()).some((load) => !awaited.has(load.promise));
-    const fontsLoading = document.fonts ? document.fonts.status !== "loaded" : false;
+    // A face still loading, not document.fonts.status: that stays "loading" while ready waits for a layout.
+    const fontsLoading = document.fonts ? Array.from(document.fonts).some((face) => face.status === "loading") : false;
     if (!newStylesheet && !fontsLoading && !topUp && round > 0 && wanted.size <= previous) break;
     if (!newStylesheet && !fontsLoading && !topUp && wanted.size === 0) break;
   }

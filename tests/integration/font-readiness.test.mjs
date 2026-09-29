@@ -13,7 +13,7 @@ import test from "node:test";
 import {detectBrowser, launchStudioBrowser} from "../../dist/capture/browser.js";
 import {renderRecipe} from "../../dist/capture/renderer.js";
 import {loadProject} from "../../dist/config/load.js";
-import {captureHostDispatch, captureHostSettle, captureHostUpdateFields, openScene} from "../../dist/scenarios/runner.js";
+import {captureHostDispatch, captureHostSettle, captureHostUpdateFields, checkOpenedFonts, openScene} from "../../dist/scenarios/runner.js";
 import {startStudioServer} from "../../dist/server/server.js";
 
 const fixtures = fileURLToPath(new URL("../fixtures/fonts/", import.meta.url));
@@ -294,33 +294,59 @@ test("a stylesheet a timer swaps mid-video is settled before the next frame is t
   assert.equal(served.frameSequence.frames[1].sha256, expected.frameSequence.frames[1].sha256);
 });
 
-// se-windows: the widget applies its default font at startup, then onWidgetLoad points the same link
-// at the theme's font while the default is still loading. Chrome aborts the default's request
-// (net::ERR_ABORTED); the document no longer uses it, so it is not an unavailable font.
-test("a Google Fonts stylesheet the widget swaps away while it loads is not FONT_UNAVAILABLE (route.fulfill)", {timeout: 180_000}, async (t) => {
+// se-windows: the widget points its font link at another family while the first one loads. Chrome
+// aborts the first request (net::ERR_ABORTED); the document no longer uses it, so it is not an
+// unavailable font. The swap waits until the first request is in flight: a swap in the same burst as
+// the insertion reaches Chromium 139 before it issues the request, and nothing is aborted.
+test("a Google Fonts stylesheet the widget swaps away while it loads is not FONT_UNAVAILABLE (route.fulfill)", {timeout: 120_000}, async (t) => {
   const context = await browserContext(t);
   if (!context) return;
-  const css = "h1{margin:0;padding:24px 12px;font:400 40px/1 monospace;color:#fff}";
-  const google = await fontWidget(t, {
+  const widget = await fontWidget(t, {
     html: '<h1 id="t">Studio</h1>',
-    css,
-    js: `const link = document.createElement("link");
-link.rel = "stylesheet";
-link.href = "${GOOGLE_UNBOUNDED}";
-document.head.append(link);
-document.getElementById("t").style.fontFamily = "'Unbounded', monospace";
-window.addEventListener("onWidgetLoad", () => {
-  link.href = "https://fonts.googleapis.com/css2?family=Studio+Display";
+    css: "h1{margin:0;padding:24px 12px;font:400 40px/1 monospace;color:#fff}",
+    js: `window.addEventListener("onEventReceived", () => {
+  const link = document.createElement("link");
+  link.id = "gf";
+  link.rel = "stylesheet";
+  link.href = ${JSON.stringify(GOOGLE_UNBOUNDED)};
+  document.head.append(link);
+  document.getElementById("t").style.fontFamily = "'Unbounded', monospace";
+});
+window.swapFont = () => {
+  document.getElementById("gf").href = "https://fonts.googleapis.com/css2?family=Studio+Display";
   document.getElementById("t").style.fontFamily = "'Studio Display', monospace";
-});`
+};`
   });
-  const reference = await fontWidget(t, {html: '<h1 id="t" style="font-family:\'Studio Display\'">Studio</h1>', css: `${LOCAL_FACES_CSS}${css}`});
-  const route = fixtureFontRoute({slow: "Unbounded"});
-  const served = await render(context, google, STILL, route.route);
-  const expected = await render(context, reference, STILL);
-  assert.ok(route.requests.includes(GOOGLE_UNBOUNDED), "the default font was requested before the swap");
-  assert.equal(served.hashes.screenshot, expected.hashes.screenshot);
-  assert.equal(served.fonts.families.find((entry) => entry.family === "Studio Display")?.status, "loaded");
+  const fixture = fixtureFontRoute();
+  const requests = [];
+  const route = async (url) => {
+    requests.push(url);
+    if (url === GOOGLE_UNBOUNDED) await new Promise((resolve) => setTimeout(resolve, 1_500));
+    return fixture.route(url);
+  };
+  const {browser} = await launchStudioBrowser({browserPath: context.browserPath});
+  const server = await startStudioServer(widget.project, {port: 0, watch: false});
+  try {
+    const opened = await openScene(widget.project, server, browser, widget.project.scenes[0].value, {fontRoute: route});
+    try {
+      const dispatched = captureHostDispatch(opened.page, "message", {data: {text: "hi"}});
+      const started = Date.now();
+      while (!requests.includes(GOOGLE_UNBOUNDED)) {
+        assert.ok(Date.now() - started < 10_000, "the default font was requested");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await opened.frame().evaluate(() => window.swapFont());
+      const report = await dispatched;
+      assert.equal(report.families.find((entry) => entry.family === "Studio Display")?.status, "loaded");
+      assert.ok(opened.issues.fonts.some((issue) => issue.url === GOOGLE_UNBOUNDED && issue.aborted), JSON.stringify(opened.issues.fonts));
+      assert.deepEqual(checkOpenedFonts(opened, report).warnings, []);
+    } finally {
+      await opened.context.close();
+    }
+  } finally {
+    await browser.close();
+    await server.close();
+  }
 });
 
 test("a settle past its real-time deadline fails with FONT_SETTLE_TIMEOUT instead of hanging", {timeout: 120_000}, async (t) => {
@@ -348,6 +374,69 @@ test("a settle past its real-time deadline fails with FONT_SETTLE_TIMEOUT instea
     await browser.close();
     await server.close();
   }
+});
+
+// Chrome resolves document.fonts.ready only after a layout that follows the last font load, and a
+// frame the browser does not render never runs one (se-windows' tutorial, hosted, 2026-09-29).
+// These widgets make ready wait for a forced layout, or never resolve, while no font is loading.
+const READY_AFTER_FORCED_LAYOUT_JS = `
+let pending;
+Object.defineProperty(document.fonts, "ready", {configurable: true, get() {
+  if (!pending) {
+    let resolve;
+    pending = {promise: new Promise((done) => { resolve = done; }), resolve};
+  }
+  return pending.promise;
+}});
+const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight").get;
+Object.defineProperty(document.body, "offsetHeight", {configurable: true, get() {
+  if (pending) {
+    pending.resolve(document.fonts);
+    pending = undefined;
+  }
+  return offsetHeight.call(this);
+}});
+`;
+const READY_NEVER_JS = 'Object.defineProperty(document.fonts, "ready", {configurable: true, get: () => new Promise(() => {})});';
+
+test("a document.fonts.ready that waits for a layout the browser does not run: settle forces it, or goes on, and says so", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const reference = await fontWidget(t, {html: "<h1>Studio</h1>", css: TITLE_CSS});
+  const expected = await render(context, reference, STILL);
+  for (const [js, warning] of [[READY_AFTER_FORCED_LAYOUT_JS, /^fonts-ready-forced: /], [READY_NEVER_JS, /^fonts-ready-stalled: /]]) {
+    const widget = await fontWidget(t, {html: "<h1>Studio</h1>", css: TITLE_CSS, js});
+    const served = await render(context, widget, STILL);
+    assert.equal(served.hashes.screenshot, expected.hashes.screenshot);
+    assert.ok(served.fonts?.warnings.some((entry) => warning.test(entry)), JSON.stringify(served.fonts));
+  }
+});
+
+test("FONT_SETTLE_TIMEOUT in a video names where it happened, the request without a response, the faces, and only stylesheets still waited for", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  // The Unbounded link loads before the event; a link a script inserted stays tracked after its load.
+  const widget = await fontWidget(t, {
+    html: "<h1 style=\"font-family:'Unbounded'\">Studio</h1>",
+    css: TITLE_CSS,
+    js: `const unbounded = document.createElement("link");
+unbounded.rel = "stylesheet";
+unbounded.href = ${JSON.stringify(GOOGLE_UNBOUNDED)};
+document.head.append(unbounded);
+window.addEventListener("onEventReceived", () => { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "https://fonts.googleapis.com/css2?family=Hanging"; document.head.append(link); });`,
+    scene: {fixture: "hang"}
+  });
+  widget.project.fixtures.push({id: "hang", filePath: "", value: {schemaVersion: 1, id: "hang", name: "Hang", events: [{atMs: 100, listener: "message", event: {data: {text: "hi"}}}]}});
+  await assert.rejects(render(context, widget, VIDEO, fixtureFontRoute({hang: "Hanging"}).route), (error) => {
+    assert.equal(error.code, "FONT_SETTLE_TIMEOUT");
+    assert.match(error.message, /It happened at the message event at 100 ms\.$/);
+    assert.match(error.message, /Google Fonts requests without a response: https:\/\/fonts\.googleapis\.com\/css2\?family=Hanging\./);
+    assert.match(error.message, /Faces: \d+ loaded, \d+ loading, \d+ unloaded, \d+ failed\./);
+    const waited = /Stylesheets without load or error: (.*?)\. document\.fonts\.status/.exec(error.message)?.[1] ?? "";
+    assert.match(waited, /family=Hanging/);
+    assert.doesNotMatch(waited, /family=Unbounded/);
+    return true;
+  });
 });
 
 test("Google Fonts outcomes: blocked is FONT_UNAVAILABLE, a refused family is a warning, /icon is FONT_UNSUPPORTED", {timeout: 180_000}, async (t) => {

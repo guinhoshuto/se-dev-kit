@@ -302,6 +302,12 @@ export interface BrowserIssueLog {
 }
 
 const CSP_REFUSAL = /^Refused to load the (?:stylesheet|font) '([^']+)'/;
+const issueLogs = new WeakMap<Page, BrowserIssueLog>();
+
+/** The issue log observePage() keeps for `page`, for a timeout message that names what was pending. */
+export function pageIssues(page: Page): BrowserIssueLog | undefined {
+  return issueLogs.get(page);
+}
 
 export function observePage(page: Page): BrowserIssueLog {
   // Each field reload starts a generation; an abort of a request from an earlier one is the reload's.
@@ -310,6 +316,7 @@ export function observePage(page: Page): BrowserIssueLog {
   const log: BrowserIssueLog = {errors: [], warnings: [], fonts: [], pendingFonts: new Set(), replacingFrame: () => {
     generation += 1;
   }};
+  issueLogs.set(page, log);
   page.on("request", (request) => {
     issuedIn.set(request, generation);
     if (isGoogleFontsRequestUrl(request.url())) log.pendingFonts.add(request.url());

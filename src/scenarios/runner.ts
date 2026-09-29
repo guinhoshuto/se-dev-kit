@@ -13,7 +13,7 @@ import type {
 import {StudioError} from "../shared/errors.js";
 import {assetUrlPath} from "../server/assets.js";
 import {startStudioServer, type StudioServer} from "../server/server.js";
-import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser, observePage, type BrowserIssueLog, type FontRoute} from "../capture/browser.js";
+import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser, observePage, pageIssues, type BrowserIssueLog, type FontRoute} from "../capture/browser.js";
 import {checkFonts} from "../capture/fonts.js";
 import {FontsMissingError, isFontsMissing, type FontResolver} from "../fonts/resolver.js";
 import {createDefaultScene, resolveSceneState, type ResolvedSceneState} from "./state.js";
@@ -110,6 +110,7 @@ interface FrameFontState {
   pendingStylesheets: string[];
   fontsStatus: string;
   loadingFaces: string[];
+  faces?: Record<"unloaded" | "loading" | "loaded" | "error", number>;
 }
 
 /**
@@ -132,10 +133,14 @@ export async function describePendingFonts(page: Page, issues?: Pick<BrowserIssu
     parts.push(`Settle phase: ${state.phase}.`);
     if (state.pendingStylesheets.length) parts.push(`Stylesheets without load or error: ${state.pendingStylesheets.join(", ")}.`);
     parts.push(`document.fonts.status: ${state.fontsStatus}.`);
+    if (state.faces) {
+      parts.push(`Faces: ${state.faces.loaded} loaded, ${state.faces.loading} loading, ${state.faces.unloaded} unloaded, ${state.faces.error} failed.`);
+    }
     if (state.loadingFaces.length) parts.push(`Faces still loading: ${state.loadingFaces.join("; ")}.`);
   } else {
     parts.push("The frame did not report its font state.");
   }
+  issues ??= pageIssues(page);
   if (issues?.pendingFonts.size) parts.push(`Google Fonts requests without a response: ${Array.from(issues.pendingFonts).slice(0, 10).join(", ")}.`);
   return parts.join(" ");
 }
@@ -306,8 +311,16 @@ export async function settleAndCheckFonts(
  */
 export function checkOpenedFonts(opened: Pick<OpenSceneResult, "issues" | "fonts">, report: FontReport | undefined): {warnings: string[]} {
   const fonts = opened.fonts;
-  return checkFonts(opened.issues.fonts, report, fonts ? {ignore: (url) => fonts.isMissing(url)} : {});
+  const {warnings} = checkFonts(opened.issues.fonts, report, fonts ? {ignore: (url) => fonts.isMissing(url)} : {});
+  return {warnings: report?.readyStall ? [...warnings, READY_STALL_WARNINGS[report.readyStall]] : warnings};
 }
+
+const READY_STALL_WARNINGS = {
+  forced:
+    "fonts-ready-forced: document.fonts.ready in the widget frame waited for a layout the browser did not run, until the Studio forced one; the browser was not rendering the frame.",
+  abandoned:
+    "fonts-ready-stalled: document.fonts.ready in the widget frame did not resolve although no font was loading, even after forced layouts; the capture went on without it."
+} as const;
 
 export async function frameEvents(page: Page): Promise<{type: string; payload?: unknown}[]> {
   return page.evaluate(() => {

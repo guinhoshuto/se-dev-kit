@@ -70,3 +70,18 @@ test("/icon, text= and URLs outside the allowlist fail with FONT_UNSUPPORTED", (
     assert.throws(() => checkFonts([{url, detail: "net::ERR_BLOCKED_BY_CLIENT"}]), {code: "FONT_UNSUPPORTED"}, url);
   }
 });
+
+test("a document.fonts.ready that the frame had to force, or went on without, is a font warning of the capture", async () => {
+  const {checkOpenedFonts} = await import("../../dist/scenarios/runner.js");
+  const opened = {issues: {fonts: []}};
+  const report = (readyStall) => ({families: [], redrawNeeded: false, failedStylesheets: [], issues: [], referencedStylesheets: [], complete: true, ...(readyStall ? {readyStall} : {})});
+  assert.deepEqual(checkOpenedFonts(opened, report()).warnings, []);
+  const [forced] = checkOpenedFonts(opened, report("forced")).warnings;
+  assert.match(forced, /^fonts-ready-forced: document\.fonts\.ready in the widget frame waited for a layout the browser did not run/);
+  const [abandoned] = checkOpenedFonts(opened, report("abandoned")).warnings;
+  assert.match(abandoned, /^fonts-ready-stalled: document\.fonts\.ready in the widget frame did not resolve although no font was loading/);
+  // Google Fonts warnings stay, and come first.
+  const both = checkOpenedFonts({issues: {fonts: [{url: "https://fonts.googleapis.com/css2?family=Nope", status: 400, detail: "HTTP 400"}]}}, report("forced")).warnings;
+  assert.equal(both.length, 2);
+  assert.match(both[0], /^upstream-4xx: /);
+});
