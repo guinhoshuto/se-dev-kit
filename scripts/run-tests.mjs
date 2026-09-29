@@ -1,8 +1,10 @@
 // Runs the test suites the way this machine needs them:
 // - every suite also writes its output to .cache/test-logs/<run>/<suite>.log, so a failure keeps its name;
 // - the suites that start Chrome (integration, web:browser) run one file at a time behind the machine
-//   gate, and are skipped with the reason when the disk is low or another session renders;
-// - each suite gets a temporary folder of its own (TMPDIR), which must be empty when the suite ends.
+//   gate, holding the machine-wide render slot (~/.cache/render-slot, shared with background-creator),
+//   and are skipped with the reason when the disk is low, another session renders, or the slot is held;
+// - each suite gets a temporary folder of its own (TMPDIR), which must be empty when the suite ends,
+//   and a render slot inside it, so a CLI render a test starts never waits for the machine's slot.
 //
 //   node scripts/run-tests.mjs <suite>...        suites: unit, integration, web, web:browser
 //   node scripts/run-tests.mjs --repeat <file> <count>
@@ -61,16 +63,48 @@ export function suiteForFile(file) {
 /** Entries a suite left in its temporary folder; tsx keeps its compile cache there and is exempt. */
 export const leftovers = entries => entries.filter(entry => !/^tsx-\d+$/.test(entry)).sort();
 
-async function gate() {
-  if (process.env.SE_WIDGET_STUDIO_TEST_GATE === 'off') return {ok: true};
+/** The machine-wide render slot for one browser suite, taken without waiting: a held slot skips the suite. */
+export async function takeBrowserSlot(options = {}) {
+  const {acquireRenderSlot} = await import('../dist/shared/render-slot.js');
+  try {
+    const slot = await acquireRenderSlot({command: `node scripts/run-tests.mjs ${process.argv.slice(2).join(' ')}`.trim(), wait: false, ...options});
+    return {ok: true, release: slot.release};
+  } catch (error) {
+    return {ok: false, reason: error instanceof Error ? error.message : String(error)};
+  }
+}
+
+/**
+ * Whether a browser suite may run now: it takes the render slot, then asks the machine gate, and
+ * gives the slot back when the gate refuses. `take` and `check` are replaceable for tests.
+ */
+export async function gate({
+  take = takeBrowserSlot,
+  check = () => browserGate({root: ROOT, paths: [ROOT, tmpdir()], ownRoots: [process.pid]}),
+  pauseMs = 1000
+} = {}) {
+  if (process.env.SE_WIDGET_STUDIO_TEST_GATE === 'off') return {ok: true, release: () => {}};
+  const slot = await take();
+  if (!slot.ok) return slot;
   let result;
   // A Chrome the previous suite's exit just killed can still be listed for a moment.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (attempt) await sleep(1000);
-    result = await browserGate({root: ROOT, paths: [ROOT, tmpdir()], ownRoots: [process.pid]});
-    if (result.ok) break;
+    if (attempt) await sleep(pauseMs);
+    result = await check();
+    if (result.ok) return {...result, release: slot.release};
   }
+  slot.release();
   return result;
+}
+
+/**
+ * A suite's environment: its own TMPDIR, and a render slot inside it, so a CLI render a test starts
+ * neither waits for nor holds the machine-wide slot (the runner holds that one for browser suites).
+ */
+export function suiteEnvironment(environment, temporary) {
+  // NODE_TEST_CONTEXT would make a runner started from inside a test file act as that file's child.
+  const {NODE_TEST_CONTEXT: _context, ...rest} = environment;
+  return {...rest, TMPDIR: temporary, RENDER_SLOT_DIR: join(temporary, 'render-slot')};
 }
 
 export async function execute(label, suite, files, logPath, {echo = true} = {}) {
@@ -80,9 +114,7 @@ export async function execute(label, suite, files, logPath, {echo = true} = {}) 
   const log = createWriteStream(logPath, {flags: 'a'});
   const started = Date.now();
   log.write(`$ node ${args.join(' ')}\n# ${label}: node ${process.version}, TMPDIR=${temporary}, ${new Date(started).toISOString()}\n`);
-  // NODE_TEST_CONTEXT would make a runner started from inside a test file act as that file's child.
-  const {NODE_TEST_CONTEXT: _context, ...environment} = process.env;
-  const child = spawn(process.execPath, args, {cwd: ROOT, env: {...environment, TMPDIR: temporary}, stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn(process.execPath, args, {cwd: ROOT, env: suiteEnvironment(process.env, temporary), stdio: ['ignore', 'pipe', 'pipe']});
   child.stdout.on('data', chunk => { if (echo) process.stdout.write(chunk); log.write(chunk); });
   child.stderr.on('data', chunk => { if (echo) process.stderr.write(chunk); log.write(chunk); });
   let code = await new Promise(done => child.once('close', (exit, signal) => done(exit ?? (signal ? 1 : 0))));
@@ -127,18 +159,22 @@ async function runSuites(names) {
   const results = [];
   for (const name of names) {
     const suite = SUITES[name];
-    if (suite.browser) {
-      const allowed = await gate();
-      if (!allowed.ok) {
-        console.log(`\nSkipped ${name}: ${allowed.reason}`);
-        results.push({name, status: 'skipped', detail: allowed.reason});
-        continue;
-      }
-    }
     const files = await suiteFiles(suite);
     if (!files.length) { results.push({name, status: 'passed', detail: 'no files'}); continue; }
-    console.log(`\n== ${name}: ${files.length} file(s)${suite.browser ? ', one at a time' : ''}`);
-    const {code, seconds} = await execute(name, suite, files, join(directory, `${name.replace(':', '-')}.log`));
+    const allowed = suite.browser ? await gate() : {ok: true, release: () => {}};
+    if (!allowed.ok) {
+      console.log(`\nSkipped ${name}: ${allowed.reason}`);
+      results.push({name, status: 'skipped', detail: allowed.reason});
+      continue;
+    }
+    let outcome;
+    try {
+      console.log(`\n== ${name}: ${files.length} file(s)${suite.browser ? ', one at a time' : ''}`);
+      outcome = await execute(name, suite, files, join(directory, `${name.replace(':', '-')}.log`));
+    } finally {
+      allowed.release();
+    }
+    const {code, seconds} = outcome;
     results.push({name, status: code === 0 ? 'passed' : 'failed', detail: `${seconds.toFixed(1)} s`});
     if (code !== 0) break;
   }
@@ -161,11 +197,15 @@ async function repeat(file, countText) {
   console.log(`Repeating ${path} ${count} time(s)${browser ? ', behind the machine gate' : ''}. Logs: ${relative(ROOT, directory)}/`);
   const failed = [];
   for (let run = 1; run <= count; run += 1) {
-    if (browser) {
-      const allowed = await gate();
-      if (!allowed.ok) { console.log(`Stopped before run ${run}: ${allowed.reason}`); return {failed, ran: run - 1, code: 1}; }
+    const allowed = browser ? await gate() : {ok: true, release: () => {}};
+    if (!allowed.ok) { console.log(`Stopped before run ${run}: ${allowed.reason}`); return {failed, ran: run - 1, code: 1}; }
+    let outcome;
+    try {
+      outcome = await execute(`run ${run}`, suite, [path], join(directory, `run-${run}.log`));
+    } finally {
+      allowed.release();
     }
-    const {code, seconds} = await execute(`run ${run}`, suite, [path], join(directory, `run-${run}.log`));
+    const {code, seconds} = outcome;
     console.log(`run ${run}: ${code === 0 ? 'passed' : 'FAILED'} in ${seconds.toFixed(1)} s`);
     if (code !== 0) failed.push(run);
   }

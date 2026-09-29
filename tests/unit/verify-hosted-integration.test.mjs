@@ -145,6 +145,7 @@ test("the Sandbox runs the integration suite's own arguments on the snapshot's b
   assert.equal(command.cwd, SANDBOX_ROOT);
   assert.equal(command.env.SE_WIDGET_STUDIO_BROWSER, `${SANDBOX_ROOT}/browser/chrome`);
   assert.match(command.env.TMPDIR, /^\/tmp\/./);
+  assert.equal(command.env.RENDER_SLOT_DIR, `${command.env.TMPDIR}/render-slot`, "a CLI render in the Sandbox never looks for the machine's slot");
   assert.ok(command.args[1].includes(`export PATH="${SANDBOX_ROOT}/tools:$PATH"`), command.args[1]);
   assert.deepEqual(command.args.slice(3), nodeArgs(SUITES.integration, ["tests/integration/font-readiness.test.mjs"]));
   assert.ok(command.args.includes("--test-concurrency=1"));

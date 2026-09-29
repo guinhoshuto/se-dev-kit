@@ -61,6 +61,27 @@ test("another session's work is any headless or piped Chrome, Remotion or local 
   assert.deepEqual(busy, [10, 11, 21, 31, 50]);
 });
 
+test("the caller's ancestors, and a shell or pgrep that only mentions a pattern, are not another session's render", () => {
+  const check = "pgrep -fl 'Chrome.*headless|remotion|dist/cli/index.js'";
+  const list = [
+    // An agent whose prompt names a render, the shell that chains the machine check before npm test, npm, the runner.
+    {pid: 100, ppid: 1, command: '/opt/homebrew/bin/node /opt/homebrew/bin/codex exec "run node dist/cli/index.js render . --recipe listing"'},
+    {pid: 200, ppid: 100, command: `/bin/zsh -c ${check}; npm test`},
+    {pid: 300, ppid: 200, command: "npm test"},
+    {pid: 900, ppid: 300, command: "/opt/homebrew/bin/node scripts/run-tests.mjs unit integration"},
+    // Another session runs the same check before a typecheck.
+    {pid: 700, ppid: 1, command: `-zsh -c ${check}; npm run typecheck`},
+    {pid: 710, ppid: 700, command: "pgrep -fl Chrome.*headless|remotion|dist/cli/index.js"},
+    // Another session's render, started through sh by npm.
+    {pid: 800, ppid: 1, command: "sh -c node dist/cli/index.js render . --recipe listing"},
+    {pid: 810, ppid: 800, command: "/opt/homebrew/bin/node /work/se-windows/node_modules/se-widget-studio/dist/cli/index.js render . --recipe listing"}
+  ];
+  const busy = otherSessionsWork(list, [900]).map((item) => item.pid);
+  assert.ok(!busy.includes(100), "the agent that started the runner is the caller's own");
+  assert.ok(!busy.includes(700) && !busy.includes(710), "another session's machine check renders nothing");
+  assert.deepEqual(busy, [810]);
+});
+
 test("the browser gate refuses below 3 GiB free, for orphans and for another session's render, and passes otherwise", async () => {
   const quiet = [{pid: 900, ppid: 1, command: "/opt/homebrew/bin/node scripts/run-tests.mjs"}];
   const gate = (options) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, ...options});

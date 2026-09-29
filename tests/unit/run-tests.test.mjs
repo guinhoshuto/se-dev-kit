@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {spawn} from "node:child_process";
+import {once} from "node:events";
+import {mkdir, mkdtemp, readFile, rm, stat, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
 
-import {SUITES, execute, leftovers, nodeArgs, suiteForFile} from "../../scripts/run-tests.mjs";
+import {SUITES, execute, gate, leftovers, nodeArgs, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
 
 async function logFile(t) {
   const directory = await mkdtemp(join(tmpdir(), "sws-runner-log-"));
@@ -37,6 +39,12 @@ test("a suite that leaves a folder in its temporary directory fails and names it
   assert.match(await readFile(tidy, "utf8"), /# tidy: exit 0 after/);
 });
 
+test("a suite runs with its render slot inside its own TMPDIR", {timeout: 60_000}, async (t) => {
+  const log = await logFile(t);
+  const {code} = await execute("slot-env", {flags: []}, ["tests/fixtures/runner/slot-env.test.mjs"], log, {echo: false});
+  assert.equal(code, 0, await readFile(log, "utf8"));
+});
+
 test("a test that never settles, in a file whose event loop never empties, ends at its timeout", {timeout: 60_000}, async (t) => {
   const log = await logFile(t);
   const started = Date.now();
@@ -44,4 +52,60 @@ test("a test that never settles, in a file whose event loop never empties, ends 
   assert.equal(code, 1);
   assert.ok(Date.now() - started < 30_000, `the hung file ended after ${Date.now() - started} ms`);
   assert.match(await readFile(log, "utf8"), /never settles/);
+});
+
+async function slotFolder(t) {
+  const folder = await mkdtemp(join(tmpdir(), "sws-runner-slot-"));
+  t.after(() => rm(folder, {recursive: true, force: true}));
+  return join(folder, "render-slot");
+}
+
+const exists = (path) => stat(path).then(() => true, () => false);
+const ownerPid = async (dir) => JSON.parse(await readFile(join(dir, "owner.json"), "utf8")).pid;
+
+test("a browser suite takes the render slot without waiting, and a held slot skips it naming the holder", {timeout: 30_000}, async (t) => {
+  const dir = await slotFolder(t);
+  const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio: "ignore"});
+  t.after(() => other.kill("SIGKILL"));
+  await mkdir(dir, {recursive: true});
+  await writeFile(join(dir, "owner.json"), JSON.stringify({pid: other.pid, repo: "background-creator", command: "npm run stills", startedAt: new Date().toISOString()}));
+  const started = Date.now();
+  const held = await takeBrowserSlot({dir});
+  assert.equal(held.ok, false);
+  assert.match(held.reason, new RegExp(`held by pid ${other.pid} \\(background-creator: npm run stills\\)`));
+  assert.ok(Date.now() - started < 1000, "a held slot answers at once");
+
+  other.kill("SIGKILL");
+  await once(other, "exit");
+  const taken = await takeBrowserSlot({dir});
+  assert.equal(taken.ok, true, taken.reason);
+  assert.equal(await ownerPid(dir), process.pid);
+  taken.release();
+  assert.equal(await exists(dir), false);
+});
+
+test("the gate takes the slot before the machine check and gives it back when the check refuses", async (t) => {
+  const saved = process.env.SE_WIDGET_STUDIO_TEST_GATE;
+  delete process.env.SE_WIDGET_STUDIO_TEST_GATE;
+  t.after(() => { if (saved !== undefined) process.env.SE_WIDGET_STUDIO_TEST_GATE = saved; });
+  const dir = await slotFolder(t);
+  const take = () => takeBrowserSlot({dir});
+  const checked = [];
+  const refused = await gate({take, check: async () => { checked.push(await exists(dir)); return {ok: false, reason: "only 2.9 GiB free"}; }, pauseMs: 0});
+  assert.deepEqual(refused, {ok: false, reason: "only 2.9 GiB free"});
+  assert.deepEqual(checked, [true, true, true], "the machine is checked three times while the suite holds the slot");
+  assert.equal(await exists(dir), false, "a refused suite leaves the slot free");
+  const allowed = await gate({take, check: async () => ({ok: true}), pauseMs: 0});
+  assert.equal(allowed.ok, true);
+  assert.equal(await ownerPid(dir), process.pid);
+  allowed.release();
+  assert.equal(await exists(dir), false);
+});
+
+test("a suite's processes get its TMPDIR and a render slot inside it, never the machine's", () => {
+  assert.deepEqual(suiteEnvironment({PATH: "/bin", NODE_TEST_CONTEXT: "child-v8", RENDER_SLOT_DIR: "/Users/me/.cache/render-slot"}, "/tmp/sws-abc"), {
+    PATH: "/bin",
+    TMPDIR: "/tmp/sws-abc",
+    RENDER_SLOT_DIR: "/tmp/sws-abc/render-slot"
+  });
 });

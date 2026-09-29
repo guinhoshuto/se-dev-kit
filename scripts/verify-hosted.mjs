@@ -428,13 +428,17 @@ export async function integrationUploads(tests = [], root = ROOT) {
   return {tests: selected, files};
 }
 
-/** The test run in the Sandbox: the integration suite's own node --test arguments, the snapshot's browser, and FFmpeg first on PATH. */
+/**
+ * The test run in the Sandbox: the integration suite's own node --test arguments, the snapshot's
+ * browser, and FFmpeg first on PATH. A CLI render a test starts takes its render slot inside TMPDIR:
+ * the Sandbox has no other session to wait for.
+ */
 export function integrationCommand(tests) {
   return {
     cmd: 'sh',
     args: ['-c', `mkdir -p "$TMPDIR" && export PATH="${SANDBOX_ROOT}/tools:$PATH" && exec node "$@"`, 'sh', ...nodeArgs(SUITES.integration, tests.map(name => `${INTEGRATION_DIR}/${name}`))],
     cwd: SANDBOX_ROOT,
-    env: {SE_WIDGET_STUDIO_BROWSER: `${SANDBOX_ROOT}/browser/chrome`, PLAYWRIGHT_BROWSERS_PATH: `${SANDBOX_ROOT}/browsers`, TMPDIR: SANDBOX_TMP}
+    env: {SE_WIDGET_STUDIO_BROWSER: `${SANDBOX_ROOT}/browser/chrome`, PLAYWRIGHT_BROWSERS_PATH: `${SANDBOX_ROOT}/browsers`, TMPDIR: SANDBOX_TMP, RENDER_SLOT_DIR: `${SANDBOX_TMP}/render-slot`}
   };
 }
 

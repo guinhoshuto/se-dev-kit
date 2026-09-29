@@ -15,6 +15,7 @@ import {startStudioServer} from "../server/server.js";
 import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser} from "../capture/browser.js";
 import {planRecipe, renderRecipe, singleSceneRecipe, type RenderResult, type RenderTraceEvent} from "../capture/renderer.js";
 import {assertSupportedNode} from "../shared/node-support.js";
+import {withRenderSlot} from "../shared/render-slot.js";
 import {STUDIO_VERSION} from "../version.js";
 import {cliFlags} from "./flags.js";
 
@@ -277,6 +278,17 @@ function sceneProject(project: ResolvedProject, sceneId: string | undefined, the
   return {project: {...project, scenes: included}, scene};
 }
 
+/**
+ * A local render waits for the machine-wide render slot, which other sessions and background-creator
+ * share (src/shared/render-slot.ts): one heavy render at a time on this machine.
+ */
+function inRenderSlot<T>(task: () => Promise<T>): Promise<T> {
+  return withRenderSlot(task, {
+    command: `se-widget-studio ${process.argv.slice(2).join(" ")}`.slice(0, 200),
+    log: (message) => process.stderr.write(`${message}\n`)
+  });
+}
+
 async function runSingleMedia(
   kind: "capture" | "record",
   root: string,
@@ -292,7 +304,7 @@ async function runSingleMedia(
   const recipe = singleSceneRecipe(scene, {video: kind === "record"});
   if (options.dryRun !== true) assertSupportedNode(options.allowUnsupportedNode === true);
   const trace = options.dryRun === true ? undefined : renderTrace(command);
-  const result = await renderRecipe(project, recipe, {
+  const render = () => renderRecipe(project, recipe, {
     ...(trace ? {trace} : {}),
     cliFlags: cliFlags(command),
     ...(typeof options.output === "string" ? {outputRoot: resolve(options.output)} : {}),
@@ -306,6 +318,7 @@ async function runSingleMedia(
     ...(typeof options.ffmpegPath === "string" ? {ffmpegPath: options.ffmpegPath} : {}),
     ...(typeof options.ffprobePath === "string" ? {ffprobePath: options.ffprobePath} : {})
   });
+  const result = options.dryRun === true ? await render() : await inRenderSlot(render);
   print(result, globals(command).json);
   if (result.status === "intermediate" && options.allowIntermediate !== true) process.exitCode = 3;
 }
@@ -409,22 +422,24 @@ program
       return;
     }
     assertSupportedNode(options.allowUnsupportedNode === true);
-    const shared = recipes.length > 1 ? await launchStudioBrowser(options.browserPath ? {browserPath: options.browserPath} : {}) : undefined;
-    try {
-      for (const recipe of recipes) {
-        const trace = renderTrace(command, recipes.length > 1 ? recipe.id : undefined);
-        results.push(await renderRecipe(project, recipe, {...renderOptions, ...(shared ? {browser: shared} : {}), ...(trace ? {trace} : {})}));
+    await inRenderSlot(async () => {
+      const shared = recipes.length > 1 ? await launchStudioBrowser(options.browserPath ? {browserPath: options.browserPath} : {}) : undefined;
+      try {
+        for (const recipe of recipes) {
+          const trace = renderTrace(command, recipes.length > 1 ? recipe.id : undefined);
+          results.push(await renderRecipe(project, recipe, {...renderOptions, ...(shared ? {browser: shared} : {}), ...(trace ? {trace} : {})}));
+        }
+      } catch (error) {
+        // What finished stays reported; the error then goes to stderr as for a single recipe.
+        if (results.length > 0) report();
+        throw error;
+      } finally {
+        if (shared) {
+          const closing = await closeStudioBrowser(shared.browser);
+          if (!closing.closed) process.stderr.write(`Browser close timed out; killed PID ${closing.killed.join(", ") || "none found"} after ${closing.elapsedMs} ms.\n`);
+        }
       }
-    } catch (error) {
-      // What finished stays reported; the error then goes to stderr as for a single recipe.
-      if (results.length > 0) report();
-      throw error;
-    } finally {
-      if (shared) {
-        const closing = await closeStudioBrowser(shared.browser);
-        if (!closing.closed) process.stderr.write(`Browser close timed out; killed PID ${closing.killed.join(", ") || "none found"} after ${closing.elapsedMs} ms.\n`);
-      }
-    }
+    });
     report();
     if (results.some((result) => result.status === "intermediate") && !options.allowIntermediate) process.exitCode = 3;
   });

@@ -3,7 +3,7 @@
 // a process another session still drives. Only `ps`, `lsof` (macOS) or /proc (Linux) and statfs are used.
 import {execFile} from 'node:child_process';
 import {readlink, statfs} from 'node:fs/promises';
-import {isAbsolute, relative} from 'node:path';
+import {basename, isAbsolute, relative} from 'node:path';
 import {promisify} from 'node:util';
 
 const run = promisify(execFile);
@@ -22,6 +22,12 @@ const HEAVY = [
   /remotion/,
   /dist\/cli\/index\.js\s+(render|record|capture)\b/
 ];
+
+// A shell or a search tool whose command line only mentions a pattern (the machine check's own
+// `pgrep -fl 'Chrome.*headless|remotion|...'`, or the shell that chains it) renders nothing: the
+// work a shell starts is listed as a process of its own.
+const WRAPPER = /^-?(sh|bash|zsh|dash|ksh|fish|pgrep|pkill|grep|egrep|rg)$/;
+const executable = command => basename(command.trimStart().split(/\s+/, 1)[0] ?? '');
 
 export function parseProcessList(text) {
   return text.split('\n').flatMap(line => {
@@ -67,7 +73,7 @@ export function familyOf(processes, roots) {
 }
 
 export function isHeavy(command) {
-  return HEAVY.some(pattern => pattern.test(command));
+  return !WRAPPER.test(executable(command)) && HEAVY.some(pattern => pattern.test(command));
 }
 
 const isTestWorker = command => /\bnode\b/.test(command) && /\.test\.(mjs|ts)\b/.test(command) && !/\s--test(\s|$)/.test(command);
@@ -97,9 +103,20 @@ export async function checkoutOrphans(root, processes, {cwd = cwdOf} = {}) {
   return {orphans: [...orphans, ...browsers], reported};
 }
 
-/** Heavy processes that belong to neither `ownRoots` nor their descendants. */
+/** PIDs above `roots`, below launchd: the shell, npm and agent that started the caller. */
+export function ancestorsOf(processes, roots) {
+  const parents = new Map(processes.map(item => [item.pid, item.ppid]));
+  const ancestors = new Set();
+  for (const root of roots) {
+    for (let pid = parents.get(root); pid !== undefined && pid > 1 && !ancestors.has(pid); pid = parents.get(pid)) ancestors.add(pid);
+  }
+  return ancestors;
+}
+
+/** Heavy processes that belong to neither `ownRoots`, their descendants, nor their ancestors. */
 export function otherSessionsWork(processes, ownRoots) {
   const own = familyOf(processes, ownRoots);
+  for (const pid of ancestorsOf(processes, ownRoots)) own.add(pid);
   return processes.filter(item => !own.has(item.pid) && isHeavy(item.command));
 }
 
