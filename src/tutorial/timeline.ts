@@ -222,12 +222,13 @@ export const EMULATE_MENU: EmulateMenuEntry[] = [
 
 const MEDIA_TYPES = new Set(["image-input", "video-input", "sound-input"]);
 
+// Field types arrive lowercased from normalizeFields, so FIELDS' "googleFont" is "googlefont" here.
 const TEXT_TYPES = new Set([
   "text",
   "textfield",
   "textarea",
   "number",
-  "googleFont",
+  "googlefont",
   "fontpicker",
   "image-input",
   "video-input",

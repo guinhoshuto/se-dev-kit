@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {normalizeFields} from "../../dist/config/fields.js";
 import {recipeSchema} from "../../dist/config/schemas.js";
 import {compileTutorial} from "../../dist/tutorial/timeline.js";
 
@@ -107,6 +108,18 @@ test("invalid tutorial references fail with actionable errors", () => {
     () => compile([{action: "chat", user: "A", text: "b"}], {chat: {enabled: false}}),
     /chat\.enabled is false/
   );
+});
+
+test("setField types a family into a googleFont field, as FIELDS spells the type", () => {
+  const {fields: fontFields, defaults} = normalizeFields({font: {type: "googleFont", label: "Font", value: "Roboto"}});
+  const timeline = compileTutorial({
+    tutorial: {steps: [{action: "setField", field: "font", value: "Unbounded"}]},
+    fields: fontFields,
+    fieldData: defaults,
+    channel: "streamer"
+  });
+  assert.deepEqual(timeline.cues.filter((cue) => cue.kind === "typing").map((cue) => cue.region), ["field:font"]);
+  assert.deepEqual(timeline.widget.filter((action) => action.kind === "fields").map((action) => action.fieldData), [{font: "Unbounded"}]);
 });
 
 test("recipe schema requires a tutorial script only in tutorial mode", () => {
