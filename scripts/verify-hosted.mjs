@@ -108,8 +108,8 @@ export function verificationSnapshot() {
     channel: {username: 'synthetic_studio_viewer'},
     themes: [{schemaVersion: 1, id: 'violet', name: 'Violet', fieldData: {accent: '#ac96ff'}}],
     fixtures: [{schemaVersion: 1, id: 'message', name: 'Synthetic message', events: [{atMs: 100, listener: 'message', event: {data: {displayName: 'Synthetic viewer', text: 'Hosted rendering is ready.'}}}]}],
-    scenes: [{schemaVersion: 1, id: 'demo', name: 'Synthetic demo', theme: 'violet', fixture: 'message', viewport: {width: 320, height: 240}, output: {width: 320, height: 240, format: 'png'}, captureAtMs: 200, fieldData: {gallery: ['sws-sample:gallery/neon-city.jpg', 'sws-sample:gallery/pixel-forest.jpg']}, background: {id: 'aurora', image: 'sws-sample:backdrops/sunset-mesh.jpg', color: '#a44085'}}],
-    scenarios: [{schemaVersion: 1, id: 'verification-smoke', name: 'Synthetic smoke', scene: 'demo', steps: [{action: 'assert', selector: '#widget', visible: true}, {action: 'assert', selector: '#gallery img[data-width="1600"]', count: 2}, {action: 'updateFields', fieldData: {title: 'Synthetic field update'}}, {action: 'assert', selector: '#title', text: 'Synthetic field update'}, {action: 'dispatch', listener: 'message', event: {data: {text: 'Synthetic event verified'}}}, {action: 'assert', selector: '#message', text: 'Synthetic event verified'}]}],
+    scenes: [{schemaVersion: 1, id: 'demo', name: 'Synthetic demo', theme: 'violet', fixture: 'message', viewport: {width: 320, height: 240}, output: {width: 320, height: 240, format: 'png'}, captureAtMs: 200, fieldData: {gallery: ['sws-sample:gallery/streamer-1.jpg', 'sws-sample:gallery/streamer-2.jpg']}, background: {id: 'blueprint', image: 'sws-sample:backdrops/blueprint.jpg', color: '#0d4474'}}],
+    scenarios: [{schemaVersion: 1, id: 'verification-smoke', name: 'Synthetic smoke', scene: 'demo', steps: [{action: 'assert', selector: '#widget', visible: true}, {action: 'assert', selector: '#gallery img[data-width="1672"]', count: 2}, {action: 'updateFields', fieldData: {title: 'Synthetic field update'}}, {action: 'assert', selector: '#title', text: 'Synthetic field update'}, {action: 'dispatch', listener: 'message', event: {data: {text: 'Synthetic event verified'}}}, {action: 'assert', selector: '#message', text: 'Synthetic event verified'}]}],
     recipes: [
       {schemaVersion: 1, id: 'verification-image', name: 'Verification PNG', scenes: ['demo'], outputs: {screenshots: true}, limit: 1},
       {schemaVersion: 1, id: 'verification-video', name: 'Verification MP4', scenes: ['demo'], outputs: {screenshots: false, video: {enabled: true, durationMs: 1000, fps: 10, format: 'mp4', codec: 'h264', audio: 'none'}}, limit: 1}
@@ -327,7 +327,7 @@ export async function verify(options) {
     check(!previewText.includes(access.token), 'Preview response exposed the editing capability.');
     check(typeof preview.data.html === 'string' && preview.data.html.includes('Content-Security-Policy') && preview.data.html.includes("connect-src 'none'") && preview.data.html.includes("frame-src 'none'"), 'Preview is missing its restrictive content policy.');
     check(preview.data.state?.fieldData?.title === 'Synthetic API preview' && typeof preview.data.nonce === 'string' && typeof preview.data.sessionId === 'string', 'Preview state or bridge values are missing.');
-    check(preview.data.html.includes('sws-sample:gallery/neon-city.jpg') && /^data:image\/jpeg;base64,/.test(preview.data.backgroundImage ?? ''), 'Preview did not embed the deployed sample media.');
+    check(preview.data.html.includes('sws-sample:gallery/streamer-1.jpg') && /^data:image\/jpeg;base64,/.test(preview.data.backgroundImage ?? ''), 'Preview did not embed the deployed sample media.');
     addCheck('preview response, field overrides, embedded sample media, restrictive CSP, and capability isolation');
     }
 

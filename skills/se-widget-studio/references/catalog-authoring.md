@@ -36,44 +36,39 @@ A widget repository keeps each theme in `themes/` as a pair:
 
 ## Sample media
 
-Never generate, download, draw, or upload images just to test a widget. The Studio ships synthetic sample images, and every mode (hosted preview, hosted jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
+Never generate, download, draw, or upload images just to test a widget. The Studio ships AI-generated sample images, and every mode (hosted preview, hosted jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
 
-| Gallery reference (1600x900, landscape) | Shows |
+| Gallery reference (1672x941, landscape) | Shows |
 |---|---|
-| `sws-sample:gallery/synthwave-sunset.jpg` | Synthwave sun over purple mountains and a magenta grid |
-| `sws-sample:gallery/neon-city.jpg` | Purple night skyline with neon towers and a full moon |
-| `sws-sample:gallery/mountain-dawn.jpg` | Pastel lavender valley at dawn with a lake and pines |
-| `sws-sample:gallery/cozy-desk.jpg` | Illustrated night desk setup with monitor, keyboard, and lamp |
-| `sws-sample:gallery/space-nebula.jpg` | Ringed pink planet, small moon, and blue-magenta nebula |
-| `sws-sample:gallery/pixel-forest.jpg` | Bright pixel-art platformer with coins, gems, and a chest |
-| `sws-sample:gallery/ocean-moon.jpg` | Teal night ocean with a large cream moon |
-| `sws-sample:gallery/abstract-glass.jpg` | Frosted glass shapes over blurred orange, pink, and blue light |
+| `sws-sample:gallery/streamer-1.jpg` | Webcam shot of a smiling streamer with brown hair, headphones, and a mic in a pink-lit bedroom |
+| `sws-sample:gallery/streamer-2.jpg` | Webcam shot of a smiling streamer with black bangs, headphones, and a mic in a dim purple-lit room |
 
-| Backdrop reference (2000x2000, drawn with cover) | Tone | Pair with `color` | Shows |
+| Backdrop reference (1254x1254, drawn with cover) | Tone | Pair with `color` | Shows |
 |---|---|---|---|
-| `sws-sample:backdrops/aurora-mesh.jpg` | dark | `#2e2b52` | Violet and mint aurora over an indigo night sky |
-| `sws-sample:backdrops/candy-pop.jpg` | light | `#f98d9d` | Yellow-pink-purple gradient with confetti shapes |
-| `sws-sample:backdrops/midnight-grid.jpg` | dark | `#0d1624` | Very dark navy with a faint perspective grid |
-| `sws-sample:backdrops/noir-warm.jpg` | dark | `#10100e` | Near-black with a warm golden spotlight |
-| `sws-sample:backdrops/prism-sky.jpg` | light | `#e2f9e9` | Bright aqua-mint-lemon gradient; good for dark text or white cards |
-| `sws-sample:backdrops/sunset-mesh.jpg` | medium | `#a44085` | Coral-to-magenta-to-indigo mesh gradient |
+| `sws-sample:backdrops/aero.jpg` | light | `#9acce9` | Blue sky and sparkling water framed by leaves, bubbles, and a glass ribbon |
+| `sws-sample:backdrops/blueprint.jpg` | dark | `#0d4474` | Navy blueprint grid with white technical lines around an open center |
+| `sws-sample:backdrops/cute.jpg` | light | `#f2e1dd` | Pastel waves, daisies, sparkles, and checkerboard corners around a cream center |
+| `sws-sample:backdrops/cute-2.jpg` | light | `#eaddd4` | Pastel waves and checkerboards with daisies around a cream blob |
+| `sws-sample:backdrops/patterns.jpg` | light | `#dcccbd` | Mid-century terracotta, mustard, and slate-blue shapes along the edges of cream paper |
+| `sws-sample:backdrops/plants.jpg` | light | `#e7dcce` | Watercolor eucalyptus sprigs and blush blotches in the corners of cream paper |
+| `sws-sample:backdrops/plants-2.jpg` | light | `#cbb09d` | Risograph red, blue, and yellow leaves and halftone dots around a cream center |
 
-Pick a backdrop by contrast: a light or white-text widget on a `dark` backdrop, a dark-text widget, or one with white cards, on a `light` one. Alt text and exact metadata are in `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json` from a checkout or linked skill) and in `GET /api/v1/sample-media` on a deployment that supports samples.
+The people in the streamer photos are synthetic. A streamer photo as a 16:9 `background` shows the widget on a stream; the backdrops leave their center open for the widget. Either kind works in an image field or as a background. Pick a backdrop by contrast: a light or white-text widget on a `dark` one (`blueprint`, or `streamer-2` at 16:9), a dark-text widget, or one with white cards, on a `light` one. Backdrops are 1254 px square, so a larger stage scales them up (a 2000x2000 still by 1.6x) and softens them. A retired reference fails `validate`, import, and push with the date it was retired; replace it with one from these tables. Alt text and exact metadata are in `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json` from a checkout or linked skill) and in `GET /api/v1/sample-media` on a deployment that supports samples.
 
 ```json
 {
-  "themes": [{"schemaVersion": 1, "id": "photo", "name": "Photo", "fieldData": {"image": "sws-sample:gallery/neon-city.jpg"}}],
+  "themes": [{"schemaVersion": 1, "id": "photo", "name": "Photo", "fieldData": {"image": "sws-sample:gallery/streamer-1.jpg"}}],
   "scenes": [
     {
       "schemaVersion": 1,
-      "id": "gallery-on-aurora",
-      "name": "Gallery on aurora",
-      "fieldData": {"galleryImages": ["sws-sample:gallery/synthwave-sunset.jpg", "sws-sample:gallery/ocean-moon.jpg", "sws-sample:gallery/pixel-forest.jpg"]},
-      "background": {"id": "aurora", "image": "sws-sample:backdrops/aurora-mesh.jpg", "color": "#2e2b52"}
+      "id": "gallery-on-blueprint",
+      "name": "Gallery on blueprint",
+      "fieldData": {"galleryImages": ["sws-sample:gallery/streamer-1.jpg", "sws-sample:gallery/streamer-2.jpg", "sws-sample:backdrops/cute.jpg"]},
+      "background": {"id": "blueprint", "image": "sws-sample:backdrops/blueprint.jpg", "color": "#0d4474"}
     }
   ],
   "recipes": [
-    {"schemaVersion": 1, "id": "backdrops", "name": "Backdrops", "scenes": ["gallery-on-aurora"], "matrix": {"backgrounds": [{"id": "prism", "image": "sws-sample:backdrops/prism-sky.jpg", "color": "#e2f9e9"}]}}
+    {"schemaVersion": 1, "id": "backdrops", "name": "Backdrops", "scenes": ["gallery-on-blueprint"], "matrix": {"backgrounds": [{"id": "plants", "image": "sws-sample:backdrops/plants.jpg", "color": "#e7dcce"}]}}
   ]
 }
 ```

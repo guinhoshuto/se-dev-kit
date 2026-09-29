@@ -7,6 +7,7 @@ import {parse, serialize, type DefaultTreeAdapterMap} from 'parse5';
 import postcss from 'postcss';
 import type {JsonValue} from '../src/types';
 import {normalizeFields} from '../src/config/fields';
+import {unknownSampleMediaText} from '../src/config/sample-media';
 import {inspectSensitive} from '../src/validation/privacy';
 import type {ObjectStore, PreparedSnapshot, StoredAsset, WidgetSnapshot} from './model';
 import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/studio-ui/sample-media';
@@ -241,7 +242,7 @@ export async function pinSampleMedia(snapshot: WidgetSnapshot, sampleMedia: Samp
   const catalog = await sampleMedia();
   for (const reference of references) {
     const entry = catalog.entry(reference);
-    if (!entry) throw new Error(`Unknown sample media reference: ${reference}. See sample-media/manifest.json for the available references.`);
+    if (!entry) throw new Error(`${unknownSampleMediaText(reference, catalog.retiredOn(reference))}. See sample-media/manifest.json for the available references.`);
     pins[reference] = entry.sha256;
   }
   return pins;

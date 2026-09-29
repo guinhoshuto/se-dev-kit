@@ -122,17 +122,18 @@ test("built-in sample media are served only by exact manifest lookup on the fram
   const manifest = JSON.parse(await readFile(new URL("../../sample-media/manifest.json", import.meta.url), "utf8"));
   const server = await startStudioServer(project, {port: 0, watch: false});
   try {
-    const expected = await readFile(new URL("../../sample-media/gallery/synthwave-sunset.jpg", import.meta.url));
-    const sample = await requestBuffer(`${server.frameOrigin}/__sws/sample/gallery/synthwave-sunset.jpg`);
+    const expected = await readFile(new URL("../../sample-media/gallery/streamer-1.jpg", import.meta.url));
+    const sample = await requestBuffer(`${server.frameOrigin}/__sws/sample/gallery/streamer-1.jpg`);
     assert.equal(sample.status, 200);
     assert.deepEqual(sample.body, expected);
     assert.equal(sample.headers["content-type"], "image/jpeg");
     assert.equal(sample.headers["x-content-type-options"], "nosniff");
     assert.match(String(sample.headers["content-security-policy"]), /frame-ancestors/);
     assert.equal(
-      await server.sampleMediaUrl("sws-sample:backdrops/aurora-mesh.jpg"),
-      `${server.frameOrigin}/__sws/sample/backdrops/aurora-mesh.jpg`
+      await server.sampleMediaUrl("sws-sample:backdrops/blueprint.jpg"),
+      `${server.frameOrigin}/__sws/sample/backdrops/blueprint.jpg`
     );
+    await assert.rejects(server.sampleMediaUrl("sws-sample:backdrops/aurora-mesh.jpg"), {code: "SAMPLE_MEDIA_NOT_FOUND", message: /retired on 2026-09-29/});
     await assert.rejects(server.sampleMediaUrl("sws-sample:gallery/unknown.jpg"), {code: "SAMPLE_MEDIA_NOT_FOUND"});
     await assert.rejects(server.sampleMediaUrl("sws-sample:../package.json"), {code: "SAMPLE_MEDIA_NOT_FOUND"});
 
@@ -143,8 +144,9 @@ test("built-in sample media are served only by exact manifest lookup on the fram
       "/__sws/sample/.hidden",
       "/__sws/sample/gallery/.hidden.jpg",
       "/__sws/sample/%5Cetc%5Cpasswd",
-      "/__sws/sample/gallery/synthwave-sunset.jpg%00.png",
+      "/__sws/sample/gallery/streamer-1.jpg%00.png",
       "/__sws/sample/gallery/unknown.jpg",
+      "/__sws/sample/backdrops/aurora-mesh.jpg",
       "/__sws/sample/manifest.json",
       "/__sws/sample/README.md",
       "/__sws/sample/gallery/",
@@ -155,7 +157,7 @@ test("built-in sample media are served only by exact manifest lookup on the fram
       assert.equal(response.status, 404, `${path} must not resolve to sample media`);
       assert.equal(response.body.toString("utf8"), "Not Found\n");
     }
-    const control = await requestBuffer(`${server.origin}/__sws/sample/gallery/synthwave-sunset.jpg`);
+    const control = await requestBuffer(`${server.origin}/__sws/sample/gallery/streamer-1.jpg`);
     assert.equal(control.status, 404, "the control origin must not serve sample media");
 
     const payload = JSON.parse((await requestBuffer(`${server.origin}/__sws/api/project`)).body.toString("utf8"));

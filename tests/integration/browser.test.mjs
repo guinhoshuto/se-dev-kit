@@ -264,8 +264,8 @@ test("built-in sample media reach widgets as absolute same-origin URLs in fields
     name: "Samples",
     viewport: {width: 320, height: 240},
     output: {width: 320, height: 240, format: "png"},
-    fieldData: {image: "sws-sample:gallery/neon-city.jpg", gallery: ["sws-sample:gallery/synthwave-sunset.jpg", "sws-sample:gallery/pixel-forest.jpg"]},
-    background: {id: "aurora", image: "sws-sample:backdrops/aurora-mesh.jpg"}
+    fieldData: {image: "sws-sample:gallery/streamer-1.jpg", gallery: ["sws-sample:gallery/streamer-2.jpg", "sws-sample:backdrops/cute.jpg"]},
+    background: {id: "blueprint", image: "sws-sample:backdrops/blueprint.jpg"}
   };
   const server = await startStudioServer(project, {port: 0, watch: false});
   const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
@@ -276,17 +276,17 @@ test("built-in sample media reach widgets as absolute same-origin URLs in fields
       const sampleBase = `${server.frameOrigin}/__sws/sample/`;
       const images = await frame.locator("img").evaluateAll((nodes) => nodes.map((node) => ({src: node.src, width: node.naturalWidth})));
       assert.deepEqual(images, [
-        {src: `${sampleBase}gallery/neon-city.jpg`, width: 1600},
-        {src: `${sampleBase}gallery/synthwave-sunset.jpg`, width: 1600},
-        {src: `${sampleBase}gallery/pixel-forest.jpg`, width: 1600}
+        {src: `${sampleBase}gallery/streamer-1.jpg`, width: 1672},
+        {src: `${sampleBase}gallery/streamer-2.jpg`, width: 1672},
+        {src: `${sampleBase}backdrops/cute.jpg`, width: 1254}
       ]);
       const stageImage = await opened.page.evaluate(() => document.querySelector("#capture-stage").style.backgroundImage);
-      assert.ok(stageImage.includes(`${sampleBase}backdrops/aurora-mesh.jpg`), stageImage);
+      assert.ok(stageImage.includes(`${sampleBase}backdrops/blueprint.jpg`), stageImage);
 
-      await captureHostUpdateFields(opened.page, {gallery: ["sws-sample:gallery/ocean-moon.jpg"]});
-      await frame.locator(`#gallery img[src="${sampleBase}gallery/ocean-moon.jpg"][data-width="1600"]`).waitFor({state: "attached"});
-      await captureHostDispatch(opened.page, "avatar", {data: {avatar: "sws-sample:gallery/cozy-desk.jpg"}});
-      await frame.locator(`#single img[src="${sampleBase}gallery/cozy-desk.jpg"][data-width="1600"]`).waitFor({state: "attached"});
+      await captureHostUpdateFields(opened.page, {gallery: ["sws-sample:backdrops/patterns.jpg"]});
+      await frame.locator(`#gallery img[src="${sampleBase}backdrops/patterns.jpg"][data-width="1254"]`).waitFor({state: "attached"});
+      await captureHostDispatch(opened.page, "avatar", {data: {avatar: "sws-sample:backdrops/plants.jpg"}});
+      await frame.locator(`#single img[src="${sampleBase}backdrops/plants.jpg"][data-width="1254"]`).waitFor({state: "attached"});
 
       const runtimeErrors = (await frameEvents(opened.page)).filter(({type}) => type === "frame:error" || type === "frame:unhandled-rejection");
       assert.deepEqual(runtimeErrors, []);
@@ -309,7 +309,7 @@ test("built-in sample media reach widgets as absolute same-origin URLs in fields
   }
 });
 
-// A 3x2 PNG, so a decoded widget file is told apart from a sample (1600 wide) or a failed load (0).
+// A 3x2 PNG, so a decoded widget file is told apart from a sample (1254 or 1672 wide) or a failed load (0).
 const PNG_3X2 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGM4YVMBQQxwFgBbBAjpVFBn5QAAAABJRU5ErkJggg==", "base64");
 
 test("widget files named by their widget-relative path reach widgets as absolute URLs in fields, arrays, placeholders, updates, and events", {timeout: 120_000}, async (t) => {

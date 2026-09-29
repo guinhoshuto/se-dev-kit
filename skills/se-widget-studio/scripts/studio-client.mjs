@@ -186,13 +186,17 @@ export function collectSampleReferences(value) {
   return [...found];
 }
 
-async function localSampleReferences(manifestPath) {
+async function localSampleManifest(manifestPath) {
   let text;
   try {text = await readFile(manifestPath, 'utf8');} catch (error) {if (error?.code === 'ENOENT') return undefined; throw error;}
   let manifest;
   try {manifest = JSON.parse(text);} catch {fail(`Local sample media manifest is not valid JSON: ${manifestPath}`);}
   check(Array.isArray(manifest?.items), `Local sample media manifest has no items: ${manifestPath}`);
-  return manifest.items.map(item => item?.reference).filter(reference => typeof reference === 'string');
+  const retired = (Array.isArray(manifest.retired) ? manifest.retired : []).filter(item => typeof item?.reference === 'string');
+  return {
+    references: manifest.items.map(item => item?.reference).filter(reference => typeof reference === 'string'),
+    retired: new Map(retired.map(item => [item.reference, item.retiredOn]))
+  };
 }
 
 /**
@@ -203,10 +207,11 @@ async function localSampleReferences(manifestPath) {
 export async function checkSampleMedia(origin, snapshot, {action = 'created', manifestPath = SAMPLE_MANIFEST} = {}) {
   const references = collectSampleReferences(snapshot);
   if (references.length === 0) return [];
-  const local = await localSampleReferences(manifestPath);
+  const local = await localSampleManifest(manifestPath);
   if (local) {
-    const unknown = references.filter(reference => !local.includes(reference));
-    check(unknown.length === 0, `Unknown sample media reference(s): ${unknown.join(', ')}. Valid references: ${local.join(', ')}. Nothing was ${action}.`);
+    const unknown = references.filter(reference => !local.references.includes(reference));
+    const describe = reference => local.retired.has(reference) ? `${reference} (retired on ${local.retired.get(reference)})` : reference;
+    check(unknown.length === 0, `Unknown sample media reference(s): ${unknown.map(describe).join(', ')}. Valid references: ${local.references.join(', ')}. Nothing was ${action}.`);
   }
   const url = new URL('/api/v1/sample-media', origin);
   const response = await fetch(url, {redirect: 'manual', signal: AbortSignal.timeout(60_000)});

@@ -189,12 +189,12 @@ The JSON schema accepts up to 256 asset declarations, but preparation enforces a
 
 ## Sample media
 
-The deployment ships the synthetic images in [`sample-media/`](../sample-media/README.md) so a widget can be tested without creating or uploading media. Reference one as the whole JSON string `sws-sample:<file>`, for example `sws-sample:gallery/neon-city.jpg` or `sws-sample:backdrops/aurora-mesh.jpg`:
+The deployment ships the AI-generated images in [`sample-media/`](../sample-media/README.md) so a widget can be tested without creating or uploading media. Reference one as the whole JSON string `sws-sample:<file>`, for example `sws-sample:gallery/streamer-1.jpg` or `sws-sample:backdrops/plants.jpg`:
 
 - as a media value in theme, fixture, scene, scenario, or channel data, including arrays of `image-input` fields with `multiple: true`;
 - as `scene.background.image` or `recipe.matrix.backgrounds[].image`.
 
-Preparation validates every reference against the deployed `sample-media/manifest.json` and blocks the revision on an unknown one. A reference is kept literally in the revision and recorded in `prepared.sampleMedia` with the SHA-256 of the deployed bytes; it never becomes an asset, upload, or Blob object and does not count toward the asset or upload limits. Preview and jobs refuse a revision whose pinned hash differs from the current deployment. References are rejected in widget HTML/CSS and in FIELDS `value`/`default`, because StreamElements cannot resolve them. Do not declare them in `assets`.
+Preparation validates every reference against the deployed `sample-media/manifest.json` and blocks the revision on an unknown one; for a reference the manifest lists as retired, the error names the date it stopped shipping. A reference is kept literally in the revision and recorded in `prepared.sampleMedia` with the SHA-256 of the deployed bytes; it never becomes an asset, upload, or Blob object and does not count toward the asset or upload limits. Preview and jobs refuse a revision whose pinned hash differs from the current deployment, or that pinned a sample retired since. References are rejected in widget HTML/CSS and in FIELDS `value`/`default`, because StreamElements cannot resolve them. Do not declare them in `assets`.
 
 `GET /api/v1/sample-media` needs no capability and returns `{schemaVersion: 1, items: [{reference, kind, contentType, width, height, bytes, sha256, label, alt, color, tone?}]}` for the verified files this deployment ships. It never returns the image bytes. A deployment that predates sample media answers 404, and one whose files do not match the manifest answers 503. Call it before creating or replacing a project that uses `sws-sample:` references, because an older deployment either blocks the revision with an unrelated path error or passes array values through unresolved; the skill client does this and refuses to continue.
 

@@ -87,8 +87,8 @@ A scene composes field state and external presentation state:
 
 - `viewport` controls responsive widget layout.
 - `output` controls the external export canvas.
-- `background.image` accepts an allowlisted widget asset, a data URL, or a built-in sample such as `"sws-sample:backdrops/aurora-mesh.jpg"`. Pair a sample with its manifest `color` so the stage has a matching fallback.
-- Media values in `fieldData` (themes, fixtures, scenes, scenario `updateFields`, and event payloads) may be built-in samples such as `"sws-sample:gallery/neon-city.jpg"`, or arrays of them for `image-input` fields with `multiple: true`. See [`sample-media/`](../sample-media/README.md); `validate` reports unknown references as `SAMPLE_MEDIA_UNKNOWN`.
+- `background.image` accepts an allowlisted widget asset, a data URL, or a built-in sample such as `"sws-sample:backdrops/plants.jpg"`. Pair a sample with its manifest `color` so the stage has a matching fallback.
+- Media values in `fieldData` (themes, fixtures, scenes, scenario `updateFields`, and event payloads) may be built-in samples such as `"sws-sample:gallery/streamer-1.jpg"`, or arrays of them for `image-input` fields with `multiple: true`. See [`sample-media/`](../sample-media/README.md); `validate` reports unknown references as `SAMPLE_MEDIA_UNKNOWN`, and names the date of a retired one.
 - A widget's own media file is named by its path relative to the widget root, such as `"studio/media/gallery/01.jpg"`, alone or in an array. List it in `widget.assets` when it lives outside `assets/`, `fonts/`, and `media/`. The widget receives the file's absolute URL, as it would receive an uploaded file's URL in StreamElements, so this works in widgets that resolve media with `new URL(value, location.href)`, and the hosted Studio resolves the same value. The older `"/__sws/widget/studio/media/gallery/01.jpg"` spelling still works locally, but hosted import refuses it.
 - `camera` scales and positions the iframe without changing widget typography.
 - `crop` is an optional final clip in output CSS pixels.

@@ -28,24 +28,19 @@ const HOSTED_LAYOUTS: ResolvedWidgetFiles[] = [
 ];
 
 /**
- * SHA-256 of the generated originals that sample-media/ was recompressed from (commit 9f2c3ff, 2026-09-27): the
- * art made for the se-windows tests on 2026-09-25, which widgets tested before then still carry as their own
- * files. `gallery/pixel-forest.jpg` kept its original bytes, so the manifest's own hash already covers it.
+ * SHA-256 of the PNG originals that sample-media/ was converted from on 2026-09-29: the ChatGPT art the owner
+ * supplied, which a widget may carry as its own test files. Copies of the art retired that day are uploads again.
  */
 export const SAMPLE_MEDIA_ORIGINALS: Readonly<Record<string, string>> = Object.freeze({
-  "3000edfbdaf969c5ca41792469c6238cf28965ee4182b0a83a218bfdf83b2dd9": "sws-sample:gallery/synthwave-sunset.jpg",
-  "098fdd1a0c44dfc560d3452bf526e0ffaba78b68b5fa169e0556e291185f3d71": "sws-sample:gallery/neon-city.jpg",
-  "8e54d88b482d856bb2b67b4ff6bcabd15af0dbeed349abf0bad47c857ae57ebf": "sws-sample:gallery/mountain-dawn.jpg",
-  "8466163c943468f58704bc13a87cf5f4f373a227ef7f57f4a2ee482f8e6e4b8b": "sws-sample:gallery/cozy-desk.jpg",
-  "7cec00e3a60b110f007169ff6d5cce1464568020c5acc2b9e6eb45fa8ec9ada6": "sws-sample:gallery/space-nebula.jpg",
-  "72104633c03377f4ca9338834147ccf9ef1908d2f2c075220cecda82d501ef94": "sws-sample:gallery/ocean-moon.jpg",
-  "6b105feaccb3c9f173ef0d2cc45b55841cda2a6cecdcffab82125661f016993b": "sws-sample:gallery/abstract-glass.jpg",
-  "cdfefb1ce546feb4c26cdeb4b669d05dbab1e0d3c28b6669771f26b73837b7da": "sws-sample:backdrops/aurora-mesh.jpg",
-  "3f5cb97ac44a8a79021e822a89823137b62ae2eb4447e7e67f2f3bd52d06d2ca": "sws-sample:backdrops/candy-pop.jpg",
-  "7d03e1ebdd7e6a363c10e7585436c1c546303a4499639f5248dbc8f108e4e380": "sws-sample:backdrops/midnight-grid.jpg",
-  "f9f387a6ce9a8247007eb7e6f6e93493476e7630600250ae771b2f46010d90e1": "sws-sample:backdrops/noir-warm.jpg",
-  "6f36f9d29907a5c7aa4993c4c4408cf548e2505ad2a35c534a501ed46aab5d5b": "sws-sample:backdrops/prism-sky.jpg",
-  "99bdb651f13f73b05a185f6cb84f959616f6da42c43d22ec3076b22a4db637b3": "sws-sample:backdrops/sunset-mesh.jpg"
+  "c185b2d559ff197c34b70db39c7f35e2d921ea6791fcc5d3e6d6771963704aa8": "sws-sample:gallery/streamer-1.jpg",
+  "295a157f2ee6a0a77645643d701a3243f7435b31a1ae586f252accb41c2dd7a2": "sws-sample:gallery/streamer-2.jpg",
+  "57e5e2a3c54a799791c5ff76d4860db4005148c9ae152ac54c49e2bd2e13bc69": "sws-sample:backdrops/aero.jpg",
+  "e9c1198c7321d17b1512456e02bee85173a1b69262ff7a5f11bb6233c3b8c72b": "sws-sample:backdrops/blueprint.jpg",
+  "26e5ecf681cdea93be3b12515fde680a9e5905c15218e3dad0e8d9ba23c7fc7f": "sws-sample:backdrops/cute.jpg",
+  "b0badfb85dfdd6b19934fc35252a4d6dd49aa83e75d400486f4e609dfb17e709": "sws-sample:backdrops/cute-2.jpg",
+  "26a58cbf563d58899f8e3ecd21a9a712f70dd9a927d3a45cc0afc21ea8424d66": "sws-sample:backdrops/patterns.jpg",
+  "5a1082e297ba0cfd46246c2986badd8200d4fbfac00afaa9f3d1172fb6f976e9": "sws-sample:backdrops/plants.jpg",
+  "7d69c41a667cfacc9ecab095201c3b5dfdac76cca52b3a40db82c76888532e63": "sws-sample:backdrops/plants-2.jpg"
 });
 
 /** A widget file to upload: `path` in the hosted revision, `file` relative to the widget root. */

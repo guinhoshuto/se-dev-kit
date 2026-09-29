@@ -38,6 +38,8 @@ export interface SampleMediaCatalog {
   items: readonly SampleMediaEntry[];
   entry(reference: string): SampleMediaEntry | undefined;
   entryForFile(file: string): SampleMediaEntry | undefined;
+  /** The date the owner retired a reference (its file no longer ships), or undefined for any other reference. */
+  retiredOn(reference: string): string | undefined;
   body(reference: string): Buffer;
 }
 
@@ -69,7 +71,18 @@ const manifestSchema = z
           .strict()
       )
       .min(1)
-      .max(256)
+      .max(256),
+    retired: z
+      .array(
+        z
+          .object({
+            reference: z.string().regex(SAMPLE_REFERENCE_PATTERN),
+            retiredOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+          })
+          .strict()
+      )
+      .max(1024)
+      .optional()
   })
   .strict();
 
@@ -101,8 +114,14 @@ async function readCatalog(root: string): Promise<SampleMediaCatalog> {
   const byFile = new Map<string, SampleMediaEntry>();
   const bodies = new Map<string, Buffer>();
   const ids = new Set<string>();
+  const retired = new Map<string, string>();
+  for (const {reference, retiredOn} of parsed.retired ?? []) {
+    if (retired.has(reference)) throw invalid(root, `duplicate retired reference ${reference}.`);
+    retired.set(reference, retiredOn);
+  }
   for (const item of parsed.items) {
     if (item.reference !== `${SAMPLE_MEDIA_SCHEME}${item.file}`) throw invalid(root, `${item.id} reference must equal the scheme plus its file.`);
+    if (retired.has(item.reference)) throw invalid(root, `${item.id} reuses the retired reference ${item.reference}.`);
     const extension = item.file.split(".").at(-1) ?? "";
     if (CONTENT_TYPES[extension] !== item.contentType) throw invalid(root, `${item.id} content type does not match ${item.file}.`);
     if (item.kind === "backdrop" && !item.tone) throw invalid(root, `${item.id} is a backdrop without a tone.`);
@@ -131,9 +150,10 @@ async function readCatalog(root: string): Promise<SampleMediaCatalog> {
     items,
     entry: (reference) => byReference.get(reference),
     entryForFile: (file) => byFile.get(file),
+    retiredOn: (reference) => retired.get(reference),
     body: (reference) => {
       const body = bodies.get(reference);
-      if (!body) throw sampleMediaNotFound(reference);
+      if (!body) throw sampleMediaNotFound(reference, retired.get(reference));
       return body;
     }
   };
@@ -153,18 +173,23 @@ export function loadSampleMediaCatalog(root: string = defaultSampleMediaRoot()):
   return pending;
 }
 
-export function sampleMediaNotFound(reference: string): StudioError {
+/** Opens every unknown-reference error; a retired reference says when it stopped shipping instead. */
+export function unknownSampleMediaText(reference: string, retiredOn?: string): string {
+  return retiredOn ? `Sample media reference ${reference} was retired on ${retiredOn} and no longer ships` : `Unknown sample media reference: ${reference}`;
+}
+
+export function sampleMediaNotFound(reference: string, retiredOn?: string): StudioError {
   return new StudioError(
     "SAMPLE_MEDIA_NOT_FOUND",
-    `Unknown sample media reference: ${reference}`,
-    "Use a reference listed in sample-media/manifest.json, for example sws-sample:gallery/neon-city.jpg."
+    unknownSampleMediaText(reference, retiredOn),
+    "Use a reference listed in sample-media/manifest.json, for example sws-sample:gallery/streamer-1.jpg."
   );
 }
 
 /** Returns the verified entry for a reference or fails with SAMPLE_MEDIA_NOT_FOUND. */
 export function requireSampleMedia(catalog: SampleMediaCatalog, reference: string): SampleMediaEntry {
   const entry = claimsSampleMediaScheme(reference) ? catalog.entry(reference) : undefined;
-  if (!entry) throw sampleMediaNotFound(reference);
+  if (!entry) throw sampleMediaNotFound(reference, catalog.retiredOn(reference));
   return entry;
 }
 
@@ -185,7 +210,7 @@ export async function assertSampleMediaPins(pins: Record<string, string> | undef
   const catalog = await loadSampleMediaCatalog(root);
   for (const [reference, sha256] of entries) {
     const entry = catalog.entry(reference);
-    if (!entry) throw sampleMediaNotFound(reference);
+    if (!entry) throw sampleMediaNotFound(reference, catalog.retiredOn(reference));
     if (entry.sha256 !== sha256) {
       throw new StudioError(
         "SAMPLE_MEDIA_CHANGED",

@@ -5,7 +5,7 @@ import type {JsonObject, JsonValue, NormalizedField, StageBackground} from "../t
  * the hosted importer, and the hosted editor share these rules; only type imports are allowed here.
  */
 export const SAMPLE_MEDIA_SCHEME = "sws-sample:";
-/** A whole JSON string such as `sws-sample:gallery/neon-city.jpg`. Group 1 is the file inside `sample-media/`. */
+/** A whole JSON string such as `sws-sample:gallery/streamer-1.jpg`. Group 1 is the file inside `sample-media/`. */
 export const SAMPLE_REFERENCE_PATTERN = /^sws-sample:([a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*\.(?:jpg|png|webp|gif))$/;
 export const SAMPLE_MEDIA_ROUTE = "/__sws/sample/";
 

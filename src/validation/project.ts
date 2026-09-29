@@ -4,7 +4,7 @@ import type {Diagnostic, ResolvedProject} from "../types.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
 import {expandRecipe} from "../capture/matrix.js";
 import {findSensitiveTestData} from "./privacy.js";
-import {loadSampleMediaCatalog} from "../config/sample-media.js";
+import {loadSampleMediaCatalog, type SampleMediaCatalog} from "../config/sample-media.js";
 import {collectSampleMediaReferences} from "../studio-ui/sample-media.js";
 
 const RECOGNIZED_FIELD_TYPES = new Set([
@@ -212,20 +212,23 @@ async function sampleMediaDiagnostics(project: ResolvedProject): Promise<Diagnos
   ];
   const used = sources.flatMap(([label, value]) => collectSampleMediaReferences(value).map((reference) => ({label, reference})));
   if (used.length === 0) return [];
-  let known: (reference: string) => boolean;
+  let catalog: SampleMediaCatalog;
   try {
-    const catalog = await loadSampleMediaCatalog();
-    known = (reference) => catalog.entry(reference) !== undefined;
+    catalog = await loadSampleMediaCatalog();
   } catch (error) {
     return [diagnostic("error", "SAMPLE_MEDIA_CATALOG_INVALID", error instanceof Error ? error.message : String(error))];
   }
-  const unknown = used.filter(({reference}) => !known(reference));
+  const unknown = used.filter(({reference}) => catalog.entry(reference) === undefined);
   if (unknown.length > 0) {
+    const describe = ({label, reference}: {label: string; reference: string}) => {
+      const retiredOn = catalog.retiredOn(reference);
+      return `${label} uses ${reference}${retiredOn ? ` (retired on ${retiredOn})` : ""}`;
+    };
     return [
       diagnostic(
         "error",
         "SAMPLE_MEDIA_UNKNOWN",
-        `Unknown sample media references: ${unknown.map(({label, reference}) => `${label} uses ${reference}`).join("; ")}.`,
+        `Unknown sample media references: ${unknown.map(describe).join("; ")}.`,
         "See sample-media/manifest.json in the Studio package for the available sws-sample: references."
       )
     ];

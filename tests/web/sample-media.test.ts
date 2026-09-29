@@ -26,21 +26,22 @@ class MemoryStore implements ObjectStore {
 const manifest = JSON.parse(await readFile(resolve('sample-media/manifest.json'), 'utf8')) as {items: {reference: string; file: string; sha256: string; bytes: number; color: string; kind: string}[]};
 const sha = (reference: string) => manifest.items.find(item => item.reference === reference)!.sha256;
 const options = {origin: 'http://127.0.0.1:3000', sessionId: 'session', nonce: 'abcdefghijklmnop'};
-const NEON = 'sws-sample:gallery/neon-city.jpg';
-const OCEAN = 'sws-sample:gallery/ocean-moon.jpg';
-const PIXEL = 'sws-sample:gallery/pixel-forest.jpg';
-const AURORA = 'sws-sample:backdrops/aurora-mesh.jpg';
+const STREAMER_1 = 'sws-sample:gallery/streamer-1.jpg';
+const STREAMER_2 = 'sws-sample:gallery/streamer-2.jpg';
+const CUTE = 'sws-sample:backdrops/cute.jpg';
+const BLUEPRINT = 'sws-sample:backdrops/blueprint.jpg';
+const RETIRED = 'sws-sample:backdrops/aurora-mesh.jpg';
 
 function snapshot(): WidgetSnapshot {
   return {
     schemaVersion: 1, name: 'Sample fixture',
     widget: {html: '<main id="widget"></main>', css: 'body{margin:0}', js: '', fields: {image: {type: 'image-input', value: ''}, gallery: {type: 'image-input', multiple: true, value: []}, title: {type: 'text', value: 'Title'}}, viewport: {width: 320, height: 240}},
-    channel: {}, themes: [], fixtures: [{schemaVersion: 1, id: 'avatars', name: 'Avatars', events: [{atMs: 10, listener: 'avatar', event: {data: {avatar: PIXEL}}}]}],
+    channel: {}, themes: [], fixtures: [{schemaVersion: 1, id: 'avatars', name: 'Avatars', events: [{atMs: 10, listener: 'avatar', event: {data: {avatar: CUTE}}}]}],
     scenes: [
-      {schemaVersion: 1, id: 'hero', name: 'Hero', fixture: 'avatars', fieldData: {image: NEON, gallery: [OCEAN, NEON]}, background: {id: 'aurora', image: AURORA, color: '#2e2b52'}},
-      {schemaVersion: 1, id: 'other', name: 'Other', fieldData: {image: 'sws-sample:gallery/cozy-desk.jpg'}}
+      {schemaVersion: 1, id: 'hero', name: 'Hero', fixture: 'avatars', fieldData: {image: STREAMER_1, gallery: [STREAMER_2, STREAMER_1]}, background: {id: 'blueprint', image: BLUEPRINT, color: '#0d4474'}},
+      {schemaVersion: 1, id: 'other', name: 'Other', fieldData: {image: 'sws-sample:backdrops/patterns.jpg'}}
     ],
-    scenarios: [], recipes: [{schemaVersion: 1, id: 'matrix', name: 'Matrix', scenes: ['hero'], matrix: {backgrounds: [{id: 'prism', image: 'sws-sample:backdrops/prism-sky.jpg'}]}}], assets: []
+    scenarios: [], recipes: [{schemaVersion: 1, id: 'matrix', name: 'Matrix', scenes: ['hero'], matrix: {backgrounds: [{id: 'plants', image: 'sws-sample:backdrops/plants.jpg'}]}}], assets: []
   };
 }
 function assetMapOf(html: string): Record<string, string> {
@@ -59,12 +60,12 @@ test('import keeps sample references literal, pins their hashes, and captures no
   assert.deepEqual(prepared.assets, []);
   assert.equal(store.items.size, 0, 'samples must not be written to Blob');
   const hero = prepared.snapshot.scenes[0]!;
-  assert.equal(hero.fieldData?.image, NEON);
-  assert.deepEqual(hero.fieldData?.gallery, [OCEAN, NEON]);
-  assert.equal(hero.background?.image, AURORA);
-  assert.equal(prepared.snapshot.recipes[0]?.matrix?.backgrounds?.[0]?.image, 'sws-sample:backdrops/prism-sky.jpg');
-  assert.deepEqual(Object.keys(prepared.sampleMedia ?? {}), [AURORA, 'sws-sample:backdrops/prism-sky.jpg', 'sws-sample:gallery/cozy-desk.jpg', NEON, OCEAN, PIXEL].sort());
-  assert.equal(prepared.sampleMedia?.[AURORA], sha(AURORA));
+  assert.equal(hero.fieldData?.image, STREAMER_1);
+  assert.deepEqual(hero.fieldData?.gallery, [STREAMER_2, STREAMER_1]);
+  assert.equal(hero.background?.image, BLUEPRINT);
+  assert.equal(prepared.snapshot.recipes[0]?.matrix?.backgrounds?.[0]?.image, 'sws-sample:backdrops/plants.jpg');
+  assert.deepEqual(Object.keys(prepared.sampleMedia ?? {}), [BLUEPRINT, CUTE, 'sws-sample:backdrops/patterns.jpg', 'sws-sample:backdrops/plants.jpg', STREAMER_1, STREAMER_2].sort());
+  assert.equal(prepared.sampleMedia?.[BLUEPRINT], sha(BLUEPRINT));
 
   const plain = await prepareSnapshot({...snapshot(), fixtures: [], scenes: [], recipes: []}, new MemoryStore(), 'p');
   assert.equal(plain.sampleMedia, undefined);
@@ -73,36 +74,38 @@ test('import keeps sample references literal, pins their hashes, and captures no
 test('import rejects unknown samples, samples in widget source, and samples saved as FIELDS defaults', async () => {
   const unknown = snapshot(); unknown.scenes[0]!.fieldData = {gallery: ['sws-sample:gallery/missing.jpg']};
   await assert.rejects(prepareSnapshot(unknown, new MemoryStore(), 'p'), /Unknown sample media reference: sws-sample:gallery\/missing\.jpg/);
+  const retired = snapshot(); retired.scenes[0]!.background = {id: 'aurora', image: RETIRED};
+  await assert.rejects(prepareSnapshot(retired, new MemoryStore(), 'p'), /^Error: Sample media reference sws-sample:backdrops\/aurora-mesh\.jpg was retired on 2026-09-29 and no longer ships\. See sample-media\/manifest\.json/);
   const malformed = snapshot(); malformed.scenes[0]!.background = {id: 'bad', image: 'sws-sample:../package.json'};
   await assert.rejects(prepareSnapshot(malformed, new MemoryStore(), 'p'), /Unknown sample media reference/);
-  const html = snapshot(); html.widget.html = `<img src="${NEON}">`;
+  const html = snapshot(); html.widget.html = `<img src="${STREAMER_1}">`;
   await assert.rejects(prepareSnapshot(html, new MemoryStore(), 'p'), /only in catalog values and scene backgrounds/);
-  const css = snapshot(); css.widget.css = `body{background:url("${AURORA}")}`;
+  const css = snapshot(); css.widget.css = `body{background:url("${BLUEPRINT}")}`;
   await assert.rejects(prepareSnapshot(css, new MemoryStore(), 'p'), /only in catalog values and scene backgrounds/);
-  const fields = snapshot(); fields.widget.fields = {image: {type: 'image-input', value: NEON}};
+  const fields = snapshot(); fields.widget.fields = {image: {type: 'image-input', value: STREAMER_1}};
   await assert.rejects(prepareSnapshot(fields, new MemoryStore(), 'p'), /cannot be saved as FIELDS defaults/);
 });
 
 test('a media array keeps its sample references literal and captures its widget asset paths', async () => {
   const source = snapshot();
   source.assets = [{path: 'studio/media/gallery/01-x.svg', content: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'}];
-  source.scenes[0]!.fieldData = {gallery: ['./studio/media/gallery/01-x.svg', NEON]};
+  source.scenes[0]!.fieldData = {gallery: ['./studio/media/gallery/01-x.svg', STREAMER_1]};
   const prepared = await prepareSnapshot(source, new MemoryStore(), 'p');
-  assert.deepEqual(prepared.snapshot.scenes[0]!.fieldData?.gallery, ['studio/media/gallery/01-x.svg', NEON]);
+  assert.deepEqual(prepared.snapshot.scenes[0]!.fieldData?.gallery, ['studio/media/gallery/01-x.svg', STREAMER_1]);
   assert.deepEqual(prepared.assets.map(asset => asset.path), ['studio/media/gallery/01-x.svg']);
-  source.scenes[0]!.fieldData = {gallery: [NEON, '/__sws/widget/studio/media/gallery/01-x.svg']};
+  source.scenes[0]!.fieldData = {gallery: [STREAMER_1, '/__sws/widget/studio/media/gallery/01-x.svg']};
   await assert.rejects(prepareSnapshot(source, new MemoryStore(), 'p'), /\/__sws\/widget\/studio\/media\/gallery\/01-x\.svg is a local Studio URL\. Use the widget-relative path studio\/media\/gallery\/01-x\.svg/);
-  source.scenes[0]!.fieldData = {gallery: [NEON, 'undeclared.png']};
+  source.scenes[0]!.fieldData = {gallery: [STREAMER_1, 'undeclared.png']};
   await assert.rejects(prepareSnapshot(source, new MemoryStore(), 'p'), /Missing asset: undeclared\.png/);
 });
 
 test('preview embeds only the samples the effective state and scene fixture use, as verified data URLs', async () => {
   const store = new MemoryStore();
   const prepared = await prepareSnapshot(snapshot(), store, 'p');
-  const html = await previewHtml(prepared, store, {...options, sceneId: 'hero', fieldData: {title: 'Override', gallery: ['sws-sample:gallery/space-nebula.jpg']}});
+  const html = await previewHtml(prepared, store, {...options, sceneId: 'hero', fieldData: {title: 'Override', gallery: ['sws-sample:backdrops/aero.jpg']}});
   const assetMap = assetMapOf(html);
   // The override replaces the scene array; fixture events add their avatar; other scenes and the matrix stay out.
-  assert.deepEqual(Object.keys(assetMap).sort(), [NEON, PIXEL, 'sws-sample:gallery/space-nebula.jpg'].sort());
+  assert.deepEqual(Object.keys(assetMap).sort(), [STREAMER_1, CUTE, 'sws-sample:backdrops/aero.jpg'].sort());
   for (const [reference, dataUrl] of Object.entries(assetMap)) {
     assert.match(dataUrl, /^data:image\/jpeg;base64,/);
     assert.equal(decodedSha(dataUrl), sha(reference));
@@ -110,16 +113,24 @@ test('preview embeds only the samples the effective state and scene fixture use,
   assert.equal(Object.keys(assetMapOf(await previewHtml(prepared, store, options))).length, 0, 'no scene means no embedded samples');
   const background = await previewBackground(prepared, store, {sceneId: 'hero'});
   assert.ok(background);
-  assert.equal(decodedSha(background), sha(AURORA));
-  assert.ok(!Object.keys(assetMap).includes(AURORA), 'the backdrop is sent once, as backgroundImage');
+  assert.equal(decodedSha(background), sha(BLUEPRINT));
+  assert.ok(!Object.keys(assetMap).includes(BLUEPRINT), 'the backdrop is sent once, as backgroundImage');
 });
 
 test('saved revisions fail clearly when a pinned sample changed instead of rendering other pixels', async () => {
   const store = new MemoryStore();
   const prepared = await prepareSnapshot(snapshot(), store, 'p');
-  const tampered = {...prepared, sampleMedia: {...prepared.sampleMedia, [NEON]: '0'.repeat(64), [AURORA]: '1'.repeat(64)}};
-  await assert.rejects(previewHtml(tampered, store, {...options, sceneId: 'hero'}), /Sample media changed since this revision was saved: sws-sample:gallery\/neon-city\.jpg/);
+  const tampered = {...prepared, sampleMedia: {...prepared.sampleMedia, [STREAMER_1]: '0'.repeat(64), [BLUEPRINT]: '1'.repeat(64)}};
+  await assert.rejects(previewHtml(tampered, store, {...options, sceneId: 'hero'}), /Sample media changed since this revision was saved: sws-sample:gallery\/streamer-1\.jpg/);
   await assert.rejects(previewBackground(tampered, store, {sceneId: 'hero'}), /Sample media changed since this revision was saved/);
+
+  // A revision saved before 2026-09-29 pinned a sample that was retired since: it says so instead of rendering.
+  const saved = structuredClone(prepared);
+  saved.snapshot.scenes[0]!.fieldData = {image: RETIRED};
+  saved.snapshot.scenes[0]!.background = {id: 'aurora', image: RETIRED};
+  saved.sampleMedia = {[RETIRED]: '541967b2ed55c6c6dafe1d6c6a8aa7a590f25dee38e99bb4be78233fc4be2663'};
+  await assert.rejects(previewHtml(saved, store, {...options, sceneId: 'hero'}), /sws-sample:backdrops\/aurora-mesh\.jpg was retired on 2026-09-29/);
+  await assert.rejects(previewBackground(saved, store, {sceneId: 'hero'}), /sws-sample:backdrops\/aurora-mesh\.jpg was retired on 2026-09-29/);
 });
 
 async function catalogCopy(root: string, entries: {reference: string; file: string}[], mutate?: (file: string) => Promise<void>): Promise<SampleMediaSource> {
@@ -136,7 +147,7 @@ async function catalogCopy(root: string, entries: {reference: string; file: stri
 test('an injected catalog enforces integrity and the shared 3 MB preview budget', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-sample-web-'));
   try {
-    const broken = await catalogCopy(join(root, 'broken'), [{reference: NEON, file: 'gallery/neon-city.jpg'}], file => writeFile(file, 'tampered'));
+    const broken = await catalogCopy(join(root, 'broken'), [{reference: STREAMER_1, file: 'gallery/streamer-1.jpg'}], file => writeFile(file, 'tampered'));
     await assert.rejects(prepareSnapshot(snapshot(), new MemoryStore(), 'p', broken), /does not match its recorded size and SHA-256/);
 
     const large = join(root, 'large');
@@ -195,12 +206,12 @@ test('materialized jobs never copy sample media into the widget', async () => {
 });
 
 test('editor helpers keep samples out of FIELDS and send only safe images to the stage', () => {
-  assert.deepEqual(splitFieldOverrides({title: 'x', image: NEON, gallery: [OCEAN]}, false), {persist: {title: 'x'}, temporary: {image: NEON, gallery: [OCEAN]}});
-  assert.deepEqual(splitFieldOverrides({image: NEON}, true), {persist: {image: NEON}, temporary: {}});
+  assert.deepEqual(splitFieldOverrides({title: 'x', image: STREAMER_1, gallery: [STREAMER_2]}, false), {persist: {title: 'x'}, temporary: {image: STREAMER_1, gallery: [STREAMER_2]}});
+  assert.deepEqual(splitFieldOverrides({image: STREAMER_1}, true), {persist: {image: STREAMER_1}, temporary: {}});
   const samples: SampleMediaSummary[] = manifest.items.map(item => ({reference: item.reference, kind: item.kind as 'gallery' | 'backdrop', label: item.reference, alt: '', width: 1, height: 1, color: item.color}));
-  assert.deepEqual(withBackgroundImage({id: 'bg', checkerboard: true}, AURORA, samples), {id: 'bg', checkerboard: true, color: '#2e2b52', image: AURORA});
-  assert.deepEqual(withBackgroundImage({id: 'bg', color: '#ffffff'}, AURORA, samples), {id: 'bg', color: '#ffffff', image: AURORA});
-  assert.deepEqual(withBackgroundImage({id: 'bg', color: '#ffffff', image: AURORA}, '', samples), {id: 'bg', color: '#ffffff'});
+  assert.deepEqual(withBackgroundImage({id: 'bg', checkerboard: true}, BLUEPRINT, samples), {id: 'bg', checkerboard: true, color: '#0d4474', image: BLUEPRINT});
+  assert.deepEqual(withBackgroundImage({id: 'bg', color: '#ffffff'}, BLUEPRINT, samples), {id: 'bg', color: '#ffffff', image: BLUEPRINT});
+  assert.deepEqual(withBackgroundImage({id: 'bg', color: '#ffffff', image: BLUEPRINT}, '', samples), {id: 'bg', color: '#ffffff'});
   assert.equal(stageBackgroundImage('data:image/jpeg;base64,AAAA'), 'url("data:image/jpeg;base64,AAAA")');
   for (const value of ['data:image/jpeg;base64,AAAA") , url("https://example.com/x', 'data:image/svg+xml;base64,AAAA', 'https://example.com/a.jpg', 'data:image/png,raw', undefined]) assert.equal(stageBackgroundImage(value), undefined, String(value));
 });
@@ -217,14 +228,14 @@ function workerRevision(pins?: Record<string, string>): Revision {
       fields: {gallery: {type: 'image-input', multiple: true, value: []}}, viewport: {width: 160, height: 120}, ready: {selector: '#widget', timeoutMs: 5000}
     },
     channel: {}, themes: [], fixtures: [],
-    scenes: [{schemaVersion: 1, id: 'default', name: 'Default', output: {width: 160, height: 120}, fieldData: {gallery: [NEON, PIXEL]}, background: {id: 'aurora', image: AURORA}, captureAtMs: 0}],
-    scenarios: [{schemaVersion: 1, id: 'samples', name: 'Samples', steps: [{action: 'assert', selector: '#gallery img[data-width="1600"]', count: 2}]}],
+    scenes: [{schemaVersion: 1, id: 'default', name: 'Default', output: {width: 160, height: 120}, fieldData: {gallery: [STREAMER_1, STREAMER_2]}, background: {id: 'blueprint', image: BLUEPRINT}, captureAtMs: 0}],
+    scenarios: [{schemaVersion: 1, id: 'samples', name: 'Samples', steps: [{action: 'assert', selector: '#gallery img[data-width="1672"]', count: 2}]}],
     recipes: [{schemaVersion: 1, id: 'image', name: 'Image', scenes: ['default'], outputs: {screenshots: true}}], assets: []
   };
-  return {id: 'revision-sample', projectId: 'project-sample', createdAt: new Date().toISOString(), snapshot: value, status: 'ready', diagnostics: [], prepared: {snapshot: value, assets: [], warnings: [], sampleMedia: pins ?? {[AURORA]: sha(AURORA), [NEON]: sha(NEON), [PIXEL]: sha(PIXEL)}}};
+  return {id: 'revision-sample', projectId: 'project-sample', createdAt: new Date().toISOString(), snapshot: value, status: 'ready', diagnostics: [], prepared: {snapshot: value, assets: [], warnings: [], sampleMedia: pins ?? {[BLUEPRINT]: sha(BLUEPRINT), [STREAMER_1]: sha(STREAMER_1), [STREAMER_2]: sha(STREAMER_2)}}};
 }
 
-test('local worker renders and tests sample media offline and rejects changed pins', {timeout: 120_000}, async () => {
+test('[browser] local worker renders and tests sample media offline and rejects changed pins', {timeout: 120_000}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-sample-worker-'));
   try {
     const store = new LocalStore(join(root, 'store'));
@@ -236,8 +247,8 @@ test('local worker renders and tests sample media offline and rejects changed pi
     assert.equal(rendered.status, 'completed', rendered.error);
     const manifestArtifact = rendered.artifacts.find(item => item.name.endsWith('manifest.json'))!;
     const renderManifest = JSON.parse(Buffer.from((await store.get(manifestArtifact.key))!.body).toString());
-    assert.equal(renderManifest.widget.sampleMediaHashes[AURORA], sha(AURORA));
-    const changed = await runJob({...job('test', 'all'), id: 'job-sample-changed'}, workerRevision({[NEON]: '0'.repeat(64)}), store);
+    assert.equal(renderManifest.widget.sampleMediaHashes[BLUEPRINT], sha(BLUEPRINT));
+    const changed = await runJob({...job('test', 'all'), id: 'job-sample-changed'}, workerRevision({[STREAMER_1]: '0'.repeat(64)}), store);
     assert.equal(changed.status, 'failed');
     assert.match(changed.error ?? '', /Sample media changed since this revision was saved/);
   } finally {await rm(root, {recursive: true, force: true});}
