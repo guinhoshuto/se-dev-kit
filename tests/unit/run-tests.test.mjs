@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {mkdir, mkdtemp, readFile, rm, stat, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
@@ -20,6 +20,20 @@ test("suites that start Chrome run one file at a time; every suite bounds a test
   assert.deepEqual(nodeArgs(SUITES.integration, ["b.test.mjs"]), [...bounded, "--test-concurrency=1", "b.test.mjs"]);
   assert.deepEqual(nodeArgs(SUITES.web, ["c.test.ts"]), ["--import", "tsx", ...bounded, "--test-skip-pattern=^\\[browser\\] ", "c.test.ts"]);
   assert.deepEqual(nodeArgs(SUITES["web:browser"], ["d.test.ts"]), ["--import", "tsx", ...bounded, "--test-concurrency=1", "--test-name-pattern=^\\[browser\\] ", "d.test.ts"]);
+});
+
+test("a web test that calls runJob starts Chrome, so its name starts with [browser] and it runs behind the gate", async () => {
+  const directory = new URL("../web/", import.meta.url);
+  let checked = 0;
+  for (const file of (await readdir(directory)).filter((name) => name.endsWith(".test.ts"))) {
+    // Each top-level test starts on a line that begins with `test(` and runs until the next one.
+    for (const block of (await readFile(new URL(file, directory), "utf8")).split(/^(?=test\()/m).slice(1)) {
+      if (!block.includes("runJob(")) continue;
+      checked += 1;
+      assert.match(block, /^test\(\s*['"`]\[browser\] /, `${file}: ${block.slice(0, 100)}`);
+    }
+  }
+  assert.ok(checked >= 6, `found ${checked} web tests that call runJob; the split no longer finds them`);
 });
 
 test("a repeated file keeps its suite, and only tsx's cache may stay in a suite's temporary folder", () => {
