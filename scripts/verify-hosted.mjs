@@ -2,11 +2,12 @@
 /** Explicit, bounded hosted API verification. Creates synthetic data; never deletes remote data. */
 import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
-import {lstat, mkdir, mkdtemp, readFile, realpath, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, mkdtemp, readdir, readFile, realpath, writeFile} from 'node:fs/promises';
 import {basename, dirname, isAbsolute, relative, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
 import {inflateSync} from 'node:zlib';
+import {SUITES, nodeArgs} from './run-tests.mjs';
 
 const exec = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,17 +22,32 @@ const FONT_MISSING_FAMILY = 'Studio Verification Missing Family';
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const pause = ms => new Promise(done => setTimeout(done, ms));
 const check = (condition, message) => {if (!condition) throw new Error(message);};
+// --integration: the integration tests inside a Sandbox cloned from the renderer snapshot, next to
+// its node_modules, HeadlessChrome and FFmpeg. The tests start their own loopback servers, which
+// deny-all allows, and read these folders besides dist/.
+export const SANDBOX_ROOT = '/vercel/sandbox/studio';
+const SANDBOX_TMP = '/tmp/sws-integration';
+const INTEGRATION_FOLDERS = ['dist', 'presets', 'sample-media', 'examples/basic-chat', 'tests/fixtures'];
+const INTEGRATION_DIR = 'tests/integration';
+const INTEGRATION_TEST = /^[a-z0-9-]+\.test\.mjs$/;
+const INTEGRATION_LIMIT_MS = 15 * 60_000;
+const SANDBOX_FLAGS = ['--snapshot-id', '--expected-team-id', '--expected-project-id'];
 
 export function parseOptions(args) {
-  const options = {allowHosted: false, pollMs: 5000, ffprobe: process.env.STUDIO_FFPROBE_PATH || 'ffprobe'};
-  const values = new Map([['--base-url', 'baseUrl'], ['--resume', 'resume'], ['--ffprobe', 'ffprobe']]);
+  const options = {allowHosted: false, pollMs: 5000, ffprobe: process.env.STUDIO_FFPROBE_PATH || 'ffprobe', tests: []};
+  const values = new Map([['--base-url', 'baseUrl'], ['--resume', 'resume'], ['--ffprobe', 'ffprobe'], ['--snapshot-id', 'snapshotId'], ['--expected-team-id', 'expectedTeamId'], ['--expected-project-id', 'expectedProjectId']]);
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--allow-hosted') options.allowHosted = true;
     else if (arg === '--fonts') options.fonts = true;
-    else if (values.has(arg)) {
+    else if (arg === '--integration') options.integration = true;
+    else if (arg === '--allow-sandbox') options.allowSandbox = true;
+    else if (arg === '--test') {
+      check(args[index + 1] && !args[index + 1].startsWith('--'), '--test requires a value.');
+      options.tests.push(args[++index]);
+    } else if (values.has(arg)) {
       check(args[index + 1] && !args[index + 1].startsWith('--'), `${arg} requires a value.`);
       const key = values.get(arg);
       check(!seen.has(arg), `${arg} may only appear once.`);
@@ -40,6 +56,16 @@ export function parseOptions(args) {
     } else throw new Error('Unknown argument. Run with --help for supported options.');
   }
   if (options.help) return options;
+  if (options.integration) {
+    check(options.allowSandbox, '--integration clones the renderer snapshot and consumes Sandbox quota: pass --allow-sandbox explicitly.');
+    check(SANDBOX_FLAGS.every(flag => seen.has(flag)), '--integration requires --snapshot-id, --expected-team-id, and --expected-project-id.');
+    check([options.snapshotId, options.expectedTeamId, options.expectedProjectId].every(value => ID.test(value)), 'Snapshot, team, and project IDs must match [a-zA-Z0-9_-]{1,100}.');
+    check(!options.fonts && !options.allowHosted && !['--base-url', '--resume', '--ffprobe'].some(flag => seen.has(flag)), '--integration calls no hosted API: drop --base-url, --resume, --ffprobe, --fonts, and --allow-hosted.');
+    check(new Set(options.tests).size === options.tests.length, 'Each --test may only appear once.');
+    for (const name of options.tests) check(INTEGRATION_TEST.test(name), `--test takes a file name from ${INTEGRATION_DIR}, such as font-readiness.test.mjs.`);
+    return options;
+  }
+  check(!options.allowSandbox && !options.tests.length && !SANDBOX_FLAGS.some(flag => seen.has(flag)), '--allow-sandbox, --test, --snapshot-id, --expected-team-id, and --expected-project-id belong to --integration.');
   check(options.baseUrl, '--base-url is required, including when resuming.');
   let url;
   try {url = new URL(options.baseUrl);} catch {throw new Error('--base-url must be an absolute HTTP(S) origin.');}
@@ -187,11 +213,11 @@ async function probeVideo(executable, path) {
   return {codec: video[0].codec_name, width: video[0].width, height: video[0].height, durationSeconds: duration, audioStreams: 0};
 }
 
-async function privateRoot() {
-  await mkdir(PRIVATE_ROOT, {recursive: true, mode: 0o700});
-  const info = await lstat(PRIVATE_ROOT);
+async function privateRoot(path = PRIVATE_ROOT) {
+  await mkdir(path, {recursive: true, mode: 0o700});
+  const info = await lstat(path);
   check(info.isDirectory() && !info.isSymbolicLink(), '.studio-data must be a real directory.');
-  return realpath(PRIVATE_ROOT);
+  return realpath(path);
 }
 
 async function readAccess(path, root, origin) {
@@ -377,10 +403,143 @@ export async function verify(options) {
   return report;
 }
 
+/**
+ * The files the Sandbox receives, as repository-relative POSIX paths: package.json (the example
+ * config imports the package by name), the folders the tests read, and the selected test files
+ * (all of them by default). Dotfiles are skipped and symbolic links refused, as in job uploads.
+ */
+export async function integrationUploads(tests = [], root = ROOT) {
+  const available = (await readdir(resolve(root, INTEGRATION_DIR))).filter(name => INTEGRATION_TEST.test(name)).sort();
+  const selected = tests.length ? tests : available;
+  for (const name of selected) check(available.includes(name), `There is no ${INTEGRATION_DIR}/${name}.`);
+  const files = ['package.json'];
+  const walk = async folder => {
+    const entries = (await readdir(resolve(root, folder), {withFileTypes: true})).sort((a, b) => a.name < b.name ? -1 : 1);
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const path = `${folder}/${entry.name}`;
+      check(!entry.isSymbolicLink(), `Refusing to upload a symbolic link: ${path}`);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile()) files.push(path);
+    }
+  };
+  for (const folder of INTEGRATION_FOLDERS) await walk(folder);
+  files.push(...selected.map(name => `${INTEGRATION_DIR}/${name}`));
+  return {tests: selected, files};
+}
+
+/** The test run in the Sandbox: the integration suite's own node --test arguments, the snapshot's browser, and FFmpeg first on PATH. */
+export function integrationCommand(tests) {
+  return {
+    cmd: 'sh',
+    args: ['-c', `mkdir -p "$TMPDIR" && export PATH="${SANDBOX_ROOT}/tools:$PATH" && exec node "$@"`, 'sh', ...nodeArgs(SUITES.integration, tests.map(name => `${INTEGRATION_DIR}/${name}`))],
+    cwd: SANDBOX_ROOT,
+    env: {SE_WIDGET_STUDIO_BROWSER: `${SANDBOX_ROOT}/browser/chrome`, PLAYWRIGHT_BROWSERS_PATH: `${SANDBOX_ROOT}/browsers`, TMPDIR: SANDBOX_TMP}
+  };
+}
+
+/**
+ * The spec reporter's totals. Every skip in the integration tests means "no browser or no FFmpeg",
+ * so a skipped test, like an empty run, did not test the Sandbox's Chromium and fails the check.
+ */
+export function integrationSummary(output, exitCode) {
+  const total = name => {
+    const match = [...output.matchAll(new RegExp(`^ℹ ${name} (\\d+)$`, 'gm'))].at(-1);
+    return match ? Number(match[1]) : undefined;
+  };
+  const summary = Object.fromEntries(['tests', 'pass', 'fail', 'cancelled', 'skipped'].map(name => [name, total(name)]));
+  const failed = [...new Set([...output.matchAll(/^✖ (.+?)(?: \([\d.]+ms\))?$/gm)].map(match => match[1]).filter(name => name !== 'failing tests:'))];
+  const problems = [];
+  if (exitCode !== 0) problems.push(`node --test exited with ${exitCode}`);
+  if (summary.tests === undefined) problems.push('the output has no test summary');
+  else if (summary.tests === 0) problems.push('no test ran');
+  if (summary.fail) problems.push(`${summary.fail} failed`);
+  if (summary.cancelled) problems.push(`${summary.cancelled} cancelled`);
+  if (summary.skipped) problems.push(`${summary.skipped} skipped, so the Sandbox had no browser or no FFmpeg for them`);
+  return {...summary, failed, problems};
+}
+
+/** The payload of a Vercel OIDC token, read locally to refuse a wrong team or project early; Vercel verifies the signature. */
+export function oidcClaims(token) {
+  check(token, 'VERCEL_OIDC_TOKEN is required. Pull a fresh project-scoped development identity (vercel env pull) first.');
+  const parts = token.split('.');
+  check(parts.length === 3, 'VERCEL_OIDC_TOKEN is not a JWT.');
+  try {return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));}
+  catch {throw new Error('VERCEL_OIDC_TOKEN has an unreadable payload.');}
+}
+
+/**
+ * Runs the integration tests on the renderer snapshot's HeadlessChrome, to reproduce a failure
+ * of that build without downloading a browser here. Uploads this checkout's built dist/, never
+ * installs or downloads anything in the Sandbox, and stops the Sandbox whatever happens.
+ */
+export async function verifyIntegration(options, {Sandbox, env = process.env, root = ROOT, out = process.stdout, log: print = console.log} = {}) {
+  const claims = oidcClaims(env.VERCEL_OIDC_TOKEN);
+  check(claims.owner_id === options.expectedTeamId && claims.project_id === options.expectedProjectId, 'The Vercel identity does not match the explicitly selected team and project.');
+  check(typeof claims.exp !== 'number' || claims.exp * 1000 > Date.now() + INTEGRATION_LIMIT_MS, 'VERCEL_OIDC_TOKEN expires before the tests could end. Pull a fresh one.');
+  let build;
+  try {build = JSON.parse(await readFile(resolve(root, 'dist/build-info.json'), 'utf8'));}
+  catch {throw new Error('dist/ is not built. Run npm run build:engine: the Sandbox runs this checkout\'s dist/.');}
+  const {tests, files} = await integrationUploads(options.tests, root);
+  const lockSha256 = createHash('sha256').update(await readFile(resolve(root, 'package-lock.json'))).digest('hex');
+  Sandbox ??= (await import('@vercel/sandbox')).Sandbox;
+  const output = await mkdtemp(resolve(await privateRoot(resolve(root, '.studio-data')), 'sandbox-integration-'));
+  const report = {schemaVersion: 1, mode: 'integration', snapshotId: options.snapshotId, startedAt: new Date().toISOString(), status: 'running', build: {commit: build.commit, dirty: build.dirty}, tests, uploadedFiles: files.length, checks: [], warnings: []};
+  let phase = 'Sandbox creation'; let sandbox; let log = '';
+  try {
+    sandbox = await Sandbox.create({source: {type: 'snapshot', snapshotId: options.snapshotId}, networkPolicy: 'deny-all', timeout: INTEGRATION_LIMIT_MS + 5 * 60_000, persistent: false, resources: {vcpus: 2}});
+    check(sandbox.sourceSnapshotId === options.snapshotId, 'The Sandbox did not start from the requested snapshot.');
+    phase = 'snapshot checks';
+    const json = async path => {
+      const bytes = await sandbox.readFileToBuffer({path});
+      check(bytes, `The snapshot has no ${path}.`);
+      return JSON.parse(bytes.toString('utf8'));
+    };
+    const run = async (cmd, args) => {
+      const result = await sandbox.runCommand({cmd, args, cwd: SANDBOX_ROOT, timeoutMs: 60_000});
+      check(result.exitCode === 0, `${cmd} failed in the Sandbox: ${(await result.stderr()).slice(-500)}`);
+      return (await result.stdout()).trim();
+    };
+    const metadata = await json(`${SANDBOX_ROOT}/snapshot.json`);
+    check(metadata.target?.teamId === options.expectedTeamId && metadata.target?.projectId === options.expectedProjectId && metadata.networkPolicy === 'deny-all', 'Snapshot metadata does not match the expected target or network policy.');
+    const browser = await json(`${SANDBOX_ROOT}/browser/version.json`);
+    Object.assign(report, {chromium: browser.chromium, playwright: browser.playwright, node: await run('node', ['--version'])});
+    report.snapshot = {createdAt: metadata.createdAt, lockMatches: metadata.lockSha256 === lockSha256};
+    if (!report.snapshot.lockMatches) report.warnings.push('The snapshot installed its dependencies from another package-lock.json: a failure may come from a dependency this checkout no longer matches.');
+    check(await run('node', ['--input-type=module', '-e', "try{await fetch('https://example.com',{signal:AbortSignal.timeout(5000)});process.exit(7)}catch{process.stdout.write('blocked')}"]) === 'blocked', 'The Sandbox reached the internet: deny-all is not in force.');
+    report.checks.push('snapshot of the expected team and project, deny-all, outbound network blocked');
+    phase = 'upload';
+    for (let index = 0; index < files.length; index += 16) {
+      await sandbox.writeFiles(await Promise.all(files.slice(index, index + 16).map(async path => ({path: `${SANDBOX_ROOT}/${path}`, content: await readFile(resolve(root, path))}))));
+    }
+    report.checks.push(`${files.length} files uploaded, from dist/ built at ${build.commit ?? 'an unknown commit'}${build.dirty ? ' with uncommitted changes' : ''}`);
+    phase = 'tests';
+    const command = await sandbox.runCommand({...integrationCommand(tests), detached: true, timeoutMs: INTEGRATION_LIMIT_MS});
+    for await (const line of command.logs()) { log += line.data; out.write(line.data); }
+    const summary = integrationSummary(log, (await command.wait()).exitCode);
+    const left = await run('sh', ['-c', `ls -A ${SANDBOX_TMP} 2>/dev/null || true`]);
+    if (left) summary.problems.push(`temporary folders left behind: ${left.split('\n').slice(0, 5).join(', ')}`);
+    report.summary = summary;
+    check(!summary.problems.length, `Integration tests on Chromium ${report.chromium}: ${summary.problems.join('; ')}.${summary.failed.length ? ` Failed: ${summary.failed.join(' | ')}` : ''}`);
+    report.checks.push(`${summary.pass} of ${summary.tests} integration tests passed on Chromium ${report.chromium} (${report.node})`);
+    report.status = 'passed';
+  } catch (error) {
+    Object.assign(report, {status: 'failed', phase, error: error instanceof Error ? error.message : String(error)});
+  } finally {
+    await sandbox?.stop().catch(() => {});
+    report.finishedAt = new Date().toISOString();
+    await writeFile(resolve(output, 'output.log'), log, {flag: 'wx', mode: 0o600});
+    await writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2) + '\n', {flag: 'wx', mode: 0o600});
+    print(JSON.stringify({status: report.status, output, chromium: report.chromium, tests: report.summary?.tests, pass: report.summary?.pass, ...(report.error ? {phase: report.phase, error: report.error} : {})}));
+  }
+  return report;
+}
+
 async function main() {
   const options = parseOptions(process.argv.slice(2));
   if (options.help) {
     console.log(`Usage: node scripts/verify-hosted.mjs --base-url <origin> [--allow-hosted] [--fonts] [--resume <private-file>] [--ffprobe <executable>]
+       node scripts/verify-hosted.mjs --integration --allow-sandbox --snapshot-id <snapshot> --expected-team-id <team> --expected-project-id <project> [--test <file>]...
 
 Creates one synthetic project and at most three jobs: smoke, 320×240 PNG, and one-second MP4.
 With --fonts, a synthetic Google Fonts project instead: a render, a second render of the same
@@ -393,10 +552,18 @@ Evidence and a private mode-0600 resume access file are saved under ignored .stu
 Use --resume .studio-data/hosted-verification-.../access.private.json to reuse the project and jobs.
 Existing artifacts are never overwritten; resumed evidence goes into a new directory.
 No remote data is deleted. Do not publish access.private.json. Project tokens and signed URLs are never logged.
-This verifies the API and media pipeline, not interactive editor behavior or real StreamElements/OBS.`);
+This verifies the API and media pipeline, not interactive editor behavior or real StreamElements/OBS.
+
+With --integration, no hosted API is called: a Vercel Sandbox cloned from the renderer snapshot
+(deny-all) receives this checkout's built dist/ and runs tests/integration on the snapshot's
+HeadlessChrome and FFmpeg, to reproduce a failure of that Chromium without downloading a browser.
+Every integration test runs unless --test names files. Build dist/ first (npm run build:engine).
+Needs VERCEL_OIDC_TOKEN for the expected team and project, and consumes Sandbox quota. A failed,
+cancelled, or skipped test, or an empty run, fails the check. The output and report.json are
+saved under ignored .studio-data/sandbox-integration-*/.`);
     return;
   }
-  const report = await verify(options);
+  const report = options.integration ? await verifyIntegration(options) : await verify(options);
   if (report.status !== 'passed') process.exitCode = 1;
 }
 

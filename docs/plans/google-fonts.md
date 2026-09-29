@@ -763,7 +763,7 @@ By default, Claude Code deletes local transcripts after 30 days. Extract what is
   - how `document.fonts.status` moves when layout is forced;
   - whether `MessageChannel` stays outside Playwright's fake clock;
   - whether the `fillText`/`measureText` wrapper works.
-  The fonts variant of `verify-hosted` confirms these.
+  The fonts variant of `verify-hosted` confirms these end to end. Since 2026-09-28, `verify-hosted --integration` runs the integration tests that cover them (`stylesheet-readiness`, `font-readiness`, `google-fonts-render`) on that Chromium, in a clone of the snapshot, and names the test that fails.
 - **Several passes in one Sandbox:**
   - Can a detached `runCommand` run again after the first command finishes?
   - Does `writeFiles` accept new files after that?

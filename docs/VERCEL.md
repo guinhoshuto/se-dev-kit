@@ -49,6 +49,19 @@ node scripts/verify-sandbox-snapshot.mjs --allow-sandbox \
 
 The command verifies the embedded target metadata, launches Chromium, runs FFmpeg/ffprobe, confirms an external fetch is blocked, and stops the temporary clone. Then set `STUDIO_SANDBOX_SNAPSHOT_ID` for Production and Preview and redeploy.
 
+To reproduce a failure of the snapshot's HeadlessChrome without downloading that browser, run the integration tests inside a clone of the snapshot:
+
+```sh
+npm run build:engine
+node scripts/verify-hosted.mjs --integration --allow-sandbox \
+  --snapshot-id <snapshot-id> \
+  --expected-team-id <vercel-team-id> \
+  --expected-project-id <vercel-project-id> \
+  [--test font-readiness.test.mjs]
+```
+
+It makes the same identity, target, and network checks, then uploads this checkout's built `dist/`, the selected files of `tests/integration` (all of them by default), and the folders they read, with nothing installed or downloaded. It runs them with `node --test` on the snapshot's Chromium and FFmpeg under the snapshot's Node 22, streams the output, and stops the clone. A failed, cancelled, or skipped test, or an empty run, fails the check. The output and `report.json` are saved to `.studio-data/sandbox-integration-*/`, and a snapshot built from another `package-lock.json` is reported as a warning.
+
 ## Local mode and intermediate video
 
 Use `STUDIO_STORAGE=local` and `STUDIO_EXECUTION=local` outside Vercel. Jobs run in a separate credential-stripped Node process with a ten-minute timeout; the local Next process must remain running. Install Chrome and FFmpeg/ffprobe yourself or point `SE_WIDGET_STUDIO_BROWSER`, `STUDIO_FFMPEG_PATH`, and `STUDIO_FFPROBE_PATH` at existing executables. No downloads happen during rendering.
