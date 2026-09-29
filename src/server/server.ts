@@ -9,7 +9,7 @@ import type {JsonObject, JsonValue, ResolvedProject} from "../types.js";
 import {StudioError, toErrorMessage} from "../shared/errors.js";
 import {assetUrlPath, buildAssetMap, lookupAsset, type AssetEntry} from "./assets.js";
 import {renderCapturePage} from "./capture-page.js";
-import {renderTutorialPage} from "./tutorial-page.js";
+import {EDITOR_FONT_FILES, renderTutorialPage} from "./tutorial-page.js";
 import {renderFrameDocument} from "./html.js";
 import {loadProject} from "../config/load.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
@@ -61,7 +61,8 @@ const uiAssets = new Map([
   ["capture-host.js", resolve(distributionRoot, "studio-ui/capture-host.js")],
   ["tutorial-host.js", resolve(distributionRoot, "studio-ui/tutorial-host.js")],
   ["tutorial-camera.js", resolve(distributionRoot, "studio-ui/tutorial-camera.js")],
-  ["sample-media.js", resolve(distributionRoot, "studio-ui/sample-media.js")]
+  ["sample-media.js", resolve(distributionRoot, "studio-ui/sample-media.js")],
+  ...EDITOR_FONT_FILES.map((file) => [`fonts/${file}`, resolve(distributionRoot, "studio-ui/fonts", file)] as const)
 ]);
 
 function commonHeaders(response: ServerResponse): void {
@@ -400,7 +401,7 @@ export async function startStudioServer(
           send(request, response, 404, "text/plain; charset=utf-8", "Not Found\n", controlHeaders);
           return;
         }
-        const extension = name.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
+        const extension = name.endsWith(".css") ? "text/css; charset=utf-8" : name.endsWith(".woff2") ? "font/woff2" : "text/javascript; charset=utf-8";
         send(request, response, 200, extension, await readFile(filePath), controlHeaders);
         return;
       }

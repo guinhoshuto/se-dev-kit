@@ -244,6 +244,110 @@ test("colorpicker steps open the md-color-picker dialog on stage and commit the 
   for (const [name, rect] of Object.entries(short.targets)) assert.ok(inside(rect, 1920, 560), `${name} target in a short editor`);
 });
 
+test("the editor replica draws its UI in the vendored Nunito Sans and its chat in Inter, loaded before setup returns", {timeout: 180_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const scene = project.scenes.find((item) => item.id === "tutorial-editor").value;
+  const base = project.recipes.find((item) => item.id === "tutorial-setup").value.outputs.video;
+  const video = {
+    ...base,
+    tutorial: {...base.tutorial, autoZoom: false, steps: [{action: "selectLayer"}, {action: "chat", user: "Mira", text: "hi"}, {action: "wait", ms: 300}]}
+  };
+  const timeline = compileVariantTutorial(project, {id: "fonts", scene}, video);
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+  });
+  const opened = await openScene(project, server, browser, scene, {
+    host: "tutorial",
+    camera: tutorialCamera(timeline),
+    background: {id: "tutorial-editor", color: "transparent"}
+  });
+  t.after(() => opened.context.close());
+  const {page} = opened;
+
+  // As setup returns, before any frame: both unicode ranges of both families are loaded, not only
+  // the faces the first layout happened to need.
+  const faces = await page.evaluate(async (options) => {
+    await window.__SWS_TUTORIAL__.setup(options);
+    const found = [];
+    document.fonts.forEach((face) => found.push(`${face.family.replaceAll('"', "")} ${face.status}`));
+    return found.sort();
+  }, {timeline, menu: EMULATE_MENU, viewport: opened.resolved.viewport, output: opened.resolved.output});
+  assert.deepEqual(faces, ["Inter Variable loaded", "Inter Variable loaded", "Nunito Sans Variable loaded", "Nunito Sans Variable loaded"]);
+
+  // The fonts Chrome actually drew with, not the CSS stack: web fonts named Nunito Sans and Inter.
+  await page.evaluate((time) => window.__SWS_TUTORIAL__.render(time), timeline.endMs - 1);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
+  const {root} = await cdp.send("DOM.getDocument", {depth: -1});
+  const drawnWith = async (selector) => {
+    const {nodeId} = await cdp.send("DOM.querySelector", {nodeId: root.nodeId, selector});
+    assert.ok(nodeId, `${selector} exists`);
+    return (await cdp.send("CSS.getPlatformFontsForNode", {nodeId})).fonts;
+  };
+  for (const [selector, family] of [["#se-toolbar .title", /^Nunito Sans/], ["#se-sidebar .se-section", /^Nunito Sans/], ["#se-chat .msg .name", /^Inter/]]) {
+    const fonts = await drawnWith(selector);
+    assert.ok(fonts.length > 0 && fonts.every((font) => font.isCustomFont && family.test(font.familyName)), `${selector}: ${JSON.stringify(fonts)}`);
+  }
+
+  // A replica without its font faces fails the setup instead of drawing in a fallback font.
+  const refused = await page.evaluate(async (options) => {
+    const style = document.querySelector("style");
+    style.textContent = style.textContent.replace(/@font-face \{[^}]*\}/g, "");
+    try {
+      await window.__SWS_TUTORIAL__.setup(options);
+      return "resolved";
+    } catch (error) {
+      return error.message;
+    }
+  }, {timeline, menu: EMULATE_MENU, viewport: opened.resolved.viewport, output: opened.resolved.output});
+  assert.match(refused, /declares no Nunito Sans Variable or Inter Variable font face/);
+});
+
+test("an editor font the server does not deliver fails the tutorial setup, naming the fonts route", {timeout: 180_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const scene = project.scenes.find((item) => item.id === "tutorial-editor").value;
+  const base = project.recipes.find((item) => item.id === "tutorial-setup").value.outputs.video;
+  const video = {...base, tutorial: {...base.tutorial, autoZoom: false, steps: [{action: "selectLayer"}, {action: "wait", ms: 300}]}};
+  const timeline = compileVariantTutorial(project, {id: "missing-font", scene}, video);
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+  });
+  const opened = await openScene(project, server, browser, scene, {
+    host: "tutorial",
+    camera: tutorialCamera(timeline),
+    background: {id: "tutorial-editor", color: "transparent"}
+  });
+  t.after(() => opened.context.close());
+  // Latin Extended is never needed before setup, so its request is still ahead.
+  await opened.page.route("**/__sws/ui/fonts/inter-latin-ext-wght-normal.woff2", (route) => route.fulfill({status: 404, body: ""}));
+  const outcome = await opened.page.evaluate(async (options) => {
+    try {
+      await window.__SWS_TUTORIAL__.setup(options);
+      return "resolved";
+    } catch (error) {
+      return error.message;
+    }
+  }, {timeline, menu: EMULATE_MENU, viewport: opened.resolved.viewport, output: opened.resolved.output});
+  assert.match(outcome, /\(Inter Variable, U\+0?100-0?2BA.*\) failed to load from \/__sws\/ui\/fonts\//);
+});
+
 test("auto zoom frames are a function of time and keep popups, captions, and the widget in view", {timeout: 300_000}, async (t) => {
   const detection = await detectBrowser();
   if (!detection.executablePath) {
@@ -274,9 +378,9 @@ test("auto zoom frames are a function of time and keep popups, captions, and the
   for (let time = 0; time <= timeline.endMs; time += 100) probes.push(time);
 
   // Renders `times` in order after a fresh setup and records the frames at `record` times.
-  const pass = (times, record, crop = null) => page.evaluate(({options, times, record}) => {
+  const pass = (times, record, crop = null) => page.evaluate(async ({options, times, record}) => {
     const host = window.__SWS_TUTORIAL__;
-    host.setup(options);
+    await host.setup(options);
     const wanted = new Set(record);
     const box = (element) => {
       if (!element) return null;

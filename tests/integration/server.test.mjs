@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import {readFile} from "node:fs/promises";
 import {request as httpRequest} from "node:http";
 import {fileURLToPath} from "node:url";
@@ -187,6 +188,35 @@ test("the frame server serves the frame runtime modules from a fixed list, inclu
     assert.match(frame, /from "\.\/google-fonts-url\.js"/);
     for (const path of ["/__sws/runtime/frame.d.ts", "/__sws/runtime/frame.js.map", "/__sws/runtime/", "/__sws/runtime/frame"]) {
       assert.equal((await requestBuffer(`${server.frameOrigin}${path}`)).status, 404, path);
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test("the control server serves exactly the fonts the tutorial page declares, with the vendored bytes", async () => {
+  // src/studio-ui/fonts/README.md: Nunito Sans and Inter, Latin and Latin Extended, from fontsource 5.3.0.
+  const vendored = {
+    "nunito-sans-latin-wght-normal.woff2": "29e3890496844a9ea81975c52771c587c872b4eb317026422d1995b88d21b57d",
+    "nunito-sans-latin-ext-wght-normal.woff2": "c648ee5bfda70d44b9fb628f4114d1cc4f984d050cbb4881052237ede3638a2e",
+    "inter-latin-wght-normal.woff2": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62",
+    "inter-latin-ext-wght-normal.woff2": "34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956"
+  };
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  try {
+    const page = (await requestBuffer(`${server.origin}/__sws/tutorial`)).body.toString("utf8");
+    const declared = [...page.matchAll(/url\("\/__sws\/ui\/fonts\/([\w.-]+)"\)/g)].map((match) => match[1]);
+    assert.deepEqual([...declared].sort(), Object.keys(vendored).sort());
+    for (const file of declared) {
+      const response = await requestBuffer(`${server.origin}/__sws/ui/fonts/${file}`);
+      assert.equal(response.status, 200, file);
+      assert.equal(response.headers["content-type"], "font/woff2", file);
+      assert.equal(createHash("sha256").update(response.body).digest("hex"), vendored[file], file);
+    }
+    // The route is a fixed list: the licenses and the folder itself are not served.
+    for (const path of ["fonts/Inter-OFL.txt", "fonts/README.md", "fonts/", "fonts"]) {
+      assert.equal((await requestBuffer(`${server.origin}/__sws/ui/${path}`)).status, 404, path);
     }
   } finally {
     await server.close();

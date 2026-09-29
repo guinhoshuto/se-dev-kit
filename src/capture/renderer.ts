@@ -581,7 +581,7 @@ async function renderVideoFrames(options: {
         crop: options.variant.scene.crop ?? null
       };
       await opened.page.evaluate(
-        (value) => (window as unknown as {__SWS_TUTORIAL__: {setup: (options: unknown) => void}}).__SWS_TUTORIAL__.setup(value),
+        (value) => (window as unknown as {__SWS_TUTORIAL__: {setup: (options: unknown) => Promise<void>}}).__SWS_TUTORIAL__.setup(value),
         setup
       );
     }

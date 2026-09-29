@@ -14,6 +14,8 @@ for (const [source, destination] of copies) {
   await mkdir(dirname(absoluteDestination), {recursive: true});
   await cp(resolve(projectRoot, source), absoluteDestination);
 }
+// The editor replica's fonts and their licenses (src/studio-ui/fonts/README.md).
+await cp(resolve(projectRoot, "src/studio-ui/fonts"), resolve(projectRoot, "dist/studio-ui/fonts"), {recursive: true});
 
 await chmod(resolve(projectRoot, "dist/cli/index.js"), 0o755);
 await mkdir(resolve(projectRoot, "public/engine/runtime"), {recursive: true});

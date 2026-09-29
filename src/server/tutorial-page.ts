@@ -57,7 +57,23 @@ export function renderTutorialPage(frameOrigin: string): string {
 </html>`;
 }
 
+// The packages' unicode ranges (src/studio-ui/fonts/README.md); other scripts fall back to the system font.
+const LATIN = "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD";
+const LATIN_EXT = "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF";
+/** The editor's Nunito Sans and the chat's Inter ship with the Studio (OFL) and are served at /__sws/ui/fonts/. */
+const EDITOR_FONTS = [
+  {family: "Nunito Sans Variable", weight: "200 1000", file: "nunito-sans-latin-wght-normal.woff2", range: LATIN},
+  {family: "Nunito Sans Variable", weight: "200 1000", file: "nunito-sans-latin-ext-wght-normal.woff2", range: LATIN_EXT},
+  {family: "Inter Variable", weight: "100 900", file: "inter-latin-wght-normal.woff2", range: LATIN},
+  {family: "Inter Variable", weight: "100 900", file: "inter-latin-ext-wght-normal.woff2", range: LATIN_EXT}
+];
+export const EDITOR_FONT_FILES: readonly string[] = EDITOR_FONTS.map((font) => font.file);
+const FONT_FACES = EDITOR_FONTS.map((font) =>
+  `@font-face { font-family: "${font.family}"; font-style: normal; font-weight: ${font.weight}; src: url("/__sws/ui/fonts/${font.file}") format("woff2"); unicode-range: ${font.range}; }`
+).join("\n");
+
 const TUTORIAL_CSS = `
+${FONT_FACES}
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #020923; }
 #capture-stage { position: relative; overflow: hidden; isolation: isolate; background: #c0c0c0; }
@@ -239,7 +255,7 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 }
 .se-chat {
   position: absolute; top: 52px; bottom: 0; right: 0; width: 340px; background: #18181b; color: #efeff1; display: none;
-  flex-direction: column; font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing: 0; z-index: 3;
+  flex-direction: column; font-family: "Inter Variable", Inter, "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing: 0; z-index: 3;
   border-left: 1px solid #2f2f35;
 }
 .se-chat .head { height: 50px; flex: none; display: grid; place-items: center; font-size: 13px; font-weight: 600; letter-spacing: .6px;

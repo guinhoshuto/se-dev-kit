@@ -2,7 +2,7 @@
 
 Set `outputs.video.mode` to `"tutorial"` to record a "how to configure" video. The widget runs inside a replica of the StreamElements overlay editor: the top toolbar, the Layers/Settings sidebar built from the widget's FIELDS, the dotted overlay canvas, and the bottom bar with **Emulate**. A scripted cursor clicks through it, an optional chat panel sends messages to the widget, and the Emulate menu dispatches alert events.
 
-The editor chrome was measured from the live StreamElements editor on 2026-09-25 (Nunito Sans, navy `#020923` toolbar, `#5787dc` accents, Angular Material fields). It is a local simulation: nothing is sent to StreamElements, and the replica can drift from future editor changes. Fonts are never downloaded; if Nunito Sans is not installed locally, the system UI font is used.
+The editor chrome was measured from the live StreamElements editor on 2026-09-25 (Nunito Sans, navy `#020923` toolbar, `#5787dc` accents, Angular Material fields). It is a local simulation: nothing is sent to StreamElements, and the replica can drift from future editor changes. The editor's Nunito Sans and the chat's Inter ship with the Studio under the SIL Open Font License (`src/studio-ui/fonts/`, Latin and Latin Extended), and every face loads before the first frame, so every machine and Sandbox draws the same glyphs; nothing is downloaded at runtime. Other scripts fall back to the system font.
 
 ```json
 {

@@ -274,6 +274,25 @@ const SELECT_BUTTON = {x: 181.5, y: 403, width: 157.5, height: 36};
 const CURSOR_HOTSPOTS = {arrow: {x: 5, y: 2.5}, crosshair: {x: 12, y: 12}} as const;
 /** Cursor sizes in editor pixels; the crosshair is smaller, and its open center keeps the 11px spectrum marker visible. */
 const CURSOR_SIZES: Record<keyof typeof CURSOR_HOTSPOTS, number> = {arrow: 28, crosshair: 24};
+/** The families tutorial-page.ts declares for the editor and its chat. */
+const EDITOR_FONT_FAMILIES = ["Nunito Sans Variable", "Inter Variable"];
+
+/**
+ * Loads every face of the editor's fonts, in both unicode ranges, before setup measures anything,
+ * so no anchor and no frame uses a fallback font. A face that cannot load fails the render.
+ */
+async function loadEditorFonts(): Promise<void> {
+  const family = (face: FontFace) => face.family.replace(/^"(.*)"$/, "$1");
+  const faces: FontFace[] = [];
+  document.fonts.forEach((face) => {
+    if (EDITOR_FONT_FAMILIES.includes(family(face))) faces.push(face);
+  });
+  const missing = EDITOR_FONT_FAMILIES.filter((name) => !faces.some((face) => family(face) === name));
+  if (missing.length) throw new Error(`The editor replica declares no ${missing.join(" or ")} font face.`);
+  await Promise.all(faces.map((face) => face.load().catch(() => {
+    throw new Error(`An editor replica font face (${family(face)}, ${face.unicodeRange.slice(0, 16)}…) failed to load from /__sws/ui/fonts/.`);
+  })));
+}
 
 class TutorialController {
   readonly stage = document.querySelector<HTMLElement>("#capture-stage")!;
@@ -309,7 +328,8 @@ class TutorialController {
   #anchors: Anchor[] = [];
   #plan?: CameraPlan;
 
-  setup(options: SetupOptions): void {
+  async setup(options: SetupOptions): Promise<void> {
+    await loadEditorFonts();
     this.timeline = options.timeline;
     this.menu = options.menu;
     this.viewport = options.viewport;
