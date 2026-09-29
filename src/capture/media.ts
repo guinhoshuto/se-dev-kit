@@ -55,6 +55,11 @@ export async function encodeFrameSequence(options: {
     "-t",
     (options.video.durationMs / 1000).toFixed(3),
     "-an",
+    // FFmpeg converts RGB with the BT.601 matrix by default, and browsers decode untagged video as BT.709.
+    // scale converts with BT.709 (limited range) and tags the matrix and range; setparams tags the primaries
+    // and transfer, since FFmpeg 9 writes the tags from the frames and ignores -color_primaries and -color_trc.
+    "-vf",
+    "scale=out_color_matrix=bt709,setparams=color_primaries=bt709:color_trc=bt709",
     "-c:v",
     codecName,
     "-pix_fmt",

@@ -66,7 +66,7 @@ If encoding or validation fails (`FFMPEG_FAILED`, `FFPROBE_FAILED`, `VIDEO_FILE_
 
 Discarding is the default because frames dominate disk use: on 2026-09-25, the kept frames of 21 videos filled 9.7 GB and stopped a session with `ENOSPC`; on 2026-09-26, a 28-second full-HD tutorial left 132 MB of frames.
 
-FFmpeg is discovered through an explicit path or the current `PATH`. It is invoked with an argument array and `shell: false`. H.264 MP4 uses `libx264`, `yuv420p`, no audio, and fast-start metadata by default. VP9 WebM is also supported. ffprobe, when present, reads stream/container metadata before the temporary video is committed.
+FFmpeg is discovered through an explicit path or the current `PATH`. It is invoked with an argument array and `shell: false`. H.264 MP4 uses `libx264`, `yuv420p`, no audio, and fast-start metadata by default. VP9 WebM is also supported. Both convert the PNG frames with the BT.709 matrix in limited range and tag the stream BT.709 (matrix, primaries, and transfer): browsers decode untagged video as BT.709, and FFmpeg's default conversion is BT.601, which showed pure green 39 levels off. ffprobe, when present, reads stream/container metadata before the temporary video is committed.
 
 All 4:2:0 video outputs require even final width and height. This is checked during planning, before any PNG frame is written.
 
