@@ -1,0 +1,97 @@
+# Tutorial videos
+
+A tutorial video shows a buyer how to set up the widget. The widget runs inside a replica of the StreamElements overlay editor: the top toolbar, the Layers/Settings sidebar built from the widget's FIELDS, the overlay canvas, and the bottom bar with **Emulate**. A scripted cursor clicks through it, an optional chat panel sends messages to the widget, and the Emulate menu dispatches alert events.
+
+The replica was measured from the live editor on 2026-09-25 and can drift from later editor changes. It is a Studio simulation, and nothing reaches StreamElements: report it as such, never as a recording of StreamElements.
+
+## Recipe
+
+Set `"mode": "tutorial"` on a recipe's video and write the script in `outputs.video.tutorial`:
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "setup-tutorial",
+  "name": "Setup tutorial",
+  "scenes": ["tutorial-editor"],
+  "outputs": {
+    "screenshots": false,
+    "video": {
+      "enabled": true,
+      "mode": "tutorial",
+      "durationMs": 28000,
+      "fps": 30,
+      "format": "mp4",
+      "codec": "h264",
+      "tutorial": {
+        "overlayName": "Studio Chat overlay",
+        "layerName": "Studio Chat",
+        "widget": {"x": 960, "y": 540, "scale": 1.6},
+        "steps": [
+          {"action": "caption", "text": "Select the widget layer"},
+          {"action": "selectLayer"},
+          {"action": "setField", "field": "cardTitle", "value": "Community Chat"},
+          {"action": "chat", "user": "Mira", "text": "Looks great!", "badges": ["subscriber"]},
+          {"action": "emulate", "event": "tip", "option": "$10", "name": "Nova"},
+          {"action": "save"}
+        ]
+      }
+    }
+  }
+}
+```
+
+This is the Studio's bundled example, and it runs 28 seconds: longer than a hosted job allows.
+
+- **Hosted mode (the default).** A video variant lasts at most 15 seconds at up to 30 fps. Keep the script within that, or split a longer walkthrough into several tutorial recipes of up to 15 seconds, each starting with `selectLayer`. Submit it with `run --kind render --selection <recipe-id>`; `video:<scene-id>` has no tutorial mode.
+- **One longer video** needs the local CLI ([local-workflow.md](local-workflow.md)), which this skill uses only when the user explicitly asks for it. Say so and ask; never switch on your own.
+
+## Layout
+
+- The scene `output` is the video size; the bundled example uses a 1920x1080 scene. The editor is laid out at `output.width / tutorial.uiScale` CSS pixels and scaled up; the default `uiScale` looks like a 1440-pixel-wide browser window.
+- The scene `viewport` is the widget's size in overlay pixels. `tutorial.widget` places its center (`x`, `y`) in the overlay (`tutorial.overlay`, 1920x1080 by default) and sets its `scale`. The scene camera and background are ignored: `tutorial.autoZoom` is the tutorial's camera.
+- The chat panel appears on the right when a `chat` step exists or the scene fixture has `message` events; `tutorial.chat.enabled` forces it on or off. `tutorial.liveEmulation` only draws the "Preview LIVE on stream" checkbox in the Emulate menu.
+- Screenshots from the same recipe keep the normal stage; only the video uses the editor.
+
+## Steps
+
+Steps run in order, and each one advances the tutorial clock.
+
+| Action | Effect |
+|---|---|
+| `wait` | Pause for `ms`. |
+| `caption` | Show a centered caption `text`; `null` hides it. Captions take no time. |
+| `selectLayer` | Click the layer, then the **Settings** section. |
+| `openGroup` | Expand a FIELDS group (ungrouped fields are in `General`). |
+| `setField` | Set `field` to `value` as a person would: select and type text and numbers, drag sliders, open dropdowns and pick an option, toggle checkboxes, and use the color picker for `colorpicker` fields. The widget reloads when the edit is committed. |
+| `chat` | Add a message (`user`, `text`) to the chat panel and dispatch a StreamElements `message` event. `typed: true` types it into the chat box first; `badges` accepts `broadcaster`, `moderator`, `vip`, and `subscriber`; `data` merges extra fields into `event.data`. |
+| `emulate` | Open **Emulate**, pick the submenu `option`, and dispatch `event`: `follower`, `subscriber` (`1`, `Gift`, `Community gift`), `tip` (`$10`, `$50`), `cheer` (`1k`, `5k`), `raid` (`10`, `50`), `redemption`, or `merch`. `name`, `amount`, and `message` adjust the payload; `listener` and `payload` replace it. |
+| `move` / `click` | Move to, or click, a `target`: `layer`, `save`, `preview`, `emulate`, `open-editor`, `chat-input`, `group:<name>`, `field:<id>`, or an `{x, y}` point in editor pixels. |
+| `save` | Click **Save** and show the "Overlay saved" toast. |
+
+- A `setField` reloads the widget as StreamElements does, so whatever it built before, such as chat lines, is gone: change fields first, then chat and emulate (see [Field changes](catalog-authoring.md#field-changes)).
+- A color `value` must be `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)`, or `rgba(r, g, b, a)`; a color name fails. The committed value is exactly that string. A color edit takes 4 to 5.5 seconds, and up to about 7 when the opacity changes.
+- Fixture events still run at their `atMs`, and fixture chat messages also appear in the chat panel.
+- The sidebar scrolls a group or field into view before the cursor reaches it, so scripts need no scroll steps.
+
+## Duration
+
+- The whole script must fit `durationMs`. One that does not fails with `TUTORIAL_TOO_LONG`, whose hint names the smallest `durationMs` that fits. The local CLI's `validate` and `render --dry-run` report it without rendering; the hosted client has no dry run, so leave margin: a failed hosted job still counts against the daily limit.
+- The camera adds no time. For the disk check, tutorial frames count 0.3 bytes per output pixel (see "Plan a large batch" in [hosted-workflow.md](hosted-workflow.md#plan-a-large-batch)).
+
+## Auto zoom
+
+- On by default at 1.8x, in the style of Screen Studio: the camera follows the cursor in a close-up and pulls back so that the widget and what caused each reaction (a field commit, a chat line, an emulated event) stay in view. Popups (the color picker, the Emulate menu, dropdowns) are always fully in view. It returns to the full editor after **Save** and after 1.5 seconds without activity.
+- `tutorial.autoZoom` takes `true` (the default), `false` (the full editor throughout), or `{"zoom": z}` with `z` from 1.2 to 2.5.
+- With a scene `crop`, the camera works inside the crop, which is what the video exports.
+- Dense scripts stay at 1.2x to 1.5x most of the time, because widget reactions win over close-ups. A widget drawn on a `<canvas>` can look soft when zoomed: lower `zoom` or turn the camera off.
+- The camera, the pointer pulse, and the click ripple are Studio effects. The StreamElements editor has none of them, and the widget renders exactly as it does without them.
+
+## Fidelity
+
+- The editor's Nunito Sans and the chat's Inter ship with the Studio, so every machine and Sandbox draws the same glyphs. The widget's Google Fonts load as in any job (see "Fonts" in [hosted-workflow.md](hosted-workflow.md#fonts)).
+- While a color is dragged, the replica shows a small crosshair where the real editor hides the pointer, and the picker's backdrop also dims the chat panel.
+- A transparent widget that declares `color-scheme: dark` shows on an opaque `#121212` box in the replica (see the end of [catalog-authoring.md](catalog-authoring.md)).
+- Repeated renders matched frame for frame in local checks; treat the frame hashes in the render manifest (`frameSequence`) as a strong reproducibility signal, not a guarantee. The manifest also records each field change under `fieldUpdate`.
+
+Changing the tutorial engine itself is Studio development (local mode); its full specification is `docs/TUTORIAL.md` in the Studio repository.

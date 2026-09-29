@@ -12,6 +12,7 @@ Operate the shared Studio instead of building a widget-specific preview runtime.
 - Use **hosted mode** by default for every widget task: upload, editing links, saved projects, previews, smoke tests, screenshots, videos, and marketing assets. Read [references/hosted-workflow.md](references/hosted-workflow.md) before the first hosted mutation, including its limits and known gaps. Split a large batch as that reference describes instead of switching to local mode.
 - Use **local mode** only to develop or debug SE Widget Studio itself, or when the user explicitly asks for a local render. Read [references/local-workflow.md](references/local-workflow.md), including its section on developing the Studio.
 - Read [references/catalog-authoring.md](references/catalog-authoring.md) when themes, fixtures, scenes, scenarios, recipes, crop, camera, matrix variants, or video settings must be created or changed.
+- Read [references/tutorial-video.md](references/tutorial-video.md) before authoring or rendering a tutorial video (`"mode": "tutorial"`): a "how to configure" walkthrough of the widget in a replica of the StreamElements overlay editor, which hosted jobs limit to 15 seconds.
 
 ## Preserve the source contract
 
