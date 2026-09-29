@@ -21,6 +21,10 @@ Never put background, crop, zoom, or output dimensions in `fieldData` unless the
 
 Themes and scenes may set a `googleFont` field freely: hosted preview and jobs load Google Fonts as StreamElements does, and substitute `{{field}}` placeholders with the effective field data in HTML, CSS and JS.
 
+## Field changes
+
+A tutorial `setField` or a scenario `updateFields` reloads the widget with the new values, as the StreamElements editor does: placeholders are substituted again, `onWidgetLoad` fires again, and whatever the widget built before, such as chat messages, is gone. A buyer sees the same in StreamElements, so script tutorials with that in mind: change fields first, then chat and emulate. Set `widget.fieldUpdate` to `"event"` (in the local config's `widget`, or the catalog's) only for a widget written against the Studio that must keep its state across a field change and listens to the Studio's `onWidgetUpdate`; StreamElements has no such event. A render manifest records the mode and each change under `fieldUpdate`.
+
 ## Theme files
 
 A widget repository keeps each theme in `themes/` as a pair:

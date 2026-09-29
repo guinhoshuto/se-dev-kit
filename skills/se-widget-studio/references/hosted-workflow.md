@@ -12,7 +12,7 @@ node "$SKILL_DIR/scripts/studio-client.mjs" import \
   --name "Widget name"
 ```
 
-Use `--catalog /absolute/path/to/catalog.json` when the widget needs Studio metadata. The catalog may contain top-level `channel`, `themes`, `fixtures`, `scenes`, `scenarios`, `recipes`, and `assets`; `widget` may contain only `viewport` and `ready`. Real production source always wins and cannot be overridden by the catalog. `--origin` selects another explicit deployment.
+Use `--catalog /absolute/path/to/catalog.json` when the widget needs Studio metadata. The catalog may contain top-level `channel`, `themes`, `fixtures`, `scenes`, `scenarios`, `recipes`, and `assets`; `widget` may contain only `viewport`, `ready`, and `fieldUpdate` (see [catalog-authoring.md](catalog-authoring.md#field-changes)). Real production source always wins and cannot be overridden by the catalog. `--origin` selects another explicit deployment.
 
 Local assets are opt-in; the helper never scans or uploads the rest of the widget directory. Declare each required file with a safe destination and a path relative to the widget root:
 
@@ -43,7 +43,7 @@ node "$SKILL_DIR/scripts/studio-client.mjs" import \
   --recipes gallery-stills,hero-video
 ```
 
-- Each catalog glob becomes an array; a plain field-data file, such as a production theme preset, gets the ID local mode derives from its file name. `widget.viewport` and `widget.ready` are kept; `widget.root`, `widget.files`, `widget.assets`, and `output` are not sent.
+- Each catalog glob becomes an array; a plain field-data file, such as a production theme preset, gets the ID local mode derives from its file name. `widget.viewport`, `widget.ready`, and `widget.fieldUpdate` are kept; `widget.root`, `widget.files`, `widget.assets`, and `output` are not sent.
 - Every file the local Studio serves besides the production sources (the `widget.assets` matches and the files the widget source references) becomes a private upload under its path relative to the widget root. A field value such as `studio/media/gallery/01.jpg`, alone or in an array, names that file in the local CLI, the hosted preview, and hosted jobs alike. `/__sws/widget/<path>` values become `<path>`, a recipe matrix `"*"` becomes every theme ID, and `outputs.video.keepFrames` is dropped because hosted jobs ignore it.
 - `--recipes` keeps only those recipes and the scenes, themes, and fixtures they use, and leaves scenarios out. Without it, a config that exceeds a per-revision limit is refused with the counts; group recipes as in "Plan a large batch".
 - The helper refuses production files outside the two layouts above, `widget.adapter`, and `widget.assets` that match an HTML file. It warns on stderr when the checkout's engine build is dirty or older than its source: run `npm run build:engine` in the checkout, then import. A copied skill has no checkout, so `--config` fails there; build the catalog by hand following these rules and pass `--catalog`.
@@ -96,7 +96,7 @@ node "$SKILL_DIR/scripts/studio-client.mjs" run \
   --output-dir /absolute/new/render-output
 ```
 
-The output directory must not exist. The command never cleans or overwrites it. It stops on a terminal job status, verifies every download against server metadata, and writes a capability-free `job.json` report beside the artifacts. A job has a ten-minute execution budget. Do not submit a replacement job merely because polling was interrupted; use `status` to find the accepted job first.
+The output directory must not exist. The command never cleans or overwrites it. It stops on a terminal job status, verifies every download against server metadata, and writes a capability-free `job.json` report beside the artifacts. When the render manifest or the test report lists Google Fonts issues, it prints them on one stderr line and adds them as `fontIssues` to its JSON and to `job.json`; read them before using the media. A job has a ten-minute execution budget. Do not submit a replacement job merely because polling was interrupted; use `status` to find the accepted job first.
 
 ## Plan a large batch
 
@@ -137,7 +137,7 @@ These are application limits, not guaranteed provider quota. Do not provision pa
 - Material Icons (`/icon`) and `text=` stylesheets written in the widget's HTML or CSS are copied into the revision at import, like any public HTTPS dependency, and render from that copy as in StreamElements; the copy does not change after import. The same URLs built at runtime, by a script or through a `{{field}}` placeholder, are not captured: jobs fail with `FONT_UNSUPPORTED`, and the editor preview cannot load them either.
 - StreamElements `{{field}}` placeholders are substituted with the effective `fieldData` in HTML, CSS and JS, in preview and in jobs.
 - Saving a revision prewarms the font cache, and prewarm warnings appear in the revision diagnostics. A job may show `Fetching Google Fonts (pass n/4)`; a later render of the same revision does not contact Google.
-- Results are in the job's `manifest.json` → `fonts` (`served` with URL and SHA-256; `issues`) and in the test report → `fonts`.
+- Results are in the job's `manifest.json` → `fonts` (`served` with URL and SHA-256; `issues`) and in the test report → `fonts`; `run` repeats the issues as `fontIssues`.
 - Codes: `FONT_UNAVAILABLE` (Google or the cache could not serve the font; retry later), `FONT_DISCOVERY_LIMIT`, `FONT_SETTLE_TIMEOUT` and `FONT_UNSUPPORTED` (an `/icon` or `text=` URL built at runtime). The `upstream-4xx` warning means Google refused the family and the text uses the fallback, as StreamElements would.
 - Production was verified on 2026-09-27 with the verification fixture only. Canvas text (`fillText`) and reassigning the same stylesheet `href` are not yet proven there: look at the hosted render before relying on them for marketing media.
 - The asset example `fonts/widget.woff2` above is for a widget's own font files, not for Google Fonts.
