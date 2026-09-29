@@ -294,6 +294,35 @@ test("a stylesheet a timer swaps mid-video is settled before the next frame is t
   assert.equal(served.frameSequence.frames[1].sha256, expected.frameSequence.frames[1].sha256);
 });
 
+// se-windows: the widget applies its default font at startup, then onWidgetLoad points the same link
+// at the theme's font while the default is still loading. Chrome aborts the default's request
+// (net::ERR_ABORTED); the document no longer uses it, so it is not an unavailable font.
+test("a Google Fonts stylesheet the widget swaps away while it loads is not FONT_UNAVAILABLE (route.fulfill)", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const css = "h1{margin:0;padding:24px 12px;font:400 40px/1 monospace;color:#fff}";
+  const google = await fontWidget(t, {
+    html: '<h1 id="t">Studio</h1>',
+    css,
+    js: `const link = document.createElement("link");
+link.rel = "stylesheet";
+link.href = "${GOOGLE_UNBOUNDED}";
+document.head.append(link);
+document.getElementById("t").style.fontFamily = "'Unbounded', monospace";
+window.addEventListener("onWidgetLoad", () => {
+  link.href = "https://fonts.googleapis.com/css2?family=Studio+Display";
+  document.getElementById("t").style.fontFamily = "'Studio Display', monospace";
+});`
+  });
+  const reference = await fontWidget(t, {html: '<h1 id="t" style="font-family:\'Studio Display\'">Studio</h1>', css: `${LOCAL_FACES_CSS}${css}`});
+  const route = fixtureFontRoute({slow: "Unbounded"});
+  const served = await render(context, google, STILL, route.route);
+  const expected = await render(context, reference, STILL);
+  assert.ok(route.requests.includes(GOOGLE_UNBOUNDED), "the default font was requested before the swap");
+  assert.equal(served.hashes.screenshot, expected.hashes.screenshot);
+  assert.equal(served.fonts.families.find((entry) => entry.family === "Studio Display")?.status, "loaded");
+});
+
 test("a settle past its real-time deadline fails with FONT_SETTLE_TIMEOUT instead of hanging", {timeout: 120_000}, async (t) => {
   const context = await browserContext(t);
   if (!context) return;

@@ -370,6 +370,8 @@ export interface FontReport {
   failedStylesheets: {href: string; reason: FontFallbackReason}[];
   /** Font loading errors and content-security-policy refusals seen in the frame. */
   issues: string[];
+  /** Google Fonts stylesheets the document references now: stylesheet links and readable `@import`s. */
+  referencedStylesheets: string[];
   /** False when the preview's font budget expired before every face settled. */
   complete: boolean;
 }

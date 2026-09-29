@@ -280,6 +280,11 @@ export interface FontRequestIssue {
   url: string;
   status?: number;
   detail: string;
+  /**
+   * Chrome aborted the request (`net::ERR_ABORTED`). It happens when the document drops the
+   * stylesheet, for example when a widget points the link at another font before this one loaded.
+   */
+  aborted?: boolean;
 }
 
 export interface BrowserIssueLog {
@@ -309,9 +314,17 @@ export function observePage(page: Page): BrowserIssueLog {
     issuedIn.set(request, generation);
     if (isGoogleFontsRequestUrl(request.url())) log.pendingFonts.add(request.url());
   });
-  page.on("requestfinished", (request) => log.pendingFonts.delete(request.url()));
+  page.on("requestfinished", (request) => {
+    log.pendingFonts.delete(request.url());
+    // A later request for the same URL got an answer: an earlier abort of it cost nothing.
+    for (let index = log.fonts.length - 1; index >= 0; index -= 1) {
+      if (log.fonts[index]?.aborted && log.fonts[index]?.url === request.url()) log.fonts.splice(index, 1);
+    }
+  });
   const noteFont = (issue: FontRequestIssue) => {
-    if (!log.fonts.some((known) => known.url === issue.url && known.status === issue.status)) log.fonts.push(issue);
+    const index = log.fonts.findIndex((known) => known.url === issue.url && known.status === issue.status);
+    if (index === -1) log.fonts.push(issue);
+    else if (log.fonts[index]?.aborted && !issue.aborted) log.fonts[index] = issue;
   };
   page.on("pageerror", (error) => log.errors.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
@@ -331,7 +344,7 @@ export function observePage(page: Page): BrowserIssueLog {
     const failure = request.failure()?.errorText ?? "request failed";
     if (failure === "net::ERR_ABORTED" && (issuedIn.get(request) ?? generation) < generation) return;
     if (isGoogleFontsRequestUrl(request.url())) {
-      noteFont({url: request.url(), detail: failure});
+      noteFont({url: request.url(), detail: failure, ...(failure === "net::ERR_ABORTED" ? {aborted: true} : {})});
       return;
     }
     log.errors.push(`requestfailed: ${request.url()} (${failure})`);

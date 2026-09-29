@@ -731,6 +731,34 @@ function noteImportedGoogleStylesheets(): void {
   for (const sheet of Array.from(document.styleSheets)) visit(sheet, 0);
 }
 
+/** Google Fonts stylesheets the document references now, through links and readable `@import`s. */
+function referencedGoogleStylesheets(): string[] {
+  const referenced = new Set<string>();
+  const note = (href: string) => {
+    if (isGoogleFontsUrl(href)) referenced.add(href);
+  };
+  for (const link of Array.from(document.querySelectorAll("link"))) {
+    const brokered = brokeredLinks.get(link);
+    if (brokered?.state === "pending" && link.isConnected && isStylesheetRel(link)) note(brokered.original);
+    else if (isStylesheetLink(link)) note(reportedHref(link, linkHref(link)));
+  }
+  const visit = (sheet: CSSStyleSheet, depth: number) => {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      return;
+    }
+    for (const rule of Array.from(rules)) {
+      if (!(rule instanceof CSSImportRule)) continue;
+      note(new URL(rule.href, sheet.href ?? document.baseURI).href);
+      if (rule.styleSheet && depth < 4) visit(rule.styleSheet, depth + 1);
+    }
+  };
+  for (const sheet of Array.from(document.styleSheets)) visit(sheet, 0);
+  return Array.from(referenced).sort();
+}
+
 interface CanvasFontUse {
   text: string;
   /** Once a web font face is ready for this font, draws stop checking. */
@@ -908,7 +936,7 @@ function fontReport(wanted: Map<string, WantedFace>, complete: boolean): FontRep
   const failedStylesheets = Array.from(googleStylesheets, ([href, state]) => ({href, state}))
     .filter(({state}) => state.state === "failed")
     .map(({href, state}) => ({href, reason: state.reason ?? "stylesheet-blocked"}));
-  return {families, redrawNeeded, failedStylesheets, issues: [...fontIssues], complete};
+  return {families, redrawNeeded, failedStylesheets, issues: [...fontIssues], referencedStylesheets: referencedGoogleStylesheets(), complete};
 }
 
 export interface SettleOptions {

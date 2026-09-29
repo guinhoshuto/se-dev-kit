@@ -42,6 +42,25 @@ test("a family Google refuses is a warning, and transient statuses stay failures
   assert.deepEqual(checkFonts([]).warnings, []);
 });
 
+test("an aborted stylesheet the document no longer references is not a failure; one it still uses is", () => {
+  const OTHER = "https://fonts.googleapis.com/css2?family=Sora";
+  const report = (referencedStylesheets) => ({families: [], redrawNeeded: false, failedStylesheets: [], issues: [], referencedStylesheets, complete: true});
+  const aborted = {url: CSS, detail: "net::ERR_ABORTED", aborted: true};
+  // The widget pointed the link at another font before this one loaded.
+  assert.deepEqual(checkFonts([aborted], report([OTHER])).warnings, []);
+  // The document still uses it: the font is missing.
+  assert.throws(() => checkFonts([aborted], report([CSS, OTHER])), {code: "FONT_UNAVAILABLE"});
+  // Without a report there is nothing to tell a dropped stylesheet from a missing one.
+  assert.throws(() => checkFonts([aborted]), {code: "FONT_UNAVAILABLE"});
+  // Only an abort is the widget's doing; a blocked stylesheet fails even when nothing references it.
+  assert.throws(() => checkFonts([{url: CSS, detail: "net::ERR_BLOCKED_BY_CLIENT"}], report([OTHER])), {code: "FONT_UNAVAILABLE"});
+  // A font file is not a stylesheet: an aborted face stays a failure.
+  assert.throws(
+    () => checkFonts([{url: "https://fonts.gstatic.com/s/archivo/v19/abc.woff2", detail: "net::ERR_ABORTED", aborted: true}], report([OTHER])),
+    {code: "FONT_UNAVAILABLE"}
+  );
+});
+
 test("/icon, text= and URLs outside the allowlist fail with FONT_UNSUPPORTED", () => {
   for (const url of [
     "https://fonts.googleapis.com/icon?family=Material+Icons",

@@ -24,6 +24,22 @@ function describe(url: string): string {
   return names.length > 0 ? `${names.map((name) => `"${name}"`).join(", ")} (${url})` : url;
 }
 
+function normalized(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
+
+function isStylesheetUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname === "fonts.googleapis.com";
+  } catch {
+    return false;
+  }
+}
+
 /** Google refused the request, as it would in StreamElements: the text stays in fallback. */
 function isRefusal(status: number | undefined): boolean {
   return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
@@ -49,7 +65,10 @@ export function checkFonts(
   } = {}
 ): FontCheck {
   const failures = new Map<string, FontRequestIssue>();
+  const referenced = report?.referencedStylesheets ? new Set(report.referencedStylesheets.map(normalized)) : undefined;
   for (const issue of issues) {
+    // The widget dropped the stylesheet (its link now points elsewhere): not a font it uses.
+    if (issue.aborted && referenced && isStylesheetUrl(issue.url) && !referenced.has(normalized(issue.url))) continue;
     const known = failures.get(issue.url);
     if (!known || (known.status === undefined && issue.status !== undefined)) failures.set(issue.url, issue);
   }
