@@ -96,7 +96,7 @@ export default defineConfig({
     adapter: "adapters/studio.mjs"
   },
   channel: {username: "streamer"},
-  themes: {glob: "themes/*.json"},
+  themes: {glob: "themes/!(*.data).json"},
   fixtures: {glob: "fixtures/*.json"},
   scenarios: {glob: "scenarios/*.json"},
   scenes: {glob: "scenes/*.json"},
@@ -106,6 +106,8 @@ export default defineConfig({
 ```
 
 All paths are resolved relative to `widget.root` and must remain inside it after `realpath` resolution. `assets` extends the startup allowlist for resources that cannot be discovered from production HTML, CSS, or JavaScript references.
+
+The theme glob skips `themes/<id>.data.json`: those files are StreamElements DATA tab payloads that ship with the widget, not Studio themes.
 
 ## CLI
 

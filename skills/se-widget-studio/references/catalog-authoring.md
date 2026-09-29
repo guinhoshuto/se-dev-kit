@@ -21,6 +21,15 @@ Never put background, crop, zoom, or output dimensions in `fieldData` unless the
 
 Themes and scenes may set a `googleFont` field freely: hosted preview and jobs load Google Fonts as StreamElements does, and substitute `{{field}}` placeholders with the effective field data in HTML, CSS and JS.
 
+## Theme files
+
+A widget repository keeps each theme in `themes/` as a pair:
+
+- `themes/<id>.json` is the Studio theme: partial `fieldData`, only the fields the theme changes. Write it bare (`{"accent": "#a78bfa"}`, the file name gives the ID) or whole (`schemaVersion`, `id`, `name`, `fieldData`).
+- `themes/<id>.data.json` (optional) is the StreamElements DATA tab payload for the same look, with every field filled in. It ships with the widget for buyers to paste; the Studio does not load it.
+
+`init` writes the theme glob `themes/!(*.data).json`, which loads the first file and skips the second. A widget that ships only `themes/*.data.json` already follows this format: never rename, convert, or rewrite those files. To try one of those looks in the Studio, add `themes/<id>.json` with the partial field data that gives it, or point the config's theme glob at `themes/*.data.json` (the IDs then end in `-data`). A root `data.json`, when present, is the DATA payload of the widget's default look and ships the same way.
+
 ## Sample media
 
 Never generate, download, draw, or upload images just to test a widget. The Studio ships synthetic sample images, and every mode (hosted preview, hosted jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:

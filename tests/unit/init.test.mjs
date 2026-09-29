@@ -5,7 +5,7 @@ import {join} from "node:path";
 import test from "node:test";
 
 import {initializeWidget} from "../../dist/config/init.js";
-import {CONFIG_FILE_NAME} from "../../dist/config/load.js";
+import {CONFIG_FILE_NAME, loadProject} from "../../dist/config/load.js";
 
 const layouts = [
   {html: "widget.html", css: "widget.css", js: "widget.js", fields: "widget.json"},
@@ -42,6 +42,23 @@ test("init autodetects both supported layouts and writes the config at the input
       for (const file of Object.values(files)) assert.match(source, new RegExp(`"${file}"`));
     });
   }
+});
+
+test("the theme glob init writes loads themes/<id>.json and leaves the DATA payloads themes/<id>.data.json out", async (t) => {
+  const root = await temporaryDirectory(t, "sws-init-themes-");
+  await writeLayout(root, layouts[1]);
+  await initializeWidget(root);
+  const glob = (await readFile(join(root, CONFIG_FILE_NAME), "utf8")).match(/themes: \{glob: ("[^"]+")\}/)?.[1];
+  assert.ok(glob, "init writes a theme glob");
+  await writeFile(join(root, "themes", "neon.json"), '{"title":"Neon"}\n');
+  await writeFile(join(root, "themes", "neon.data.json"), '{"title":"Neon","theme":"custom"}\n');
+  // The generated config imports defineConfig from the package, which a temporary folder cannot resolve.
+  await writeFile(join(root, CONFIG_FILE_NAME), `export default {schemaVersion: 1, widget: {root: "."}, themes: {glob: ${glob}}};\n`);
+
+  const project = await loadProject({inputDirectory: root});
+
+  assert.deepEqual(project.themes.map((theme) => theme.id), ["neon"]);
+  assert.deepEqual(project.themes[0].value.fieldData, {title: "Neon"});
 });
 
 test("init rejects an existing config before importing it when force is absent", async (t) => {

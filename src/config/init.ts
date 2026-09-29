@@ -129,7 +129,7 @@ export default defineConfig({
     ready: {timeoutMs: 10_000}
   },
   channel: {username: "streamer"},
-  themes: {glob: "themes/*.json"},
+  themes: {glob: "themes/!(*.data).json"},
   fixtures: {glob: "fixtures/*.json"},
   scenarios: {glob: "scenarios/*.json"},
   scenes: {glob: "scenes/*.json"},
