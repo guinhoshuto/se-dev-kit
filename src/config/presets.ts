@@ -40,6 +40,8 @@ const presetSchema = z
             minimumWidth: z.number().int().min(1).optional(),
             minimumHeight: z.number().int().min(1).optional(),
             aspectRatios: z.array(z.string().regex(/^\d+:\d+$/)).optional(),
+            minimumAspectRatio: z.number().positive().optional(),
+            maximumAspectRatio: z.number().positive().optional(),
             audio: z.literal("none").optional(),
             maximumBytes: z.number().int().min(1).optional()
           })
@@ -94,6 +96,11 @@ function isOpaqueBackground(variant: CaptureVariant): boolean {
     : Number(functionalAlpha) >= 1;
 }
 
+/** 0.5 reads 1:2 and 2 reads 2:1, as marketplaces write them. */
+function ratioLabel(ratio: number): string {
+  return ratio >= 1 ? `${Number(ratio.toFixed(3))}:1` : `1:${Number((1 / ratio).toFixed(3))}`;
+}
+
 function ratioMatches(width: number, height: number, ratios: string[]): boolean {
   return ratios.some((ratio) => {
     const [left, right] = ratio.split(":").map(Number);
@@ -146,6 +153,13 @@ export function marketplaceRecipeIssues(
       if (videoRules.minimumHeight && height < videoRules.minimumHeight) issues.push(`${variant.id} height ${height} is below ${videoRules.minimumHeight}`);
       if (videoRules.aspectRatios && !ratioMatches(width, height, videoRules.aspectRatios)) {
         issues.push(`${variant.id} aspect ratio ${width}:${height} is not one of ${videoRules.aspectRatios.join(", ")}`);
+      }
+      // The bounds share ratioMatches' tolerance, so a 2:1 canvas meets a 2:1 bound exactly.
+      if (videoRules.maximumAspectRatio !== undefined && width / height > videoRules.maximumAspectRatio + 0.001) {
+        issues.push(`${variant.id} aspect ratio ${width}:${height} is wider than ${ratioLabel(videoRules.maximumAspectRatio)}`);
+      }
+      if (videoRules.minimumAspectRatio !== undefined && width / height < videoRules.minimumAspectRatio - 0.001) {
+        issues.push(`${variant.id} aspect ratio ${width}:${height} is taller than ${ratioLabel(videoRules.minimumAspectRatio)}`);
       }
     }
     if (videoRules.audio === "none" && (video.audio ?? "none") !== "none") issues.push("video audio must be none");

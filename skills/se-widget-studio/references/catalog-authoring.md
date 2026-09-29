@@ -146,7 +146,7 @@ For hosted import with `--catalog`, list local binary dependencies explicitly as
       "id": "listing-video",
       "name": "Listing video",
       "scenes": ["portrait"],
-      "outputs": {"screenshots": false, "video": {"enabled": true, "durationMs": 3000, "fps": 30, "format": "mp4", "codec": "h264", "audio": "none"}}
+      "outputs": {"screenshots": false, "video": {"enabled": true, "durationMs": 5000, "fps": 30, "format": "mp4", "codec": "h264", "audio": "none"}}
     }
   ]
 }

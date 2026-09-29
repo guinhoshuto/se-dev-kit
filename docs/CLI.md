@@ -185,7 +185,7 @@ Video starts as deterministic numbered PNG frames plus `frames.json`. When an ex
 
 See [Capture and media](CAPTURE.md) for recipes, manifests, FFmpeg behavior, and marketplace profiles.
 
-The example includes separate Etsy image and video recipes because their canvases and output rules differ. Both recipes reference the dated `etsy-listing-2026-08` preset, so its official sources and verification date are copied into each render manifest.
+The example includes separate Etsy image and video recipes because their canvases and output rules differ. Both recipes reference the dated `etsy-listing-2026-09` preset, so its official sources and verification date are copied into each render manifest. It reads Etsy's "2:1 or 1:2" video rule as a range that includes square; the `etsy-listing-2026-08` preset, kept for the recipes that pin it, accepts only the two extremes.
 
 ## Security and privacy
 

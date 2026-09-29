@@ -12,10 +12,11 @@ const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.m
 
 test("the Etsy recipes satisfy the dated operational profile and unsafe variants fail before rendering", async () => {
   const project = await loadProject({inputDirectory: exampleRoot});
-  const preset = await loadMarketplacePreset("etsy-listing-2026-08");
+  const preset = await loadMarketplacePreset("etsy-listing-2026-09");
   for (const id of ["etsy-listing-images", "etsy-listing-video"]) {
     const recipe = project.recipes.find((item) => item.id === id)?.value;
     assert.ok(recipe);
+    assert.equal(recipe.marketplacePreset, preset.id, `${id} pins the latest Etsy preset`);
     assert.deepEqual(marketplaceRecipeIssues(recipe, preset, expandRecipe(project, recipe)), []);
   }
 
@@ -33,6 +34,26 @@ test("the Etsy recipes satisfy the dated operational profile and unsafe variants
   assert.match(marketplaceRecipeIssues(imageRecipe, preset, transparent).join("; "), /opaque background/);
   transparent[0].background = {...transparent[0].background, color: "hsl(0 0% 0% / 100%)"};
   assert.doesNotMatch(marketplaceRecipeIssues(imageRecipe, preset, transparent).join("; "), /opaque background/);
+});
+
+test("etsy-listing-2026-09 takes listing videos from 2:1 to 1:2, square included, and etsy-listing-2026-08 keeps its two exact shapes", async () => {
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const recipe = project.recipes.find((item) => item.id === "etsy-listing-video").value;
+  const [base] = expandRecipe(project, recipe);
+  const sized = (width, height) => [{...base, scene: {...base.scene, crop: undefined}, output: {...base.output, width, height}}];
+  const shapeIssues = (preset, width, height) =>
+    marketplaceRecipeIssues(recipe, preset, sized(width, height)).filter((issue) => issue.includes("aspect ratio"));
+
+  const september = await loadMarketplacePreset("etsy-listing-2026-09");
+  for (const [width, height] of [[1080, 1080], [2160, 1080], [1080, 2160], [1920, 1080], [1080, 1350]]) {
+    assert.deepEqual(shapeIssues(september, width, height), [], `${width}x${height}`);
+  }
+  assert.deepEqual(shapeIssues(september, 2170, 1080), [`${base.id} aspect ratio 2170:1080 is wider than 2:1`]);
+  assert.deepEqual(shapeIssues(september, 1080, 2170), [`${base.id} aspect ratio 1080:2170 is taller than 1:2`]);
+
+  const august = await loadMarketplacePreset("etsy-listing-2026-08");
+  assert.deepEqual(shapeIssues(august, 1080, 1080), [`${base.id} aspect ratio 1080:1080 is not one of 2:1, 1:2`]);
+  assert.deepEqual(shapeIssues(august, 2160, 1080), []);
 });
 
 test("recipe schema rejects impossible derived outputs and container-codec mismatches", () => {

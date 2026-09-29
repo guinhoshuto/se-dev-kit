@@ -285,6 +285,9 @@ export interface MarketplacePreset {
       minimumWidth?: number;
       minimumHeight?: number;
       aspectRatios?: string[];
+      /** Width over height, inclusive: a range of accepted shapes instead of exact `aspectRatios`. */
+      minimumAspectRatio?: number;
+      maximumAspectRatio?: number;
       audio?: "none";
       maximumBytes?: number;
     };

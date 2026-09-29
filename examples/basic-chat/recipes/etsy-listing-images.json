@@ -3,7 +3,7 @@
   "id": "etsy-listing-images",
   "name": "Etsy listing images",
   "description": "Opaque square product images and thumbnails using the dated Etsy marketplace preset.",
-  "marketplacePreset": "etsy-listing-2026-08",
+  "marketplacePreset": "etsy-listing-2026-09",
   "scenes": [
     "etsy-image-square"
   ],

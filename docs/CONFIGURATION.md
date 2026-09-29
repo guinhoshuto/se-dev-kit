@@ -125,7 +125,7 @@ Recipes expand cross products of scenes, themes, backgrounds, viewports, and cam
   "schemaVersion": 1,
   "id": "listing-media",
   "name": "Listing media",
-  "marketplacePreset": "etsy-listing-2026-08",
+  "marketplacePreset": "etsy-listing-2026-09",
   "scenes": ["listing-hero"],
   "matrix": {
     "themes": ["*"],
