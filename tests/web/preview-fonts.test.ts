@@ -10,7 +10,7 @@ import {join} from 'node:path';
 import {GET as fontFile} from '../../app/api/fonts/v1/f/[file]/route';
 import {POST as fontRequest} from '../../app/api/studio/projects/[id]/fonts/route';
 import {POST as preview} from '../../app/api/studio/projects/[id]/preview/route';
-import {FontMemory, PREVIEW_FONT_RATE_LIMIT, cssForPreview, fontFileResponse, lockForRevision, previewFontAnswer, publicFontUrl, resolveGoogleFont, takePreviewFontRequest} from '../../lib/fonts';
+import {FontMemory, PREVIEW_FONT_RATE_LIMIT, clientAddress, cssForPreview, fontFileResponse, lockForRevision, previewFontAnswer, publicFontUrl, resolveGoogleFont, takeFontFileRequest, takePreviewFontRequest} from '../../lib/fonts';
 import {prepareSnapshot, type PublicLookup, type PublicTransport} from '../../lib/importer';
 import {previewDocument, type PreviewFontSource} from '../../lib/preview';
 import {createProject} from '../../lib/projects';
@@ -319,4 +319,38 @@ test('only the saved revision without field overrides writes the font lock', asy
   assert.deepEqual(await locked(), [css2('Static Face')], 'no revision, or a stale one, does not write the lock');
   await ask(revisionId);
   assert.deepEqual(await locked(), [css2('Runtime Face'), css2('Static Face')]);
+});
+
+test('the public font route lets one client address make 600 requests a minute per instance, then answers an uncached 429 with Retry-After', async () => {
+  const memory = new FontMemory();
+  let clock = 1_000_000;
+  let storeCalls = 0;
+  const call = (headers: Record<string, string>) => fontFileResponse(new Request(`${ORIGIN}/api/fonts/v1/f/x.woff2`, {headers}), 'x.woff2', () => {storeCalls++; throw new Error('not reached');}, memory, () => clock);
+  const first = {'x-real-ip': '203.0.113.7'};
+  for (let index = 0; index < 600; index++) assert.equal((await call(first)).status, 404, `request ${index + 1}`);
+  const refused = await call(first);
+  assert.equal(refused.status, 429);
+  assert.equal(refused.headers.get('retry-after'), '60');
+  assert.equal(refused.headers.get('cache-control'), 'no-store', 'the CDN never keeps a refusal');
+  assert.equal(refused.headers.get('access-control-allow-origin'), '*', 'the opaque preview frame can read it');
+  assert.equal((await call({'x-forwarded-for': '198.51.100.9, 10.0.0.1'})).status, 404, 'another address has its own count');
+  clock += 59_500;
+  assert.equal((await call(first)).headers.get('retry-after'), '1');
+  clock += 500;
+  assert.equal((await call(first)).status, 404, 'the window ends 60 s after its first request');
+  assert.equal(storeCalls, 0, 'malformed names never reach storage, limited or not');
+});
+
+test('font route clients come from the edge headers, and the per-instance table keeps at most 10000 addresses', () => {
+  const address = (headers: Record<string, string>) => clientAddress(new Request(ORIGIN, {headers}));
+  assert.equal(address({'x-real-ip': '203.0.113.7', 'x-forwarded-for': '198.51.100.9'}), '203.0.113.7');
+  assert.equal(address({'x-forwarded-for': ' 2001:DB8::1 , 10.0.0.1'}), '2001:db8::1');
+  assert.equal(address({'x-forwarded-for': 'not an address'}), 'unknown');
+  assert.equal(address({}), 'unknown');
+  const memory = new FontMemory();
+  for (let index = 0; index < 10_001; index++) assert.equal(takeFontFileRequest(memory, `10.0.${index >> 8}.${index & 255}`, 5_000), 0);
+  assert.equal(memory.fileRequests.size, 10000, 'the oldest address makes room');
+  assert.equal(memory.fileRequests.has('10.0.0.0'), false);
+  assert.equal(takeFontFileRequest(memory, 'fresh', 5_000 + 60_000), 0);
+  assert.equal(memory.fileRequests.size, 1, 'a full table first drops every expired window');
 });

@@ -76,7 +76,7 @@ Functions fetch Google Fonts for previews and jobs; nothing else in the deployme
 
 Each UTC day allows 3,000 requests to Google for jobs and 1,500 for previews, in separate budgets, so the editor cannot starve renders; a spent budget fails new fonts with `FONT_UNAVAILABLE` until the next day. The cache never shrinks: deleting any of it breaks the promise that a revision re-renders with the same bytes.
 
-`GET /api/fonts/v1/f/<file>` serves cached font files to previews without a capability. It only reads the cache, accepts only names the deployment signed, answers unknown ones with a short-lived 404, and marks hits immutable for the CDN. Add a rate limit for that path in the Vercel firewall (dashboard, Firewall, custom rule on `/api/fonts/v1/f/`), since nothing in the app limits it per client.
+`GET /api/fonts/v1/f/<file>` serves cached font files to previews without a capability. It only reads the cache, accepts only names the deployment signed, answers unknown ones with a short-lived 404, and marks hits immutable for the CDN. The function limits each client address to 600 requests a minute and answers `429` with `Retry-After` beyond that, but it counts in each instance's memory: the limit is per instance, not per deployment, and a cold start resets it. Add the deployment-wide limit in the Vercel firewall (dashboard, Firewall, custom rule on `/api/fonts/v1/f/`).
 
 ## Local mode and intermediate video
 

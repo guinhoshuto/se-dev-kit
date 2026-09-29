@@ -72,6 +72,8 @@ export type FontResolution =
 export class FontMemory {
   readonly reads: ImmutableReadCache;
   readonly flights = new WeakMap<ObjectStore, Map<string, Promise<FontResolution>>>();
+  /** Requests per client address to the public font file route, in this instance only (FONT_FILE_RATE_LIMIT). */
+  readonly fileRequests = new Map<string, {start: number; count: number}>();
   constructor(reads = new ImmutableReadCache()) { this.reads = reads; }
 }
 const sharedMemory = new FontMemory();
@@ -658,18 +660,57 @@ const FONT_FILE_HEADERS = {
   'Content-Security-Policy': "default-src 'none'",
   'Referrer-Policy': 'no-referrer'
 };
-const fontFileRefusal = (status: number, cacheSeconds: number): Response => new Response(null, {
+const fontFileRefusal = (status: number, cacheSeconds: number, extra: Record<string, string> = {}): Response => new Response(null, {
   status,
-  headers: {...FONT_FILE_HEADERS, 'Cache-Control': cacheSeconds ? `public, max-age=${cacheSeconds}` : 'no-store', ...(cacheSeconds ? {'CDN-Cache-Control': `public, max-age=${cacheSeconds}`} : {}), ...(status === 405 ? {Allow: 'GET, HEAD'} : {})}
+  headers: {...FONT_FILE_HEADERS, 'Cache-Control': cacheSeconds ? `public, max-age=${cacheSeconds}` : 'no-store', ...(cacheSeconds ? {'CDN-Cache-Control': `public, max-age=${cacheSeconds}`} : {}), ...(status === 405 ? {Allow: 'GET, HEAD'} : {}), ...extra}
 });
+
+/**
+ * Requests one client address may make to the public font file route per window. The count lives in
+ * this instance's memory: a deployment runs several function instances, each with its own count, and a
+ * cold start begins at zero, so this limits each instance, not the deployment (the deployment-wide limit
+ * is the Vercel firewall rule in docs/VERCEL.md). CDN hits never reach the function. Hosted jobs never
+ * call the route (their fonts arrive as job files the trusted worker serves), so only editor previews
+ * count, and one preview of CJK text asks for dozens of subset files at once: hence a high ceiling.
+ */
+export const FONT_FILE_RATE_LIMIT = {requests: 600, windowMs: 60_000, clients: 10_000};
+
+/** The client address Vercel's edge sets (it overwrites x-real-ip and x-forwarded-for); requests without one share a bucket. */
+export function clientAddress(request: Request): string {
+  const header = request.headers.get('x-real-ip') ?? request.headers.get('x-forwarded-for')?.split(',')[0] ?? '';
+  const address = header.trim().toLowerCase();
+  return /^[0-9a-f.:]{2,45}$/.test(address) ? address : 'unknown';
+}
+
+/** Counts one request from `client` in a fixed window: 0 when allowed, otherwise the seconds until the window ends. */
+export function takeFontFileRequest(memory: FontMemory, client: string, now: number): number {
+  const {requests, windowMs, clients} = FONT_FILE_RATE_LIMIT;
+  const windows = memory.fileRequests;
+  let window = windows.get(client);
+  if (!window || now - window.start >= windowMs) {
+    windows.delete(client);
+    if (windows.size >= clients) {
+      for (const [key, value] of windows) if (now - value.start >= windowMs) windows.delete(key);
+      if (windows.size >= clients) windows.delete(windows.keys().next().value!);
+    }
+    window = {start: now, count: 0};
+    windows.set(client, window);
+  }
+  if (window.count >= requests) return Math.max(1, Math.ceil((window.start + windowMs - now) / 1000));
+  window.count++;
+  return 0;
+}
 
 /**
  * `GET /api/fonts/v1/f/<sha256>.<mac>.<ext>`: bytes already in the Google Fonts cache, immutable.
  * Public on purpose: fonts requested by the opaque preview iframe arrive with `Origin: null` and no
  * credentials. It never contacts Google and never spends budget. The MAC is checked before any
- * storage read, and the bytes are hashed and sniffed on every read.
+ * storage read, and the bytes are hashed and sniffed on every read. Each client address is limited per
+ * instance (FONT_FILE_RATE_LIMIT) with an uncached 429 and Retry-After, before anything else runs.
  */
-export async function fontFileResponse(request: Request, file: string, store: () => ObjectStore, memory: FontMemory = sharedMemory): Promise<Response> {
+export async function fontFileResponse(request: Request, file: string, store: () => ObjectStore, memory: FontMemory = sharedMemory, now: () => number = Date.now): Promise<Response> {
+  const retryAfter = takeFontFileRequest(memory, clientAddress(request), now());
+  if (retryAfter) return fontFileRefusal(429, 0, {'Retry-After': String(retryAfter)});
   if (request.method !== 'GET' && request.method !== 'HEAD') return fontFileRefusal(405, 0);
   const url = new URL(request.url);
   if (url.search !== '' || request.url.includes('?')) return fontFileRefusal(400, 0);
