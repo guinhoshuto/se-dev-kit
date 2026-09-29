@@ -47,7 +47,8 @@
     "skill:install": "node skills/install.mjs",
     "test:web": "node scripts/run-tests.mjs web",
     "test:web:browser": "npm run build:engine && node scripts/run-tests.mjs web:browser",
-    "verify:bundle": "node scripts/verify-bundle.mjs"
+    "verify:bundle": "node scripts/verify-bundle.mjs",
+    "mutate": "node scripts/mutate.mjs"
   },
   "dependencies": {
     "@vercel/blob": "2.8.0",
