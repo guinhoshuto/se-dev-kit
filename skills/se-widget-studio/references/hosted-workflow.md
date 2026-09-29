@@ -123,7 +123,7 @@ Hosted mode is the default even for marketing batches. Plan them inside the boun
 - A render recipe has at most 48 variants, or four when video is enabled.
 - Job artifacts: at most 100 MB per file and 250 MB per job.
 - There is no account recovery, capability rotation, cancel endpoint, project listing, or delete endpoint.
-- Google Fonts (`fonts.googleapis.com` `/css` and `/css2`, `fonts.gstatic.com` `/s/`) are served from the Studio cache and fetched on demand, with no preparation; `/icon` and `text=` give `FONT_UNSUPPORTED`. All other runtime network access stays blocked and must be captured during preparation.
+- Google Fonts (`fonts.googleapis.com` `/css` and `/css2`, `fonts.gstatic.com` `/s/`) are served from the Studio cache and fetched on demand, with no preparation. `/icon` and `text=` URLs are outside that list (see "Fonts"). All other runtime network access stays blocked and must be captured during preparation.
 
 These are application limits, not guaranteed provider quota. Do not provision paid capacity as an implicit retry.
 
@@ -134,9 +134,10 @@ These are application limits, not guaranteed provider quota. Do not provision pa
 ## Fonts
 
 - Google Fonts work as in StreamElements, in the editor preview and in jobs: a stylesheet written in HTML or CSS, or one a script assigns at runtime (a `setFont()` driven by a `googleFont` field). Themes and scenes may change `googleFont` freely. Never ask to vendor a font or edit the widget because of it.
+- Material Icons (`/icon`) and `text=` stylesheets written in the widget's HTML or CSS are copied into the revision at import, like any public HTTPS dependency, and render from that copy as in StreamElements; the copy does not change after import. The same URLs built at runtime, by a script or through a `{{field}}` placeholder, are not captured: jobs fail with `FONT_UNSUPPORTED`, and the editor preview cannot load them either.
 - StreamElements `{{field}}` placeholders are substituted with the effective `fieldData` in HTML, CSS and JS, in preview and in jobs.
 - Saving a revision prewarms the font cache, and prewarm warnings appear in the revision diagnostics. A job may show `Fetching Google Fonts (pass n/4)`; a later render of the same revision does not contact Google.
 - Results are in the job's `manifest.json` → `fonts` (`served` with URL and SHA-256; `issues`) and in the test report → `fonts`.
-- Codes: `FONT_UNAVAILABLE` (Google or the cache could not serve the font; retry later), `FONT_DISCOVERY_LIMIT`, `FONT_SETTLE_TIMEOUT` and `FONT_UNSUPPORTED`. The `upstream-4xx` warning means Google refused the family and the text uses the fallback, as StreamElements would.
+- Codes: `FONT_UNAVAILABLE` (Google or the cache could not serve the font; retry later), `FONT_DISCOVERY_LIMIT`, `FONT_SETTLE_TIMEOUT` and `FONT_UNSUPPORTED` (an `/icon` or `text=` URL built at runtime). The `upstream-4xx` warning means Google refused the family and the text uses the fallback, as StreamElements would.
 - Production was verified on 2026-09-27 with the verification fixture only. Canvas text (`fillText`) and reassigning the same stylesheet `href` are not yet proven there: look at the hosted render before relying on them for marketing media.
 - The asset example `fonts/widget.woff2` above is for a widget's own font files, not for Google Fonts.
