@@ -276,7 +276,9 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .se-chat .send { height: 30px; padding: 0 10px; border-radius: 4px; background: #9147ff; color: #fff; font-size: 13px; font-weight: 600; line-height: 30px; }
 .se-chat .send.pressed { background: #772ce8; }
 .se-backdrop-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 8; }
-.se-popup-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 10; }
+/* Popups anchor to the editor, and the pointer's hit test sees through the layer to the editor, not to its popups. */
+.se-popup-layer { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
+.se-popup-layer > * { pointer-events: auto; }
 .se-cp-backdrop { position: absolute; left: 0; top: 0; background: #212121; }
 .se-cp {
   position: absolute; width: 347px; height: 445px; background: #fff; color: rgba(0,0,0,.87); border-radius: 4px; overflow: hidden;

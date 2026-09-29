@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
@@ -346,6 +346,150 @@ test("an editor font the server does not deliver fails the tutorial setup, namin
     }
   }, {timeline, menu: EMULATE_MENU, viewport: opened.resolved.viewport, output: opened.resolved.output});
   assert.match(outcome, /\(Inter Variable, U\+0?100-0?2BA.*\) failed to load from \/__sws\/ui\/fonts\//);
+});
+
+test("the sidebar scrolls every target into view before the pointer reaches it, in a group of 12 fields", {timeout: 180_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  // A synthetic widget: a Frame group of 12 fields of every kind the replica draws, then a Motion group below it.
+  const root = await mkdtemp(join(tmpdir(), "sws-tutorial-scroll-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const text = (label) => ({type: "text", label, group: "Frame", value: label});
+  const color = (label, value) => ({type: "colorpicker", label, group: "Frame", value});
+  const slider = (label, group = "Frame") => ({type: "slider", label, group, value: 5, min: 0, max: 10, step: 1});
+  const check = (label, group = "Frame") => ({type: "checkbox", label, group, value: true});
+  const choice = (label) => ({type: "dropdown", label, group: "Frame", value: "solid", options: {solid: "Solid", outline: "Outline", glass: "Glass"}});
+  const fields = {
+    frameTitle: text("Frame title"), frameSubtitle: text("Subtitle"), frameColor: color("Frame color", "#20202a"), frameOpacity: slider("Opacity"),
+    frameRadius: slider("Corner radius"), frameBorder: check("Border"), frameGlow: check("Glow"), frameAccent: color("Accent", "#ac96ff"),
+    frameLabel: text("Label"), frameSize: choice("Size"), frameShadow: color("Shadow", "#000000"), frameBadge: choice("Badge"),
+    motionSpeed: slider("Speed", "Motion"), motionLoop: check("Loop", "Motion")
+  };
+  await writeFile(join(root, "widget.html"), '<main id="widget">Frame</main>\n');
+  await writeFile(join(root, "widget.css"), "#widget { width: 320px; height: 180px; background: #20202a; color: #fff; }\n");
+  await writeFile(join(root, "widget.js"), "window.addEventListener('onWidgetLoad', () => {});\n");
+  await writeFile(join(root, "widget.json"), `${JSON.stringify(fields)}\n`);
+  await writeFile(join(root, "se-widget-studio.config.mjs"), 'export default {schemaVersion: 1, widget: {root: ".", files: {html: "widget.html", css: "widget.css", js: "widget.js", fields: "widget.json"}, viewport: {width: 430, height: 640}, ready: {selector: "#widget", timeoutMs: 10000}}, output: {root: "out"}};\n');
+  const project = await loadProject({inputDirectory: root});
+  const scene = {schemaVersion: 1, id: "editor", name: "Editor", viewport: {width: 430, height: 640}, output: {width: 1920, height: 1080, format: "png"}, captureAtMs: 0};
+  const video = {
+    enabled: true, mode: "tutorial", durationMs: 60_000, fps: 30, format: "mp4", codec: "h264", pixelFormat: "yuv420p", audio: "none",
+    tutorial: {
+      // This test asserts editor geometry; the camera has its own tests.
+      autoZoom: false,
+      steps: [
+        {action: "selectLayer"},
+        {action: "setField", field: "frameBadge", value: "outline"},
+        // Save sits in the toolbar, above the scrolled sidebar: it must not scroll it.
+        {action: "save"},
+        {action: "setField", field: "frameSize", value: "glass"},
+        {action: "setField", field: "frameShadow", value: "#ff7ad9"},
+        {action: "setField", field: "frameTitle", value: "On air"},
+        {action: "setField", field: "motionLoop", value: false}
+      ]
+    }
+  };
+  const timeline = compileVariantTutorial(project, {id: "scroll", scene}, video);
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+  });
+  const opened = await openScene(project, server, browser, scene, {
+    host: "tutorial",
+    camera: tutorialCamera(timeline),
+    background: {id: "editor", color: "transparent"}
+  });
+  t.after(() => opened.context.close());
+  const {page} = opened;
+  await page.evaluate(
+    (options) => window.__SWS_TUTORIAL__.setup(options),
+    {timeline, menu: EMULATE_MENU, viewport: opened.resolved.viewport, output: opened.resolved.output}
+  );
+
+  // The pointer arrives 1 ms before each click: the target, and a field's label and control, are in view by then.
+  const arrivals = await page.evaluate((moves) => moves.map(({to, endMs}) => {
+    window.__SWS_TUTORIAL__.render(endMs - 1);
+    const box = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 ? {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom} : null;
+    };
+    const target = [...document.querySelectorAll("#se-editor [data-target]")].find((element) => element.dataset.target === to && box(element));
+    const sidebar = document.querySelector("#se-sidebar");
+    const select = document.querySelector(".se-select-menu");
+    const selected = select && to.startsWith("option:") ? document.querySelector(`[data-target="field:${to.split(":")[1]}"]`) : null;
+    return {
+      to,
+      endMs,
+      target: box(target),
+      row: box(target?.closest(".se-field")),
+      inSidebar: Boolean(target && sidebar.contains(target)),
+      sidebar: box(sidebar),
+      scrollTop: sidebar.scrollTop,
+      stage: box(document.querySelector("#capture-stage")),
+      editor: box(document.querySelector("#se-editor")),
+      select: box(select),
+      selectField: box(selected),
+      picker: box(document.querySelector(".se-cp")),
+      shape: document.querySelector("#se-cursor").dataset.shape
+    };
+  }), timeline.moves.filter((move) => typeof move.to === "string"));
+  const inside = (rect, bounds) => rect && rect.left >= bounds.left - 0.5 && rect.top >= bounds.top - 0.5 && rect.right <= bounds.right + 0.5 && rect.bottom <= bounds.bottom + 0.5;
+  for (const arrival of arrivals) {
+    const label = `${arrival.to} at ${arrival.endMs} ms`;
+    assert.ok(arrival.target, `${label}: the target is drawn`);
+    assert.ok(inside(arrival.target, arrival.stage), `${label}: target ${JSON.stringify(arrival.target)} on the stage`);
+    if (arrival.inSidebar) {
+      assert.ok(inside(arrival.target, arrival.sidebar), `${label}: target ${JSON.stringify(arrival.target)} inside the sidebar ${JSON.stringify(arrival.sidebar)}`);
+      if (arrival.row) assert.ok(inside(arrival.row, arrival.sidebar), `${label}: row ${JSON.stringify(arrival.row)} inside the sidebar ${JSON.stringify(arrival.sidebar)}`);
+    }
+    if (arrival.select) {
+      assert.ok(inside(arrival.select, arrival.editor), `${label}: the select menu fits the editor`);
+      assert.ok(arrival.selectField && arrival.select.top <= arrival.selectField.bottom && arrival.select.bottom >= arrival.selectField.top, `${label}: the select menu opens over its field`);
+    }
+    if (arrival.picker) assert.ok(inside(arrival.picker, arrival.editor), `${label}: the color picker fits the editor`);
+  }
+  // A target outside the sidebar (a popup, the chat) never scrolls it.
+  arrivals.forEach((arrival, index) => {
+    if (index > 0 && !arrival.inSidebar) assert.equal(arrival.scrollTop, arrivals[index - 1].scrollTop, `${arrival.to} at ${arrival.endMs} ms moved the sidebar`);
+  });
+  assert.ok(new Set(arrivals.map((arrival) => arrival.scrollTop)).size >= 3, `the sidebar scrolled down, back up, and down: ${arrivals.map((arrival) => arrival.scrollTop)}`);
+  const scrolled = arrivals.filter((arrival) => arrival.to === "field:frameBadge" || arrival.to === "group:Motion");
+  assert.equal(scrolled.length, 2, "the script reaches the last Frame field and the Motion header");
+  assert.ok(arrivals.some((arrival) => arrival.to.startsWith("option:frameBadge")), "the Badge select opened");
+  assert.ok(arrivals.some((arrival) => arrival.to === "picker:spectrum" && arrival.shape === "crosshair"), "the picker's spectrum still shows the crosshair");
+
+  // A frame is a function of its time: drawn right after frame 0, each select menu still opens over its field.
+  const options = arrivals.filter((arrival) => arrival.to.startsWith("option:"));
+  assert.deepEqual(options.map((arrival) => arrival.to.split(":")[1]), ["frameBadge", "frameSize"]);
+  for (const option of options) {
+    const direct = await page.evaluate((time) => {
+      window.__SWS_TUTORIAL__.render(0);
+      window.__SWS_TUTORIAL__.render(time);
+      const rect = document.querySelector(".se-select-menu").getBoundingClientRect();
+      return {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom};
+    }, option.endMs - 1);
+    assert.deepEqual(direct, option.select, option.to);
+  }
+
+  // With no popup open, the popup layer still spans the editor, and the pointer's hit test goes through it to the sidebar.
+  const layer = await page.evaluate((time) => {
+    window.__SWS_TUTORIAL__.render(time);
+    const rect = (selector) => {
+      const box = document.querySelector(selector).getBoundingClientRect();
+      return [box.left, box.top, box.width, box.height].map(Math.round);
+    };
+    const field = document.querySelector("#se-sidebar .se-field, #se-sidebar .se-group").getBoundingClientRect();
+    const hit = document.elementFromPoint(field.left + field.width / 2, field.top + field.height / 2);
+    return {popup: rect("#se-popup-layer"), editor: rect("#se-editor"), hitInSidebar: document.querySelector("#se-sidebar").contains(hit)};
+  }, arrivals.at(-1).endMs - 1);
+  assert.deepEqual(layer.popup, layer.editor);
+  assert.equal(layer.hitInSidebar, true);
 });
 
 test("auto zoom frames are a function of time and keep popups, captions, and the widget in view", {timeout: 300_000}, async (t) => {

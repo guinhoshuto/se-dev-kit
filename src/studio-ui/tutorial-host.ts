@@ -115,6 +115,7 @@ interface Timeline {
   initialValues: Record<string, Primitive>;
   patches: {atMs: number; patch: UiPatch}[];
   moves: {startMs: number; endMs: number; to: Target; workEndMs: number}[];
+  scrolls: {target: string; startMs: number; endMs: number}[];
   clicks: number[];
   presses: {downMs: number; upMs: number}[];
   cues: Cue[];
@@ -274,6 +275,8 @@ const SELECT_BUTTON = {x: 181.5, y: 403, width: 157.5, height: 36};
 const CURSOR_HOTSPOTS = {arrow: {x: 5, y: 2.5}, crosshair: {x: 12, y: 12}} as const;
 /** Cursor sizes in editor pixels; the crosshair is smaller, and its open center keeps the 11px spectrum marker visible. */
 const CURSOR_SIZES: Record<keyof typeof CURSOR_HOTSPOTS, number> = {arrow: 28, crosshair: 24};
+/** Editor px the sidebar leaves between a scrolled-in target and its edge; more than a field label's 16 px. */
+const SCROLL_MARGIN = 24;
 /** The families tutorial-page.ts declares for the editor and its chat. */
 const EDITOR_FONT_FAMILIES = ["Nunito Sans Variable", "Inter Variable"];
 
@@ -327,6 +330,8 @@ class TutorialController {
   #editorSize = {width: 0, height: 0};
   #anchors: Anchor[] = [];
   #plan?: CameraPlan;
+  /** The sidebar scrolls, resolved in setup: offsets in editor px, in time order. */
+  #scrolls: {startMs: number; endMs: number; from: number; to: number}[] = [];
 
   async setup(options: SetupOptions): Promise<void> {
     await loadEditorFonts();
@@ -374,7 +379,8 @@ class TutorialController {
     this.#home = {x: options.output.width * 0.62, y: options.output.height * 0.58};
     this.#cursor = {...this.#home};
     this.#rendered = {};
-    // Pre-pass: measure the editor once at the times the camera plans from, then plan it.
+    // Pre-pass: settle the sidebar scrolls, measure the editor at the times the camera plans from, then plan it.
+    this.#resolveScrolls();
     this.#anchors = this.#measureAnchors();
     const cues = this.#measureCues();
     const captions = this.#measureCaptions();
@@ -403,6 +409,46 @@ class TutorialController {
   /** Lays the editor out as it is at `timeMs`, with the camera at identity. */
   #measureAt(timeMs: number): void {
     this.#layout(this.#state(timeMs), timeMs);
+  }
+
+  /**
+   * The editor's sidebar keeps its scroll where the user left it, and a target below or above
+   * it has to be scrolled in before the pointer can reach it. Each scroll starts where the last
+   * one left the sidebar (as the browser clamps it to the content then) and moves just enough to
+   * show the target with a margin that also keeps a field's label in view; a target already in
+   * view, or outside the sidebar, does not scroll it.
+   */
+  #resolveScrolls(): void {
+    this.#scrolls = [];
+    for (const scroll of this.timeline!.scrolls) {
+      this.#measureAt(scroll.startMs);
+      const from = this.sidebar.scrollTop;
+      const target = this.#targetElement(scroll.target);
+      let to = from;
+      if (target && this.sidebar.contains(target)) {
+        const view = this.sidebar.getBoundingClientRect();
+        const box = target.getBoundingClientRect();
+        const top = (box.top - view.top) / this.scale + from - SCROLL_MARGIN;
+        const bottom = (box.bottom - view.top) / this.scale + from + SCROLL_MARGIN;
+        const height = this.sidebar.clientHeight;
+        if (top < from) to = top;
+        else if (bottom > from + height) to = Math.min(top, bottom - height);
+        to = Math.round(clamp(to, 0, Math.max(0, this.sidebar.scrollHeight - height)));
+      }
+      this.#scrolls.push({startMs: scroll.startMs, endMs: scroll.endMs, from, to});
+    }
+  }
+
+  /** The sidebar's scroll offset at `timeMs`: where the last scroll that started by then leaves it, eased while it runs. */
+  #scrollAt(timeMs: number): number {
+    let offset = 0;
+    for (const scroll of this.#scrolls) {
+      if (scroll.startMs > timeMs) break;
+      offset = timeMs >= scroll.endMs
+        ? scroll.to
+        : scroll.from + (scroll.to - scroll.from) * CSS_EASE((timeMs - scroll.startMs) / (scroll.endMs - scroll.startMs));
+    }
+    return offset;
   }
 
   /**
@@ -763,7 +809,9 @@ class TutorialController {
       ].filter(Boolean).join(" ");
       return `<div class="${classes}" data-target="option:${attr(field.id)}:${index}">${escapeHtml(option.label)}</div>`;
     });
-    return `<div class="se-select-menu" style="left:${left}px;top:${Math.max(60, top)}px">${options.join("")}</div>`;
+    // md-select keeps the menu 8 px inside the window: below the toolbar and above the editor's bottom edge.
+    const height = options.length * 48 + 16;
+    return `<div class="se-select-menu" style="left:${left}px;top:${Math.max(60, Math.min(top, this.#editorSize.height - 8 - height))}px">${options.join("")}</div>`;
   }
 
   /** Open fraction of the md-dialog: grows from the swatch on open and shrinks back on close. */
@@ -977,6 +1025,8 @@ class TutorialController {
   #layout(state: UiState, timeMs: number): void {
     const timeline = this.timeline!;
     this.#update("sidebar", this.sidebar, this.#sidebarHtml(state, timeMs));
+    // Before the popups below: a select menu opens where its field is after the scroll.
+    this.sidebar.scrollTop = this.#scrollAt(timeMs);
     this.#update("bottom", this.bottom, this.#bottomHtml(state));
     if (timeline.chrome.chat.enabled) this.#update("chat", this.chat, this.#chatHtml(state, timeMs));
     this.#update("menu", this.menuLayer, this.#menuHtml(state));

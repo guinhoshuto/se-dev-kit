@@ -61,6 +61,8 @@ Steps run in order. Each one advances an internal clock, and the whole script mu
 
 Fixture events still run at their `atMs` times, and fixture chat messages also appear in the chat panel.
 
+The sidebar has no scrollbar, and like the real one it stays where it was left. When the cursor heads for a group header or a field row outside it (a long open group pushes the next ones below the editor), the sidebar scrolls just enough, eased over the first 450 ms of the move, to show it with a 24 px margin, which keeps a field's label in view too. A target already in view does not scroll it, so scripts take the same time either way. When an open group closes and the content gets shorter, the browser clamps the scroll, as the real editor does. A select menu opens over its field wherever the scroll left it, and stays 8 px inside the editor, as md-select does.
+
 ### Color picker
 
 A `setField` on a `colorpicker` field uses the editor's color picker instead of typing. StreamElements draws these fields with md-color-picker 0.2.6, and the recording follows the same sequence a person uses:
@@ -100,7 +102,7 @@ Tutorial videos use a camera in the style of [Screen Studio](https://screen.stud
 | Save | The camera returns to the full editor right after **Save**, so the "Overlay saved" toast is in view. |
 | Inactivity | After 1.5 s without activity, the camera returns to the full editor. |
 | Start and end | The video starts on the full editor, and ends on it when the script leaves time for it. A planned framing below 1.15× becomes the full editor. |
-| Pointer | Inside the frame whenever it is on the stage (or inside the crop). It scales with the zoom, as the recorded pointer does in Screen Studio. A target the replica lays out off the stage, such as a group header pushed below the editor by a long open group, cannot be framed: the pointer leaves the frame to click it, with or without the camera. A move whose target is off the frame both before and after the click does not move the camera, so it never zooms in on the frame's edge. |
+| Pointer | Inside the frame whenever it is on the stage (or inside the crop). It scales with the zoom, as the recorded pointer does in Screen Studio. The sidebar scrolls a group header or field below or above it into view before the pointer gets there, so sidebar targets are always on the stage. A move whose target is off the frame both before and after the click (a crop that leaves the target out) does not move the camera, so it never zooms in on the frame's edge. |
 
 Set it in the tutorial script, next to `steps`:
 

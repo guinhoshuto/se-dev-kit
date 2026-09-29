@@ -38,6 +38,8 @@ const cueOf = (kind, startMs, endMs, frame, obstacle = frame) => ({
  * The basic-chat tutorial-setup script at 1920×1080 (uiScale 4/3, editor 1440×810), with rects
  * measured by hand from the editor CSS and the example FIELDS. approach = where the pointer heads
  * during a move; arrive = the target right after the click's patch; leave = where it ends a drag.
+ * The sidebar scrolls 125 px to show the Layout header below the open Colors group (measured in
+ * the replica); once Colors closes, the browser clamps that to 13 px, which lifts the Layout targets.
  */
 function exampleInput(zoom) {
   const W = 1920;
@@ -48,8 +50,8 @@ function exampleInput(zoom) {
   const T = {
     layer: [pt(110, 166)], "section:settings": [pt(110, 210), pt(110, 116)], "group:Content": [pt(110, 218)], "field:cardTitle": [pt(128, 290)],
     "group:Colors": [pt(110, 524), pt(110, 276)], "swatch:accentColor": [pt(28, 347)], "picker:hue": [pt(838, 300)], "picker:grab": [pt(700, 350)],
-    "picker:spectrum": [pt(700, 330)], "picker:select": [pt(799, 603)], "field:panelOpacity": [pt(150, 493)], "group:Layout": [pt(110, 882), pt(110, 334)],
-    "field:bubbleStyle": [pt(128, 406)], "option:bubbleStyle:1": [pt(128, 454)], "field:showTimestamps": [pt(28, 618)],
+    "picker:spectrum": [pt(700, 330)], "picker:select": [pt(799, 603)], "field:panelOpacity": [pt(150, 493)], "group:Layout": [pt(110, 757), pt(110, 321)],
+    "field:bubbleStyle": [pt(128, 393)], "option:bubbleStyle:1": [pt(128, 441)], "field:showTimestamps": [pt(28, 605)],
     "chat-input": [pt(1220, 738)], emulate: [pt(474, 764)], "menu:tip": [pt(534, 408)], "menu-option:tip:0": [pt(716, 408)], save: [pt(1370, 26)]
   };
   const LEAVE = {"picker:hue": pt(838, 180), "picker:spectrum": pt(760, 250), "field:panelOpacity": pt(202, 493)};
@@ -298,10 +300,8 @@ test("the pointer, arrow included, stays inside the frame whenever it is on the 
       assert.ok(inside(visible, frame, 0.5), `${label}: visible pointer ${JSON.stringify(visible)} outside ${JSON.stringify(frame)} at ${time} ms`);
     }
     if (label.startsWith("example")) {
-      // The replica lays the Layout header out below the 810 px editor while Colors is open, so the
-      // pointer leaves the stage to click it (docs/TUTORIAL.md). That move is the only exception.
-      assert.ok(outside.length > 0 && outside.length <= 30, `${label}: ${outside.length} samples off the stage`);
-      assert.ok(outside.every((time) => time > 14467 && time <= 15117), `${label}: off the stage at ${outside.filter((time) => time <= 14467 || time > 15117)}`);
+      // The sidebar scrolls the Layout header into view below the open Colors group, so the pointer never leaves the stage.
+      assert.deepEqual(outside, [], `${label}: off the stage at ${outside.join(", ")} ms`);
     }
   }
 });

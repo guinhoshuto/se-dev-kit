@@ -128,6 +128,16 @@ export interface TutorialPanelField {
   options: {label: string; value: JsonPrimitive}[];
 }
 
+/**
+ * The sidebar scrolls a target into view while the pointer heads for it. The planner knows no
+ * geometry: the host measures in setup how far to scroll, and nothing when the target is visible.
+ */
+export interface TutorialSidebarScroll {
+  target: string;
+  startMs: number;
+  endMs: number;
+}
+
 export interface TutorialTimeline {
   endMs: number;
   chrome: {
@@ -144,6 +154,8 @@ export interface TutorialTimeline {
   initialValues: Record<string, JsonPrimitive>;
   patches: {atMs: number; patch: TutorialUiPatch}[];
   moves: TutorialCursorMove[];
+  /** One per move to a named target, inside the move's first SCROLL_MS; sorted by startMs. */
+  scrolls: TutorialSidebarScroll[];
   /** Press times; equals `presses.map((press) => press.downMs)`. */
   clicks: number[];
   /** Sorted by downMs. */
@@ -159,6 +171,8 @@ export const DEFAULT_GROUP = "General";
 /** Close-up zoom of the tutorial camera when `autoZoom` does not set one. */
 export const DEFAULT_AUTO_ZOOM = 1.8;
 const DEFAULT_MOVE_MS = 650;
+/** How long the sidebar takes to scroll a target into view, from the start of the move to it. */
+const SCROLL_MS = 450;
 const PRESS_MS = 140;
 const AFTER_CLICK_MS = 260;
 const DEFAULT_TYPING_MS = 70;
@@ -446,6 +460,7 @@ export function compileTutorial(options: {
 
   const patches: TutorialTimeline["patches"] = [];
   const moves: TutorialCursorMove[] = [];
+  const scrolls: TutorialSidebarScroll[] = [];
   const presses: TutorialPress[] = [];
   const cues: TutorialCue[] = [];
   const widget: TutorialWidgetAction[] = [];
@@ -456,6 +471,7 @@ export function compileTutorial(options: {
 
   const patch = (atMs: number, value: TutorialUiPatch) => patches.push({atMs, patch: value});
   const move = (to: TimelineTarget, durationMs = DEFAULT_MOVE_MS) => {
+    if (typeof to === "string") scrolls.push({target: to, startMs: t, endMs: t + Math.min(SCROLL_MS, durationMs)});
     moves.push({startMs: t, endMs: t + durationMs, to, workEndMs: t + durationMs});
     t += durationMs;
   };
@@ -866,6 +882,7 @@ export function compileTutorial(options: {
     initialValues,
     patches: ordered,
     moves,
+    scrolls,
     clicks: presses.map((press) => press.downMs),
     presses,
     cues: cues
