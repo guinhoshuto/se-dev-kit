@@ -189,6 +189,61 @@ test("glossy pattern: a link created by JS, and a protocol-relative //fonts… U
   });
 });
 
+// se-windows 21-listing-tutorial: in tutorial mode the widget frame sits inside the editor replica,
+// and its Google Fonts come from the package as in stage mode (the job failed with FONT_SETTLE_TIMEOUT).
+const tutorialVideo = (widget) => ({
+  screenshots: false,
+  video: {
+    ...VIDEO.video,
+    mode: "tutorial",
+    durationMs: 1000,
+    fps: 2,
+    tutorial: {overlayName: "Fonts overlay", layerName: "Fonts", widget, autoZoom: false, steps: [{action: "wait", ms: 200}]}
+  }
+});
+// se-windows: the script creates the font link at startup, then onWidgetLoad applies the field's font.
+const SCRIPT_LINK_JS = `
+const link = document.createElement("link");
+link.id = "widget-font";
+link.rel = "stylesheet";
+document.head.appendChild(link);
+function setFont(name) {
+  const href = "https://fonts.googleapis.com/css2?family=" + encodeURIComponent(name).replace(/%20/g, "+");
+  if (link.href !== href) link.href = href;
+  document.getElementById("t").style.fontFamily = "'" + name + "', monospace";
+}
+setFont("Unbounded");
+window.addEventListener("onWidgetLoad", (event) => setFont(event.detail.fieldData.font));
+`;
+
+test("tutorial mode serves the widget's Google Fonts from the package: a static link, and se-windows' script link", {timeout: 180_000}, async (t) => {
+  const context = await browserContext(t);
+  if (!context) return;
+  const pkg = await fontPackage(t);
+  const cases = [
+    {
+      widget: await fontWidget(t, {html: `<link rel="stylesheet" href="${css2("Unbounded")}"><h1 style="font-family:'Unbounded'">Studio</h1>`, css: TITLE_CSS, scenes: [{output: {width: 1280, height: 720, format: "png"}}]}),
+      placement: {x: 640, y: 360, scale: 1}
+    },
+    {
+      widget: await fontWidget(t, {
+        html: '<h1 id="t">Studio</h1>',
+        css: TITLE_CSS,
+        js: SCRIPT_LINK_JS,
+        fields: FONT_FIELD,
+        scenes: [{viewport: {width: 960, height: 640}, output: {width: 2560, height: 1440, format: "png"}}]
+      }),
+      placement: {x: 960, y: 540, scale: 1.2}
+    }
+  ];
+  for (const {widget, placement} of cases) {
+    const manifest = await render(context, widget, await pkg.load(), recipe(["still"], tutorialVideo(placement)));
+    assert.equal(manifest.artifacts[0].videoFonts.families.find((entry) => entry.family === "Unbounded")?.status, "loaded");
+    assert.deepEqual(manifest.fonts.served.map(({url}) => url), [css2("Unbounded"), fileUrl("Unbounded")]);
+    assert.deepEqual(manifest.fonts.issues, []);
+  }
+});
+
 test("a family Google refused (recorded 400) completes with a warning", {timeout: 120_000}, async (t) => {
   const context = await browserContext(t);
   if (!context) return;
