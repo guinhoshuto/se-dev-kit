@@ -53,7 +53,7 @@ Steps run in order. Each one advances an internal clock, and the whole script mu
 | `caption` | Show a centered caption; `null` hides it. Captions do not take time. |
 | `selectLayer` | Click the layer, then the **Settings** section. |
 | `openGroup` | Expand a FIELDS group (ungrouped fields are in `General`). |
-| `setField` | Open the field's group if needed and edit it the way a person would: select and type text and numbers; open the color picker for `colorpicker` fields (see below); drag sliders; open dropdowns and pick an option; toggle checkboxes. The widget receives `onWidgetUpdate` when the edit is committed. |
+| `setField` | Open the field's group if needed and edit it the way a person would: select and type text and numbers; open the color picker for `colorpicker` fields (see below); drag sliders; open dropdowns and pick an option; toggle checkboxes. When the edit is committed, the widget reloads with the new value, as in StreamElements (`widget.fieldUpdate: "reload"`, the default), or receives `onWidgetUpdate` with `"event"`. |
 | `chat` | Add a message to the chat panel and dispatch a StreamElements-shaped `message` event. With `typed: true`, the cursor types it into the chat box first. `badges` accepts `broadcaster`, `moderator`, `vip`, and `subscriber`; `data` merges extra fields into `event.data`. |
 | `emulate` | Open **Emulate**, hover the category, pick the submenu `option`, and dispatch the matching event: `follower`, `subscriber` (`1`, `Gift`, `Community gift`), `tip` (`$10`, `$50`), `cheer` (`1k`, `5k`), `raid` (`10`, `50`), `redemption`, or `merch`. `name`, `amount`, and `message` adjust the payload; `listener` and `payload` replace it. |
 | `move` / `click` | Move to, or click, `layer`, `save`, `preview`, `emulate`, `open-editor`, `chat-input`, `group:<name>`, `field:<id>`, or an `{x, y}` point in editor pixels. |
@@ -73,7 +73,7 @@ A `setField` on a `colorpicker` field uses the editor's color picker instead of 
 4. The cursor drags the alpha strip, but only when the opacity changes.
 5. The header shows the requested value. The cursor moves onto **Select**, which turns hovered, and presses it. The dialog shrinks back into the swatch.
 
-The header and the alpha strip follow every drag live. The field text, its swatch, and the widget change only when the dialog finishes closing, which is when StreamElements writes the value and fires `onWidgetUpdate`.
+The header and the alpha strip follow every drag live. The field text, its swatch, and the widget change only when the dialog finishes closing, which is when StreamElements writes the value and reloads the widget.
 
 - **Accepted values.** `value` must be `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)`, or `rgba(r, g, b, a)`. Anything else, including color names, fails compilation.
 - **Exact result.** The committed value is exactly the string in the step, letter case and notation included. The real picker samples a 255-pixel grid and cannot reach every hex (`#ff7ad9` would land on a neighbor). The replica computes marker positions from the target's HSV values and settles on the exact string before **Select**.

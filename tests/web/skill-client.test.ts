@@ -6,7 +6,8 @@ import {mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile} from 'node:fs/pr
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {promisify} from 'node:util';
-import {buildSnapshot, configCatalog, main, normalizeOrigin} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
+import {createHash} from 'node:crypto';
+import {buildSnapshot, configCatalog, fontIssues, main, normalizeOrigin} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
 
 const exec = promisify(execFile);
 const script = resolve('skills/se-widget-studio/scripts/studio-client.mjs');
@@ -38,6 +39,16 @@ test('hosted skill client normalizes safe origins and builds source-faithful sna
     assert.equal(normalizeOrigin('http://127.0.0.1:3000/'), 'http://127.0.0.1:3000');
     assert.throws(() => normalizeOrigin('http://studio.example/'), /HTTPS/);
     assert.throws(() => normalizeOrigin('https://studio.example/path'), /scheme and host/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test('hosted skill client passes widget.fieldUpdate from the catalog into the snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-field-update-'));
+  try {
+    await widget(root);
+    const catalog = join(root, 'catalog.json');
+    await writeFile(catalog, JSON.stringify({widget: {fieldUpdate: 'event'}}));
+    assert.equal((await buildSnapshot(root, {catalog})).widget.fieldUpdate, 'event');
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
@@ -213,6 +224,48 @@ test('hosted import stores the capability privately and never prints it', async 
     await new Promise<void>(done => server.close(() => done()));
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test('run prints the Google Fonts issues of the manifest it downloads, on one line and in its JSON', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-run-fonts-'));
+  const token = 'private_capability_12345678901234567890';
+  const issue = 'upstream-4xx: Google Fonts refused "Missing Family" (https://fonts.googleapis.com/css2?family=Missing+Family) with HTTP 400; the text stays in fallback, as in StreamElements.';
+  const manifest = Buffer.from(JSON.stringify({schemaVersion: 1, fonts: {mode: 'cache', served: [], issues: [issue]}}));
+  const image = Buffer.from([137, 80, 78, 71]);
+  const artifact = (id: string, name: string, bytes: Buffer, contentType: string) => ({id, name, key: `k/${id}`, contentType, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex')});
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* drain */ }
+    if (request.method === 'POST' && request.url === '/api/studio/projects/project-test/jobs') {
+      response.statusCode = 202; response.setHeader('Content-Type', 'application/json');
+      return response.end(JSON.stringify({id: 'job-test', projectId: 'project-test', revisionId: 'revision-test', kind: 'render', selection: 'stills', status: 'completed', createdAt: new Date().toISOString(), progress: 'Done', artifacts: [artifact('image', 'stills/a.png', image, 'image/png'), artifact('manifest', 'stills/manifest.json', manifest, 'application/json')]}));
+    }
+    const body = request.url === '/api/studio/projects/project-test/artifacts/manifest' ? manifest : request.url === '/api/studio/projects/project-test/artifacts/image' ? image : undefined;
+    if (request.method === 'GET' && body) return response.end(body);
+    response.statusCode = 500; response.end('{}');
+  });
+  try {
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const access = join(root, 'access.private.json');
+    await writeFile(access, JSON.stringify({schemaVersion: 1, purpose: 'se-widget-studio-access', origin: `http://127.0.0.1:${address.port}`, projectId: 'project-test', token, editorUrl: `/p/project-test#key=${token}`}), {mode: 0o600});
+    const output = join(root, 'output');
+    const {stdout, stderr} = await exec(process.execPath, [script, 'run', '--access', access, '--kind', 'render', '--selection', 'stills', '--output-dir', output]);
+    assert.equal(stderr, `[se-widget-studio] Google Fonts issues: ${issue}\n`);
+    assert.deepEqual(JSON.parse(stdout).fontIssues, [issue]);
+    assert.deepEqual(JSON.parse(await readFile(join(output, 'job.json'), 'utf8')).fontIssues, [issue]);
+  } finally {
+    await new Promise<void>(done => server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('fontIssues reads only a manifest or test report, and tolerates what is not one', () => {
+  const issues = {fonts: {issues: ['one', 2, 'two']}};
+  assert.deepEqual(fontIssues('stills/manifest.json', Buffer.from(JSON.stringify(issues))), ['one', 'two']);
+  assert.deepEqual(fontIssues('test-report.json', Buffer.from(JSON.stringify(issues))), ['one', 'two']);
+  assert.deepEqual(fontIssues('stills/a-manifest.json.png', Buffer.from(JSON.stringify(issues))), []);
+  assert.deepEqual(fontIssues('stills/manifest.json', Buffer.from('not json')), []);
+  assert.deepEqual(fontIssues('stills/manifest.json', Buffer.from('{"fonts":{}}')), []);
 });
 
 const PNG_3X2 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGM4YVMBQQxwFgBbBAjpVFBn5QAAAABJRU5ErkJggg==', 'base64');

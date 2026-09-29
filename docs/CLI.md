@@ -9,7 +9,7 @@ The Studio provides:
 - Automatic detection of the two common StreamElements file layouts.
 - An interactive editor generated from the real FIELDS schema.
 - Themes, synthetic fixtures, declarative scenes, smoke scenarios, and capture recipes.
-- Essential `onWidgetLoad`, `onWidgetUpdate`, and `onEventReceived` simulation.
+- Essential `onWidgetLoad` and `onEventReceived` simulation, `{{field}}` placeholders, and field changes that reload the widget as StreamElements does (or dispatch the Studio's `onWidgetUpdate`).
 - Deterministic Playwright screenshots, thumbnails, contact sheets, and video rendered from PNG frames.
 - Optional FFmpeg conversion and ffprobe validation when those tools are already installed.
 - Versioned marketplace presets, including an Etsy profile with official sources and a verification date.
@@ -93,6 +93,7 @@ export default defineConfig({
     assets: ["assets/**/*", "fonts/**/*", "media/**/*"],
     viewport: {width: 430, height: 640, deviceScaleFactor: 1},
     ready: {selector: "#chat", timeoutMs: 10_000},
+    fieldUpdate: "reload",
     adapter: "adapters/studio.mjs"
   },
   channel: {username: "streamer"},
@@ -106,6 +107,8 @@ export default defineConfig({
 ```
 
 All paths are resolved relative to `widget.root` and must remain inside it after `realpath` resolution. `assets` extends the startup allowlist for resources that cannot be discovered from production HTML, CSS, or JavaScript references.
+
+`fieldUpdate` says how a field change in a tutorial video or scenario reaches the widget. `"reload"`, the default, recreates the widget with the new values, as the StreamElements editor does: placeholders are substituted again and `onWidgetLoad` fires again. `"event"` keeps the widget and dispatches `onWidgetUpdate`, an event StreamElements does not have; use it only for a widget written against the Studio that must keep its state across a field change. See [Runtime](RUNTIME.md#bridge-sequence).
 
 The theme glob skips `themes/<id>.data.json`: those files are StreamElements DATA tab payloads that ship with the widget, not Studio themes.
 
@@ -148,14 +151,17 @@ window.dispatchEvent(new CustomEvent("onWidgetLoad", {
   detail: {fieldData, channel, recents}
 }));
 
-window.dispatchEvent(new CustomEvent("onWidgetUpdate", {
-  detail: {fieldData}
-}));
-
 window.dispatchEvent(new CustomEvent("onEventReceived", {
   detail: {listener, event}
 }));
+
+// Only with widget.fieldUpdate "event", and in the local development UI; StreamElements has no such event.
+window.dispatchEvent(new CustomEvent("onWidgetUpdate", {
+  detail: {fieldData}
+}));
 ```
+
+With the default `widget.fieldUpdate: "reload"`, a field change loads a new frame instead, which receives a new `onWidgetLoad`.
 
 The partial `SE_API` implements the documented `store.get/set`, `counters.get`, and `getOverlayStatus` shapes. Local store writes emit a synthetic `kvstore:update`; isolated counters default to zero. Any other method rejects with `SWS_UNSUPPORTED_API` instead of returning a false success. Payloads in fixtures are opaque pass-through JSON; the Studio does not claim they are complete or official StreamElements payloads.
 
@@ -193,7 +199,7 @@ The example includes separate Etsy image and video recipes because their canvase
 - The iframe bridge validates the origin, `event.source`, session id, and a 128-bit nonce.
 - Widget assets come from a precomputed allowlist; URL paths are never translated directly into filesystem paths.
 - Built-in `sws-sample:` media come from the package's fixed, hash-verified `sample-media/manifest.json` through a separate exact-lookup route, never from the widget directory.
-- Automated contexts are fresh, block service workers, and block non-loopback network requests.
+- Automated contexts are fresh, block service workers, and block non-loopback network requests. The local CLI blocks Google Fonts too and fails with `FONT_UNAVAILABLE`, pointing to the hosted Studio, which serves them from its cache; see [Google Fonts](RUNTIME.md#google-fonts).
 - Config modules, scenario modules, and adapters are trusted local code with Node or browser privileges appropriate to where they run.
 - Fixtures containing token, cookie, authorization, webhook, secret, password, or live StreamElements API values fail validation.
 - No real messages, identities, cookies, tokens, webhooks, or StreamElements sessions belong in tests or public media.

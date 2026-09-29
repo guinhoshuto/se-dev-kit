@@ -34,7 +34,7 @@ The script requires a fresh project-scoped `VERCEL_OIDC_TOKEN` and verifies its 
 
 This explicitly creates a Sandbox, installs lockfile-pinned dependencies, the Chromium build selected by `playwright-core@1.54.2`, and Linux browser libraries. It verifies a browser launch and both media binaries, records hashes/versions and creates a non-expiring immutable snapshot. It consumes your Sandbox quota. Review Vercel's current limits before executing it. It does not upload widget content or credentials into the baseline. FFmpeg libraries must be statically linked or included in your own reviewed image. Review binary licensing for your use. The [FFmpeg download page](https://ffmpeg.org/download.html) links third-party compiled builds; pin an exact release and verify the publisher's checksum instead of downloading an unversioned binary.
 
-The returned JSON includes the snapshot ID. Retain it with your deployment notes. The app clones this baseline for each job, uploads only trusted engine files and the pinned immutable widget snapshot, disables all external network access, and executes the worker without Blob/API credentials. Jobs are terminated after ten minutes. Final assets and reports are copied back to private Blob with verified SHA-256 hashes. Sandboxes and intermediate frame sequences are then discarded. Final project revisions and output objects remain in Blob until explicitly removed by an operator.
+The returned JSON includes the snapshot ID. Retain it with your deployment notes. The app clones this baseline for each job, uploads only trusted engine files, the pinned immutable widget snapshot, and the Google Fonts files the revision uses, disables all external network access, and executes the worker without Blob/API credentials. Jobs are terminated after ten minutes. Final assets and reports are copied back to private Blob with verified SHA-256 hashes. Sandboxes and intermediate frame sequences are then discarded. Final project revisions and output objects remain in Blob until explicitly removed by an operator.
 
 Rebuild the baseline deliberately when updating Node, Playwright, FFmpeg or fonts. The script fixes Playwright at 1.54.2; review its guard when upgrading. Browser/system fonts can differ from local Chrome: compare final media using the same snapshot when repeatability matters.
 
@@ -61,6 +61,22 @@ node scripts/verify-hosted.mjs --integration --allow-sandbox \
 ```
 
 It makes the same identity, target, and network checks, then uploads this checkout's built `dist/`, the selected files of `tests/integration` (all of them by default), and the folders they read, with nothing installed or downloaded. It runs them with `node --test` on the snapshot's Chromium and FFmpeg under the snapshot's Node 22, streams the output, and stops the clone. A failed, cancelled, or skipped test, or an empty run, fails the check. The output and `report.json` are saved to `.studio-data/sandbox-integration-*/`, and a snapshot built from another `package-lock.json` is reported as a warning.
+
+## Google Fonts cache
+
+Functions fetch Google Fonts for previews and jobs; nothing else in the deployment reaches Google, and Sandboxes never do (see [Google Fonts](RUNTIME.md#google-fonts)). The cache lives in the same private Blob store:
+
+| Key | Contents | Changes |
+| --- | --- | --- |
+| `fonts/v1/objects/<sha256>` | Stylesheet or font bytes | Written once, never deleted |
+| `fonts/v1/index/<id>.json` | A URL's object, per cache epoch and User-Agent | Written once |
+| `fonts/v1/negative/<id>.json` | A 4xx answer from Google | Kept one hour; 429 and 5xx are never cached |
+| `projects/<id>/fontlocks/<revisionId>/…` | The URLs a revision used, with status and SHA-256 | Written once per URL, copied on restore |
+| `usage/fonts-<date>.json` | The day's fetch budget | Updated in place |
+
+Each UTC day allows 3,000 requests to Google for jobs and 1,500 for previews, in separate budgets, so the editor cannot starve renders; a spent budget fails new fonts with `FONT_UNAVAILABLE` until the next day. The cache never shrinks: deleting any of it breaks the promise that a revision re-renders with the same bytes.
+
+`GET /api/fonts/v1/f/<file>` serves cached font files to previews without a capability. It only reads the cache, accepts only names the deployment signed, answers unknown ones with a short-lived 404, and marks hits immutable for the CDN. Add a rate limit for that path in the Vercel firewall (dashboard, Firewall, custom rule on `/api/fonts/v1/f/`), since nothing in the app limits it per client.
 
 ## Local mode and intermediate video
 

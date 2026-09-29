@@ -13,6 +13,14 @@ export interface ReadyRule {
   timeoutMs?: number;
 }
 
+/**
+ * How a field change reaches the widget in captures, tutorials, and scenarios. `reload` recreates
+ * the widget frame with the new values, as the StreamElements editor does: placeholders are
+ * substituted again and `onWidgetLoad` fires again. `event` keeps the frame and dispatches the
+ * Studio's `onWidgetUpdate`, which StreamElements does not have.
+ */
+export type FieldUpdateMode = "reload" | "event";
+
 export interface WidgetFilesConfig {
   html?: string;
   css?: string;
@@ -28,6 +36,8 @@ export interface StudioConfig {
     assets?: string[];
     viewport?: WidgetViewport;
     ready?: ReadyRule;
+    /** Defaults to `reload`. */
+    fieldUpdate?: FieldUpdateMode;
     adapter?: string;
   };
   channel?: JsonObject & {username?: string};

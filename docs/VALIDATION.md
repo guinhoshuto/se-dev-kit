@@ -34,6 +34,7 @@ In another terminal:
 ```sh
 node scripts/verify-web.mjs
 node --import tsx scripts/verify-field-precedence.mjs
+node scripts/verify-font-control.mjs
 ```
 
 To verify the optional creation gate, use a separate local server:

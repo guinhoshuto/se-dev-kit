@@ -1,6 +1,7 @@
 import {dirname, resolve} from "node:path";
 import type {
   CatalogItem,
+  FieldUpdateMode,
   FixtureDefinition,
   JsonObject,
   ReadyRule,
@@ -32,7 +33,7 @@ export interface HostedCatalogAsset {
 
 /** The JSON catalog that the hosted skill client's `import --catalog` takes. */
 export interface HostedCatalog {
-  widget: {viewport?: WidgetViewport; ready?: ReadyRule};
+  widget: {viewport?: WidgetViewport; ready?: ReadyRule; fieldUpdate?: FieldUpdateMode};
   channel?: JsonObject;
   themes: ThemeDefinition[];
   fixtures: FixtureDefinition[];
@@ -121,9 +122,9 @@ export async function hostedCatalog(project: ResolvedProject, options: HostedCat
   }
   assets.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
-  const {viewport, ready} = project.config.widget;
+  const {viewport, ready, fieldUpdate} = project.config.widget;
   return {
-    widget: {...(viewport ? {viewport} : {}), ...(ready ? {ready} : {})},
+    widget: {...(viewport ? {viewport} : {}), ...(ready ? {ready} : {}), ...(fieldUpdate ? {fieldUpdate} : {})},
     ...(project.config.channel ? {channel: withWidgetPaths(structuredClone(project.config.channel))} : {}),
     themes: values(project.themes, themes),
     fixtures: values(project.fixtures, fixtures),

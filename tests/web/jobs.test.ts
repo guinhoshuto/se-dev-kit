@@ -10,6 +10,7 @@ import {executionMode, hostedSandboxName, patchJob, remainingJobTime, runJob} fr
 import {buildAssetMap} from '../../src/server/assets';
 import {prepareSnapshot} from '../../lib/importer';
 import type {WidgetSnapshot, Revision, Job, ObjectStore} from '../../lib/model';
+import {verificationSnapshot} from '../../scripts/verify-hosted.mjs';
 
 function snapshot(): WidgetSnapshot {
   return {schemaVersion: 1, name: 'Worker test', widget: {html: '<div id="ready">Ready</div>', css: 'body{margin:0;background:#182632;color:white}#ready{padding:24px;font:20px sans-serif}', js: 'window.addEventListener("onWidgetLoad",()=>{document.querySelector("#ready").textContent="Loaded";});', fields: {}, viewport: {width: 160, height: 120}, ready: {selector: '#ready', timeoutMs: 5000}}, channel: {username: 'test'}, themes: [], fixtures: [], scenes: [{schemaVersion: 1, id: 'default', name: 'Default', output: {width: 160, height: 120}, captureAtMs: 0}], scenarios: [{schemaVersion: 1, id: 'loaded', name: 'Loaded', steps: [{action: 'assert', selector: '#ready', text: 'Loaded'}]}], recipes: [{schemaVersion: 1, id: 'image', name: 'Image', scenes: ['default'], outputs: {screenshots: true, thumbnails: {width: 80, height: 60}, contactSheet: true}}], assets: []};
@@ -35,6 +36,16 @@ test('materialized snapshots preserve source and verify asset integrity', async 
     assert.equal(relocateProject(materialized, await realpath(join(root, 'job')), '/vercel/sandbox/job').widgetRoot, '/vercel/sandbox/job/widget');
     prepared.assets[0]!.sha256 = 'invalid';
     await assert.rejects(materializeSnapshot(prepared, store, join(root, 'bad-job')), /integrity/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+test('materialized snapshots carry widget.fieldUpdate into the engine config', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-materialize-mode-'));
+  try {
+    const store = new LocalStore(join(root, 'store'));
+    const value = snapshot();
+    value.widget.fieldUpdate = 'event';
+    assert.equal((await materializeSnapshot({snapshot: value, assets: [], warnings: []}, store, join(root, 'job'))).config.widget.fieldUpdate, 'event');
+    assert.equal((await materializeSnapshot({snapshot: snapshot(), assets: [], warnings: []}, store, join(root, 'plain'))).config.widget.fieldUpdate, undefined);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 test('materialized paths remain allowlisted through a temporary directory symlink', async () => {
@@ -143,6 +154,24 @@ test('[browser] a job loads the widget files a media array names, in a widget th
     assert.equal(tested.status, 'completed', tested.error);
     const report = JSON.parse(Buffer.from((await store.get(tested.artifacts[0]!.key))!.body).toString());
     assert.equal(report.scenarios[0].status, 'passed', JSON.stringify(report.scenarios[0]));
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+// verify-hosted checks production with this scenario: it must pass whichever way fields reach the widget.
+test('[browser] the verify-hosted verification scenario passes with reload and with event', {timeout: 240_000}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-verification-modes-'));
+  try {
+    const store = new LocalStore(join(root, 'store'));
+    for (const mode of ['reload', 'event'] as const) {
+      const value = verificationSnapshot() as WidgetSnapshot;
+      value.widget.fieldUpdate = mode;
+      const prepared = await prepareSnapshot(value, store, `projects/project-test/prepared/verification-${mode}`);
+      const verification: Revision = {id: `verification-${mode}`, projectId: 'project-test', createdAt: new Date().toISOString(), snapshot: value, status: 'ready', diagnostics: [], prepared};
+      const tested = await runJob({...job('test', 'all'), id: `job-verification-${mode}`, revisionId: verification.id}, verification, store);
+      assert.equal(tested.status, 'completed', tested.error);
+      const report = JSON.parse(Buffer.from((await store.get(tested.artifacts[0]!.key))!.body).toString());
+      assert.equal(report.scenarios[0].status, 'passed', `${mode}: ${JSON.stringify(report.scenarios[0])}`);
+    }
   } finally {await rm(root, {recursive: true, force: true});}
 });
 

@@ -122,7 +122,7 @@ async function buildImportDefinition(widgetRoot, {catalog, catalogData, layout: 
   }
   const widget = extra.widget ?? {};
   check(widget && typeof widget === 'object' && !Array.isArray(widget), 'Catalog widget options must be an object.');
-  const forbidden = Object.keys(widget).filter(key => !['viewport', 'ready'].includes(key));
+  const forbidden = Object.keys(widget).filter(key => !['viewport', 'ready', 'fieldUpdate'].includes(key));
   check(forbidden.length === 0, `Catalog cannot override production widget source: ${forbidden.join(', ')}`);
   const localAssets = []; const hostedAssets = [];
   check(extra.assets === undefined || Array.isArray(extra.assets), 'Catalog assets must be an array.');
@@ -432,6 +432,15 @@ async function downloadArtifact(access, artifact) {
   return {bytes, sha256};
 }
 
+/** The `fonts.issues` of a render manifest or test report, so a font warning is not left unread in the files. */
+export function fontIssues(name, bytes) {
+  if (!/(?:^|[/\\])(?:manifest|test-report)\.json$/.test(String(name))) return [];
+  try {
+    const issues = JSON.parse(Buffer.from(bytes).toString('utf8'))?.fonts?.issues;
+    return Array.isArray(issues) ? issues.filter(issue => typeof issue === 'string') : [];
+  } catch {return [];}
+}
+
 async function runJob(flags) {
   const access = await readPrivate(required(flags, '--access'));
   const kind = required(flags, '--kind'); const selection = required(flags, '--selection');
@@ -454,16 +463,20 @@ async function runJob(flags) {
   check(job.status === 'completed', `Job ended with ${job.status}. ${job.error ?? ''}`);
   await mkdir(output, {recursive: false, mode: 0o700});
   const artifacts = [];
+  const fonts = new Set();
   for (const [index, artifact] of job.artifacts.entries()) {
     const downloaded = await downloadArtifact(access, artifact);
     const safe = basename(String(artifact.name)).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
     const file = `${String(index).padStart(3, '0')}-${safe}`;
     await writeFile(resolve(output, file), downloaded.bytes, {flag: 'wx', mode: 0o600});
     artifacts.push({id: artifact.id, file, contentType: artifact.contentType, bytes: downloaded.bytes.length, sha256: downloaded.sha256});
+    for (const issue of fontIssues(artifact.name, downloaded.bytes)) fonts.add(issue);
   }
-  const report = {schemaVersion: 1, origin: access.origin, projectId: access.projectId, jobId: job.id, revisionId: job.revisionId, kind, selection, status: job.status, artifacts};
+  const fontSummary = fonts.size ? {fontIssues: [...fonts]} : {};
+  if (fonts.size) process.stderr.write(`[se-widget-studio] Google Fonts issues: ${[...fonts].join(' | ')}\n`);
+  const report = {schemaVersion: 1, origin: access.origin, projectId: access.projectId, jobId: job.id, revisionId: job.revisionId, kind, selection, status: job.status, artifacts, ...fontSummary};
   await writeFile(resolve(output, 'job.json'), JSON.stringify(report, null, 2) + '\n', {flag: 'wx', mode: 0o600});
-  console.log(JSON.stringify({status: job.status, projectId: access.projectId, jobId: job.id, output, artifacts}));
+  console.log(JSON.stringify({status: job.status, projectId: access.projectId, jobId: job.id, output, artifacts, ...fontSummary}));
 }
 
 function help() {

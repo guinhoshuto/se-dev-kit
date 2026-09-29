@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {fixtureSchema, jsonObjectSchema, jsonValueSchema, readySchema, recipeSchema, scenarioSchema, sceneSchema, themeSchema} from '../src/config/schemas';
+import {fieldUpdateSchema, fixtureSchema, jsonObjectSchema, jsonValueSchema, readySchema, recipeSchema, scenarioSchema, sceneSchema, themeSchema} from '../src/config/schemas';
 import type {WidgetSnapshot} from './model';
 import {HttpError} from './errors';
 
@@ -18,7 +18,7 @@ export function safeKey(value: string): string {
 const viewport = z.object({width:z.number().int().min(1).max(4096),height:z.number().int().min(1).max(4096),deviceScaleFactor:z.number().min(0.25).max(2).optional()}).strict();
 const snapshotSchema = z.object({
   schemaVersion:z.literal(1), name:z.string().trim().min(1).max(100),
-  widget:z.object({html:z.string(),css:z.string(),js:z.string(),fields:jsonValueSchema,viewport:viewport.default({width:430,height:640}),ready:readySchema.optional()}).strict(),
+  widget:z.object({html:z.string(),css:z.string(),js:z.string(),fields:jsonValueSchema,viewport:viewport.default({width:430,height:640}),ready:readySchema.optional(),fieldUpdate:fieldUpdateSchema.optional()}).strict(),
   channel:jsonObjectSchema.default({username:'streamer'}),
   themes:z.array(themeSchema).max(48).default([]), fixtures:z.array(fixtureSchema).max(48).default([]),
   scenes:z.array(sceneSchema).max(48).default([]), scenarios:z.array(scenarioSchema).max(48).default([]), recipes:z.array(recipeSchema).max(48).default([]),

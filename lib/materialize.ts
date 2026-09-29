@@ -82,7 +82,7 @@ export async function materializeSnapshot(prepared: PreparedSnapshot, store: Obj
   return {
     packageVersion: STUDIO_VERSION, inputDirectory: root, configDirectory: root, widgetRoot: root,
     outputRoot: resolve(jobDirectory, 'output'), files, relativeFiles, fields, fieldDefaults: defaults, rawFields: snapshot.widget.fields,
-    config: {schemaVersion: 1, widget: {root: '.', files: relativeFiles, assets: [...seen], viewport: snapshot.widget.viewport, ...(snapshot.widget.ready ? {ready: snapshot.widget.ready} : {})}, channel: snapshot.channel, output: {root: '../output'}},
+    config: {schemaVersion: 1, widget: {root: '.', files: relativeFiles, assets: [...seen], viewport: snapshot.widget.viewport, ...(snapshot.widget.ready ? {ready: snapshot.widget.ready} : {}), ...(snapshot.widget.fieldUpdate ? {fieldUpdate: snapshot.widget.fieldUpdate} : {})}, channel: snapshot.channel, output: {root: '../output'}},
     themes: await catalog('themes', snapshot.themes), fixtures: await catalog('fixtures', snapshot.fixtures),
     scenes: await catalog('scenes', snapshot.scenes), scenarios: await catalog('scenarios', snapshot.scenarios), recipes: await catalog('recipes', snapshot.recipes)
   };

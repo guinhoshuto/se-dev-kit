@@ -1,7 +1,9 @@
 import type {Browser, BrowserContext, Frame, Page} from "playwright-core";
 import type {
+  FieldUpdateMode,
   FixtureDefinition,
   FontReport,
+  JsonObject,
   ResolvedProject,
   ResolvedWidgetFiles,
   ScenarioDefinition,
@@ -27,6 +29,19 @@ export interface ScenarioResult {
   warnings: string[];
 }
 
+/** `widget.fieldUpdate` when the config leaves it out: the StreamElements editor reloads the widget. */
+export const DEFAULT_FIELD_UPDATE: FieldUpdateMode = "reload";
+
+export interface FieldUpdateResult {
+  /** The frame's font report once the change settled. */
+  fonts: FontReport | undefined;
+  /**
+   * Virtual time a reload advanced the clock by, because the ready selector needed timers to appear.
+   * The caller's timeline must count it. Always 0 for `event`.
+   */
+  virtualMs: number;
+}
+
 export interface OpenSceneResult {
   context: BrowserContext;
   page: Page;
@@ -35,6 +50,13 @@ export interface OpenSceneResult {
   frame: () => Frame;
   /** The job's font package, when the capture replays one (hosted jobs). */
   fonts?: FontResolver;
+  fieldUpdate: FieldUpdateMode;
+  /**
+   * Applies a field change as `fieldUpdate` says, within real-time deadlines: `reload` recreates the
+   * frame with every value so far (placeholders substituted again, a new `onWidgetLoad`, then a
+   * settle), `event` dispatches `onWidgetUpdate` with the merged values.
+   */
+  updateFields: (fieldData: JsonObject) => Promise<FieldUpdateResult>;
 }
 
 export async function backgroundForBrowser(
@@ -145,16 +167,21 @@ async function commandTimeout(page: Page, label: string, deadlineMs: number): Pr
   return new StudioError("CAPTURE_COMMAND_TIMEOUT", `Widget command ${label} did not finish within ${deadlineMs}ms of real time.`);
 }
 
-async function captureHostLoadWithClock(
+/**
+ * Waits for the frame the capture host is loading, against a deadline in real time: the page's
+ * clock stays paused while stylesheets, scripts and fonts load. Only a ready selector that needs
+ * the widget's timers advances it, 16 ms at a time. Returns the virtual time that took.
+ */
+async function awaitFrameLoad(
   page: Page,
-  payload: unknown,
+  load: Promise<void>,
   timeoutMs: number,
   readySelector: string | undefined,
   issues?: Pick<BrowserIssueLog, "pendingFonts">
-): Promise<void> {
+): Promise<number> {
   let settled = false;
   let failure: unknown;
-  const pending = captureHostLoad(page, payload)
+  const pending = load
     .catch((error: unknown) => {
       failure = error;
     })
@@ -166,15 +193,15 @@ async function captureHostLoadWithClock(
   while (!settled && !assetsReady) {
     await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
     if (settled) break;
-    const events = await frameEvents(page);
+    const events = await frameLoadEvents(page);
     if (Date.now() > deadline) {
       if (settlingStarted(events)) throw settleTimeout(timeoutMs + 5_000, await describePendingFonts(page, issues));
       throw new StudioError("CAPTURE_READY_TIMEOUT", `Widget capture host timed out after ${timeoutMs + 5_000}ms.`);
     }
     assetsReady = events.some((event) => event.type === "frame:assets-ready");
   }
+  let virtualElapsed = 0;
   if (!settled && assetsReady && readySelector) {
-    let virtualElapsed = 0;
     while (!settled && virtualElapsed < timeoutMs) {
       const widgetFrame = page.frames().find((frame) => frame !== page.mainFrame() && frame.url().includes("/__sws/frame/"));
       if (widgetFrame && (await widgetFrame.locator(readySelector).count()) > 0) break;
@@ -191,6 +218,31 @@ async function captureHostLoadWithClock(
   }
   await pending;
   if (failure) throw failure;
+  return virtualElapsed;
+}
+
+/**
+ * Replaces the widget frame with one loading `fieldData` (every value, not a patch) from the frame
+ * document `docKey`, and returns the virtual time its ready selector needed.
+ */
+async function captureHostReload(
+  page: Page,
+  payload: {fieldData: JsonObject; readyTimeoutMs: number; docKey: string},
+  readySelector: string | undefined,
+  issues: BrowserIssueLog
+): Promise<number> {
+  issues.replacingFrame();
+  // `unknown` keeps Playwright from expanding the recursive JsonObject type.
+  const options: unknown = payload;
+  await page.evaluate((value) => {
+    const captureWindow = window as unknown as {__SWS_CAPTURE__: {reload: (value: unknown) => void}};
+    captureWindow.__SWS_CAPTURE__.reload(value);
+  }, options);
+  const reloaded = page.evaluate(async () => {
+    const captureWindow = window as unknown as {__SWS_CAPTURE__: {reloaded: () => Promise<void>}};
+    await captureWindow.__SWS_CAPTURE__.reloaded();
+  });
+  return awaitFrameLoad(page, reloaded, payload.readyTimeoutMs, readySelector, issues);
 }
 
 /** Dispatches an event; the frame acknowledges after the fonts it asked for settle, within a real deadline. */
@@ -266,6 +318,16 @@ export async function frameEvents(page: Page): Promise<{type: string; payload?: 
   });
 }
 
+/** The current frame's events only: a reload's wait must not see the replaced frame's readiness. */
+async function frameLoadEvents(page: Page): Promise<{type: string; payload?: unknown}[]> {
+  return page.evaluate(() => {
+    const captureWindow = window as unknown as {
+      __SWS_CAPTURE__: {getLoadEvents: () => {type: string; payload?: unknown}[]};
+    };
+    return captureWindow.__SWS_CAPTURE__.getLoadEvents();
+  });
+}
+
 export async function sampleFrameAnimations(page: Page, timelineMs: number): Promise<void> {
   await Promise.all(
     page.frames().map((frame) =>
@@ -318,13 +380,14 @@ export async function openScene(
   const issues = observePage(page);
   const captureTime = new Date(resolved.runtimeState.fixedTime);
   const readyTimeoutMs = project.config.widget.ready?.timeoutMs ?? 10_000;
+  const readySelector = project.config.widget.ready?.selector;
   await page.clock.install({time: captureTime});
   await page.goto(`${server.origin}/__sws/${options.host ?? "capture"}`, {waitUntil: "domcontentloaded"});
   // Pause before the widget iframe is created. The large control-host-only jump avoids
   // racing the naturally advancing clock without consuming any widget timers.
   await page.clock.pauseAt(new Date(captureTime.getTime() + 86_400_000));
   await page.clock.setSystemTime(captureTime);
-  await captureHostLoadWithClock(page, {
+  await awaitFrameLoad(page, captureHostLoad(page, {
     state: resolved.runtimeState,
     viewport: resolved.viewport,
     output: resolved.output,
@@ -332,7 +395,7 @@ export async function openScene(
     background: await backgroundForBrowser(resolved.background, server),
     readyTimeoutMs,
     docKey
-  }, readyTimeoutMs, project.config.widget.ready?.selector, issues);
+  }), readyTimeoutMs, readySelector, issues);
   await page.clock.setSystemTime(captureTime);
   await sampleFrameAnimations(page, 0);
   const getFrame = () => {
@@ -340,7 +403,17 @@ export async function openScene(
     if (!frame) throw new StudioError("FRAME_NOT_FOUND", "Widget frame did not attach to the capture host.");
     return frame;
   };
-  return {context, page, issues, resolved, frame: getFrame, ...(options.fonts ? {fonts: options.fonts} : {})};
+  const fieldUpdate = project.config.widget.fieldUpdate ?? DEFAULT_FIELD_UPDATE;
+  let fieldData = structuredClone(resolved.runtimeState.fieldData);
+  const updateFields = async (patch: JsonObject): Promise<FieldUpdateResult> => {
+    fieldData = {...fieldData, ...structuredClone(patch)};
+    if (fieldUpdate === "event") return {fonts: await captureHostUpdateFields(page, patch), virtualMs: 0};
+    // The new frame document substitutes the {{field}} placeholders with the values so far.
+    const reloadKey = await server.registerFrameDocument(fieldData);
+    const virtualMs = await captureHostReload(page, {fieldData, readyTimeoutMs, docKey: reloadKey}, readySelector, issues);
+    return {fonts: await captureHostSettle(page), virtualMs};
+  };
+  return {context, page, issues, resolved, frame: getFrame, ...(options.fonts ? {fonts: options.fonts} : {}), fieldUpdate, updateFields};
 }
 
 export async function replayFixture(page: Page, fixture: FixtureDefinition | undefined): Promise<number> {
@@ -435,7 +508,7 @@ async function runOneScenario(
           await opened.page.clock.fastForward(1);
           break;
         case "updateFields":
-          await captureHostUpdateFields(opened.page, step.fieldData);
+          await opened.updateFields(step.fieldData);
           await opened.page.clock.fastForward(1);
           break;
         case "wait":

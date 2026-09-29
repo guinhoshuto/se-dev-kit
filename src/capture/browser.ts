@@ -3,7 +3,7 @@ import {access, realpath} from "node:fs/promises";
 import {constants} from "node:fs";
 import {platform} from "node:os";
 import {promisify} from "node:util";
-import {chromium, errors, type Browser, type BrowserContext, type Page} from "playwright-core";
+import {chromium, errors, type Browser, type BrowserContext, type Page, type Request} from "playwright-core";
 import {StudioError} from "../shared/errors.js";
 import {canonicalGoogleFontsUrl, isGoogleFontsHost} from "../runtime/google-fonts-url.js";
 
@@ -289,13 +289,24 @@ export interface BrowserIssueLog {
   fonts: FontRequestIssue[];
   /** Google Fonts requests the page made that have not finished or failed yet (for timeout messages). */
   pendingFonts: Set<string>;
+  /**
+   * Call before the widget frame is replaced by a field reload. Requests the replaced document still
+   * had in flight end as `net::ERR_ABORTED`; they are the reload's doing, not failures of the widget.
+   */
+  replacingFrame: () => void;
 }
 
 const CSP_REFUSAL = /^Refused to load the (?:stylesheet|font) '([^']+)'/;
 
 export function observePage(page: Page): BrowserIssueLog {
-  const log: BrowserIssueLog = {errors: [], warnings: [], fonts: [], pendingFonts: new Set()};
+  // Each field reload starts a generation; an abort of a request from an earlier one is the reload's.
+  let generation = 0;
+  const issuedIn = new WeakMap<Request, number>();
+  const log: BrowserIssueLog = {errors: [], warnings: [], fonts: [], pendingFonts: new Set(), replacingFrame: () => {
+    generation += 1;
+  }};
   page.on("request", (request) => {
+    issuedIn.set(request, generation);
     if (isGoogleFontsRequestUrl(request.url())) log.pendingFonts.add(request.url());
   });
   page.on("requestfinished", (request) => log.pendingFonts.delete(request.url()));
@@ -318,6 +329,7 @@ export function observePage(page: Page): BrowserIssueLog {
   page.on("requestfailed", (request) => {
     log.pendingFonts.delete(request.url());
     const failure = request.failure()?.errorText ?? "request failed";
+    if (failure === "net::ERR_ABORTED" && (issuedIn.get(request) ?? generation) < generation) return;
     if (isGoogleFontsRequestUrl(request.url())) {
       noteFont({url: request.url(), detail: failure});
       return;

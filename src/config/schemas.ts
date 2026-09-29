@@ -21,6 +21,8 @@ export const readySchema = z
   })
   .strict();
 
+export const fieldUpdateSchema = z.enum(["reload", "event"]);
+
 export const configSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -39,6 +41,7 @@ export const configSchema = z
         assets: z.array(z.string().min(1)).optional(),
         viewport: viewportSchema.optional(),
         ready: readySchema.optional(),
+        fieldUpdate: fieldUpdateSchema.optional(),
         adapter: z.string().min(1).optional()
       })
       .strict(),

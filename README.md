@@ -7,7 +7,8 @@ The Next.js application lives at this repository's root. Consumer widgets remain
 ## What it does
 
 - Imports versioned snapshots without modifying the original files.
-- Runs widgets inside opaque-origin sandboxed iframes with runtime network access blocked.
+- Runs widgets inside opaque-origin sandboxed iframes with runtime network access blocked. Google Fonts are the one exception, and widgets load them as in StreamElements: trusted server code fetches them into an append-only cache, and previews and jobs get them from there ([Google Fonts](docs/RUNTIME.md#google-fonts)).
+- Substitutes `{{field}}` placeholders in HTML, CSS, and JavaScript, and reloads the widget when a field changes, as the StreamElements editor does.
 - Generates controls from FIELDS, with themes, fixtures, scenes, framing, and a theme gallery.
 - Saves immutable revisions and rejects stale full replacements instead of overwriting another editor's work.
 - Runs deterministic browser scenarios and recipes for screenshots, thumbnails, contact sheets, and short silent videos.
@@ -69,7 +70,7 @@ The [API reference](docs/API.md) includes runnable import examples, schemas, upl
 
 Editing capabilities travel in an initial URL fragment and authorized request headers, not query parameters. Keep them out of Git, screenshots, logs, prompts, and widget data. Anyone holding a capability can read and edit that project. There is currently no account recovery, capability rotation, or project deletion API.
 
-Source is retained as submitted in immutable revisions. A separate derived snapshot captures supported dependencies for offline rendering; uploaded code is never evaluated as Node.js configuration. Public HTTPS dependencies may be fetched during preparation under address, size, and time limits. Runtime fetches, module imports, and dynamic resource discovery are not supported. Use synthetic identities/events only—never real StreamElements tokens, cookies, webhooks, private messages, or channel data.
+Source is retained as submitted in immutable revisions. A separate derived snapshot captures supported dependencies for offline rendering; uploaded code is never evaluated as Node.js configuration. Public HTTPS dependencies may be fetched during preparation under address, size, and time limits. Runtime fetches, module imports, and dynamic resource discovery are not supported, except for Google Fonts, which the Studio resolves from its cache. Use synthetic identities/events only—never real StreamElements tokens, cookies, webhooks, private messages, or channel data.
 
 FIELDS defaults, theme, fixture, scene, and explicit overrides are separate layers. Presentation settings such as viewport, background, crop, and visual zoom are not injected into `fieldData`. Marketplace rules remain in dated presets under `presets/marketplaces`, with source URLs; they are not baked into the renderer.
 
@@ -97,6 +98,7 @@ Then run in another terminal, with an existing browser and FFmpeg/ffprobe availa
 ```sh
 node scripts/verify-web.mjs
 node --import tsx scripts/verify-field-precedence.mjs
+node scripts/verify-font-control.mjs
 ```
 
 The script accepts only loopback targets, creates synthetic projects/jobs, and writes screenshots, generated media, and a JSON report into a new `.studio-data/verification-*` directory. It is not a hosted-deployment check. Repeated runs consume the local store's personal daily budgets; use a new deliberate validation store when needed, without deleting unrelated data.

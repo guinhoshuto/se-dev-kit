@@ -20,12 +20,14 @@ Submit a JSON object, not a ZIP, multipart upload, file paths, or executable con
 | --- | --- |
 | `schemaVersion` | Required; exactly `1`. |
 | `name` | Required; trimmed, 1–100 characters. |
-| `widget` | Required object with string `html`, `css`, `js` and JSON `fields`; optional `viewport` and `ready`. |
+| `widget` | Required object with string `html`, `css`, `js` and JSON `fields`; optional `viewport`, `ready`, and `fieldUpdate`. |
 | `channel` | JSON object; defaults to `{"username":"streamer"}`. Synthetic data only. |
 | `themes`, `fixtures`, `scenes`, `scenarios`, `recipes` | Arrays of versioned catalog objects; each defaults to `[]`, at most 48 entries each. |
 | `assets` | Asset objects described below; defaults to `[]`. |
 
-`widget.viewport` defaults to `{"width":430,"height":640}`. Its dimensions are integers from 1 to 4096; optional `deviceScaleFactor` is 0.25–2. Each raster dimension after device scaling must remain at most 4096. `widget.ready` accepts optional `selector` and `timeoutMs` (100–30,000); runtime timeout defaults to 10,000 ms.
+`widget.viewport` defaults to `{"width":430,"height":640}`. Its dimensions are integers from 1 to 4096; optional `deviceScaleFactor` is 0.25–2. Each raster dimension after device scaling must remain at most 4096. `widget.ready` accepts optional `selector` and `timeoutMs` (100–30,000); runtime timeout defaults to 10,000 ms. `widget.fieldUpdate` is `"reload"` (the default) or `"event"`: how a scenario `updateFields` step or a tutorial `setField` reaches the widget in jobs, either by reloading it with the new values as StreamElements does, or by dispatching the Studio's `onWidgetUpdate` (see [Runtime](RUNTIME.md#bridge-sequence)). The editor preview always reloads.
+
+`{{field}}` placeholders in `html`, `css`, and `js` are replaced with the effective field values in previews and jobs, as StreamElements does; the stored source keeps them (see [Placeholders](RUNTIME.md#placeholders)).
 
 `widget.fields` accepts object-form FIELDS, an array whose entries have `id` or `name`, or an object with a `fields` property. Object-form dropdown options map stored values to labels: `{"compact":"Compact"}`. Unsupported field types remain available as raw data.
 
@@ -202,6 +204,8 @@ Preparation validates every reference against the deployed `sample-media/manifes
 
 Draft preparation stays in request memory and does not create a revision. New external resources in field overrides must be included in a prepared snapshot. Sample references in the effective field data, channel, recents, and the scene fixture's events, including overrides, are embedded as verified data URLs; references used only by other scenes are not. `backgroundImage` is the scene background as a verified data URL. The effective fields merge shallowly as `FIELDS defaults → theme → fixture → scene → explicit fieldData`.
 
+Google Fonts in a preview: stylesheets written in the widget's HTML or CSS arrive in `html` as `data:` CSS. A stylesheet the widget adds at runtime is held back by the frame, which asks the editor with `frame:font-request`; the editor resolves it with `POST /api/studio/projects/:id/fonts` and the project capability (body `{url, sampleText?, revisionId?}`; answer `{status: "ok", css, partial}`, or `{status: "upstream-4xx" | "unavailable", message}`), and returns it with `host:font-response`. That route is rate limited per project (HTTP `429`). Font files load from `GET /api/fonts/v1/f/<file>`, which needs no capability, only reads the cache, and returns immutable responses. See [Google Fonts](RUNTIME.md#google-fonts).
+
 Prefer the supplied editor for interactive manipulation. A custom client must load `html` into `srcdoc` on an iframe with exactly the restricted `sandbox="allow-scripts"` policy, preserve its CSP, and implement the existing bridge's source/origin/session/nonce validation. Never inject preview HTML into the editor DOM or add `allow-same-origin`. See [the preview component](../components/widget-preview.tsx) and [runtime message handling](../src/runtime/frame.ts).
 
 ## Jobs and artifact download
@@ -215,6 +219,8 @@ Prefer the supplied editor for interactive manipulation. A custom client must lo
 `kind` is `render` or `test`. For render, select a configured recipe ID, `scene:<sceneId>`, or `video:<sceneId>`. For tests, select a scenario ID or `all`; browser smoke checks also run. A job pins the project's current immutable revision when created. A later save does not change an existing job.
 
 HTTP `202` means accepted, not complete. The response is a `Job` with `id`, `projectId`, `revisionId`, `kind`, `selection`, `status`, timestamps, `progress`, `artifacts`, and optional `error`/execution metadata. Poll `GET /api/studio/projects/:id/jobs` and find that ID. Statuses are `queued`, `running`, `completed`, `failed`, or `cancelled`; there is currently no cancel endpoint. Stop polling on a terminal state and report `error` for failures. Use a bounded polling deadline and avoid aggressive polling; jobs have a ten-minute execution budget measured from creation.
+
+A job whose widget asks for Google Fonts outside the job's font files runs again after the Studio fetches them, at most four passes; `progress` then reads `Fetching Google Fonts (pass n/4).` The render `manifest.json` and the `test-report.json` carry a `fonts` section with what the job served and any font issues (see [Google Fonts](RUNTIME.md#google-fonts)).
 
 An accepted selection can still fail during execution. If the runner cannot start, POST returns HTTP `422` with the failed **Job object**, not the usual `{error}` wrapper. A failed media job can retain useful manifests/images. Final web video requires successful encoding and probing; without FFmpeg/ffprobe, use the [local CLI's explicit PNG-sequence intermediate](CAPTURE.md) instead. Web jobs do not retain temporary frame sequences.
 

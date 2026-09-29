@@ -1,10 +1,10 @@
-import type {JsonValue, JsonObject, WidgetViewport, ReadyRule, ThemeDefinition, FixtureDefinition, SceneDefinition, ScenarioDefinition, RecipeDefinition} from '../src/types';
+import type {JsonValue, JsonObject, WidgetViewport, ReadyRule, FieldUpdateMode, ThemeDefinition, FixtureDefinition, SceneDefinition, ScenarioDefinition, RecipeDefinition} from '../src/types';
 
 export interface AssetInput {path: string; url?: string; content?: string; encoding?: 'utf8' | 'base64'; contentType?: string; uploadId?: string}
 export interface WidgetSnapshot {
   schemaVersion: 1;
   name: string;
-  widget: {html: string; css: string; js: string; fields: JsonValue; viewport: WidgetViewport; ready?: ReadyRule};
+  widget: {html: string; css: string; js: string; fields: JsonValue; viewport: WidgetViewport; ready?: ReadyRule; fieldUpdate?: FieldUpdateMode};
   channel: JsonObject;
   themes: ThemeDefinition[];
   fixtures: FixtureDefinition[];

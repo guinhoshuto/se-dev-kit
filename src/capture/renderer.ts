@@ -23,7 +23,6 @@ import {buildAssetMap} from "../server/assets.js";
 import {
   captureHostDispatch,
   captureHostSettle,
-  captureHostUpdateFields,
   checkOpenedFonts,
   frameEvents,
   openScene,
@@ -121,6 +120,12 @@ interface ArtifactFonts {
   warnings: string[];
   /** Virtual time added to a still so canvas text drawn in fallback could redraw with its face. */
   redrawMs: number;
+}
+
+/** One field change of a tutorial video: its time, and the virtual time a reload's ready selector used. */
+interface FieldUpdateRecord {
+  atMs: number;
+  virtualMs: number;
 }
 
 function manifestFonts(fonts: ArtifactFonts | undefined): JsonObject | undefined {
@@ -525,6 +530,8 @@ async function renderVideoFrames(options: {
   /** True when a font was outside the package: frames stopped, and nothing below was written. */
   discovery: boolean;
   fonts: ArtifactFonts;
+  /** How the tutorial's field changes reached the widget, for the manifest; absent without any. */
+  fieldUpdate?: JsonObject;
   framesDirectory: string;
   framesManifest: string;
   frameFiles: string[];
@@ -558,6 +565,7 @@ async function renderVideoFrames(options: {
   const framesDirectory = resolve(options.recipeDirectory, options.variant.id, "frames");
   const frameCount = videoFrameCount(options.video);
   const frames: {file: string; timestampMs: number; sha256: string}[] = [];
+  const fieldUpdates: FieldUpdateRecord[] = [];
   let currentTime = 0;
   let eventIndex = 0;
   const events: TutorialTimeline["widget"] = [
@@ -592,16 +600,22 @@ async function renderVideoFrames(options: {
         const delta = timelineEvent.atMs - currentTime;
         if (delta > 0) await opened.page.clock.fastForward(delta);
         await sampleFrameAnimations(opened.page, timelineEvent.atMs);
-        // Both commands settle fonts in the frame before they are acknowledged, so the rAF of the
-        // next frame already draws with the faces the event asked for.
+        let settledAtMs = timelineEvent.atMs;
+        // Every path settles fonts in the frame before it returns, so the rAF of the next frame
+        // already draws with the faces the event asked for.
         if (timelineEvent.kind === "fields") {
-          noteFonts(await captureHostUpdateFields(opened.page, timelineEvent.fieldData), true);
+          const update = await opened.updateFields(timelineEvent.fieldData);
+          noteFonts(update.fonts, true);
+          // A reload whose ready selector needed virtual time used that much of the timeline, so the
+          // widget's clock and the frame timestamps stay equal from the next frame on.
+          settledAtMs += update.virtualMs;
+          fieldUpdates.push({atMs: timelineEvent.atMs, virtualMs: update.virtualMs});
         } else {
           noteFonts(await captureHostDispatch(opened.page, timelineEvent.listener, timelineEvent.event), true);
         }
-        await sampleFrameAnimations(opened.page, timelineEvent.atMs);
+        await sampleFrameAnimations(opened.page, settledAtMs);
         await opened.page.clock.fastForward(1);
-        currentTime = timelineEvent.atMs + 1;
+        currentTime = settledAtMs + 1;
         eventIndex += 1;
       }
       if (timestampMs > currentTime) {
@@ -660,6 +674,9 @@ async function renderVideoFrames(options: {
   return {
     discovery: false,
     fonts: {families: fontFamilies, warnings: [...fontWarnings], redrawMs: 0},
+    ...(fieldUpdates.length > 0
+      ? {fieldUpdate: JSON.parse(JSON.stringify({mode: opened.fieldUpdate, updates: fieldUpdates})) as JsonObject}
+      : {}),
     framesDirectory,
     framesManifest,
     frameFiles: frames.map((frame) => frame.file),
@@ -873,6 +890,7 @@ export async function renderRecipe(
       let videoDimensions: {width: number; height: number} | undefined;
       let stillFonts: ArtifactFonts | undefined;
       let videoFonts: ArtifactFonts | undefined;
+      let videoFieldUpdate: JsonObject | undefined;
       if (recipe.outputs?.screenshots !== false) {
         step("screenshot");
         const resolvedScene = await openScene(renderProject, server, activeBrowser, variant.scene, sceneFonts);
@@ -933,6 +951,7 @@ export async function renderRecipe(
         // Nothing of a discovery pass is kept: no encode, no manifest entry.
         if (renderedFrames.discovery) return;
         videoFonts = renderedFrames.fonts;
+        videoFieldUpdate = renderedFrames.fieldUpdate;
         framesPath = renderedFrames.framesDirectory;
         framesManifestPath = renderedFrames.framesManifest;
         framesManifestHash = sha256(renderedFrames.sequenceText);
@@ -1021,6 +1040,7 @@ export async function renderRecipe(
         ...(framesDiscardError ? {framesDiscardError} : {}),
         ...(manifestFonts(stillFonts) ? {fonts: manifestFonts(stillFonts)!} : {}),
         ...(manifestFonts(videoFonts) ? {videoFonts: manifestFonts(videoFonts)!} : {}),
+        ...(videoFieldUpdate ? {fieldUpdate: videoFieldUpdate} : {}),
         parameters: JSON.parse(JSON.stringify({
           background: variant.background,
           viewport: variant.viewport,

@@ -161,7 +161,19 @@ function FieldControl({field, value, onChange}: {field: NormalizedField; value: 
   if (field.type === 'dropdown') return <label className="field-control">{field.label}<select value={JSON.stringify(value)} onChange={e => onChange(JSON.parse(e.target.value) as JsonValue)}>{field.options.map((option, index) => <option key={index} value={JSON.stringify(option.value)}>{option.label}</option>)}</select></label>;
   if (field.type === 'number' || field.type === 'slider') return <label className="field-control">{field.label}<div className="slider-control">{field.type === 'slider' && <input type="range" min={field.min ?? 0} max={field.max ?? 100} step={field.step ?? 1} value={Number(value) || 0} onChange={e => onChange(e.target.valueAsNumber)} />}<input aria-label={`${field.label} value`} type="number" min={field.min} max={field.max} step={field.step ?? 1} value={Number(value) || 0} onChange={e => {if (Number.isFinite(e.target.valueAsNumber)) onChange(e.target.valueAsNumber);}} /></div></label>;
   if (field.type.endsWith('-input')) return <MediaFieldControl field={field} value={value} onChange={onChange} />;
+  if (field.type === 'googlefont') return <GoogleFontFieldControl field={field} value={value} onChange={onChange} />;
   return <label className="field-control">{field.label}<div className="color-control">{(field.type === 'color' || field.type === 'colorpicker') && <input aria-label={`${field.label} picker`} type="color" value={/^#[a-f\d]{6}$/i.test(String(value)) ? String(value) : '#000000'} onChange={e => onChange(e.target.value)} />}<input value={typeof value === 'string' ? value : JSON.stringify(value)} onChange={e => onChange(e.target.value)} /></div></label>;
+}
+/**
+ * A googleFont field commits the family on Enter or when it loses focus. Each commit prepares a new
+ * preview, and a new family there becomes a Google Fonts request, so typing never asks for "R" or "Ro".
+ */
+function GoogleFontFieldControl({field, value, onChange}: {field: NormalizedField; value: JsonValue; onChange: (value: JsonValue) => void}) {
+  const committed = typeof value === 'string' ? value : '';
+  const [draftText, setDraftText] = useState(committed);
+  useEffect(() => {setDraftText(committed);}, [committed]);
+  const commit = () => {const family = draftText.trim(); if (family && family !== committed) onChange(family); else setDraftText(committed);};
+  return <label className="field-control">{field.label}<input value={draftText} spellCheck={false} title="Press Enter or leave the field to load the family" onChange={e => setDraftText(e.target.value)} onBlur={commit} onKeyDown={e => {if (e.key === 'Enter') {e.preventDefault(); commit();} else if (e.key === 'Escape') setDraftText(committed);}} /></label>;
 }
 /** Media fields keep `multiple` values as arrays: the text commits only a valid JSON array. */
 function MediaFieldControl({field, value, onChange}: {field: NormalizedField; value: JsonValue; onChange: (value: JsonValue) => void}) {

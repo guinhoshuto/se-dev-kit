@@ -127,8 +127,10 @@ function seededRandom(seed: number): () => number {
 
 function printable(value: unknown): string {
   if (typeof value === "string") return value;
+  // JSON.stringify turns an Error into "{}", which would drop a rejection's message.
+  if (value instanceof Error) return `${value.name}: ${value.message}`;
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(value) ?? String(value);
   } catch {
     return String(value);
   }

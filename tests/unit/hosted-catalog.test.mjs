@@ -87,6 +87,17 @@ test("a local config flattens into the catalog a hosted import takes, with widge
   ]);
 });
 
+test("widget.fieldUpdate reaches the catalog, and a value other than reload or event is refused", async (t) => {
+  const withMode = (mode) => ({"se-widget-studio.config.mjs": CONFIG.replace('timeoutMs: 4000}', `timeoutMs: 4000},\n    fieldUpdate: "${mode}"`)});
+  const {catalog} = await hostedCatalogFromConfig(await widget(t, withMode("event")));
+  assert.deepEqual(catalog.widget, {viewport: {width: 640, height: 360}, ready: {selector: "#stage", timeoutMs: 4000}, fieldUpdate: "event"});
+  await assert.rejects(hostedCatalogFromConfig(await widget(t, withMode("sometimes"))), (error) => {
+    assert.equal(error.code, "INVALID_CONFIG");
+    assert.match(error.message, /widget\.fieldUpdate: Invalid enum value\. Expected 'reload' \| 'event', received 'sometimes'/);
+    return true;
+  });
+});
+
 test("--recipes keeps those recipes with the scenes, themes, and fixtures they use, and leaves scenarios out", async (t) => {
   const config = await widget(t);
   const {catalog} = await hostedCatalogFromConfig(config, {recipes: ["stills"]});
