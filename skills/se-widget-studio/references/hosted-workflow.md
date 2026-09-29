@@ -134,6 +134,7 @@ These are application limits, not guaranteed provider quota. Do not provision pa
 ## Fonts
 
 - Google Fonts work as in StreamElements, in the editor preview and in jobs: a stylesheet written in HTML or CSS, or one a script assigns at runtime (a `setFont()` driven by a `googleFont` field). Themes and scenes may change `googleFont` freely. Never ask to vendor a font or edit the widget because of it.
+- A widget may point its font link at another family before the first one has loaded (a default font at startup, then the theme's in `onWidgetLoad`): Chrome aborts the first request, and the job serves the new font. Jobs before 2026-09-29 failed on this with `FONT_UNAVAILABLE … net::ERR_ABORTED`; run them again.
 - Material Icons (`/icon`) and `text=` stylesheets written in the widget's HTML or CSS are copied into the revision at import, like any public HTTPS dependency, and render from that copy as in StreamElements; the copy does not change after import. The same URLs built at runtime, by a script or through a `{{field}}` placeholder, are not captured: jobs fail with `FONT_UNSUPPORTED`, and the editor preview cannot load them either.
 - StreamElements `{{field}}` placeholders are substituted with the effective `fieldData` in HTML, CSS and JS, in preview and in jobs.
 - Saving a revision prewarms the font cache, and prewarm warnings appear in the revision diagnostics. A job may show `Fetching Google Fonts (pass n/4)`; a later render of the same revision does not contact Google.
