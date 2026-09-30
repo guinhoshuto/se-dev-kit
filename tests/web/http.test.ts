@@ -16,3 +16,13 @@ test('unexpected server errors never disclose provider secrets',async()=>{
   const response=await endpoint(new Request('http://127.0.0.1'),async()=>{throw new Error('Secret provider credentials here');});
   assert.equal(response.status,500);assert.ok(!(await response.text()).includes('credentials here'));
 });
+test('unexpected server errors are logged by name and message only',async()=>{
+  const logged:unknown[][]=[];const original=console.error;console.error=(...args:unknown[])=>{logged.push(args);};
+  try {
+    const failure=new TypeError('Cannot read properties of undefined');
+    const response=await endpoint(new Request('http://127.0.0.1/api/v1/projects/x'),async()=>{throw failure;});
+    assert.equal(response.status,500);
+  } finally {console.error=original;}
+  assert.equal(logged.length,1);
+  assert.equal(logged[0].join(' '),'[api] GET /api/v1/projects/x failed: TypeError: Cannot read properties of undefined');
+});

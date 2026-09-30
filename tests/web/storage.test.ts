@@ -31,3 +31,22 @@ test('Vercel accepts an OIDC-connected Blob store without a runtime token enviro
     assert.ok(getStore() instanceof BlobStore);
   } finally {process.env=old;}
 });
+test('a suspended or refused Blob store answers 503 with the cause, not a bare 500',async()=>{
+  const {BlobError,BlobStoreSuspendedError}=await import('@vercel/blob');
+  const {HttpError}=await import('../../lib/errors');
+  // What @vercel/blob 2.8 throws: get() turns the private URL's 403 into a plain BlobError, the API calls into BlobStoreSuspendedError.
+  const refusedRead=async()=>{throw new BlobError('Failed to fetch blob: 403 Forbidden');};
+  const suspended=async()=>{throw new BlobStoreSuspendedError();};
+  const store=new BlobStore({get:refusedRead,put:suspended,list:suspended,del:suspended} as never);
+  const unavailable=(error:unknown)=>error instanceof HttpError&&error.status===503&&/Blob store/.test(error.message)&&/suspended/.test(error.message);
+  await assert.rejects(()=>store.get('projects/a/project.json'),unavailable);
+  await assert.rejects(()=>store.put('projects/a/project.json',Buffer.from('{}')),unavailable);
+  await assert.rejects(()=>store.list('projects/a/jobs/'),unavailable);
+  await assert.rejects(()=>store.delete('projects/a/project.json'),unavailable);
+});
+test('other Blob failures stay unexpected server errors',async()=>{
+  const {BlobError}=await import('@vercel/blob');
+  const {HttpError}=await import('../../lib/errors');
+  const store=new BlobStore({get:async()=>{throw new BlobError('Failed to fetch blob: 500 Internal Server Error');}} as never);
+  await assert.rejects(()=>store.get('projects/a/project.json'),(error:unknown)=>error instanceof BlobError&&!(error instanceof HttpError));
+});

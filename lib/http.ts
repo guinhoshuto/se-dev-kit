@@ -28,5 +28,10 @@ export async function readInput(request:Request):Promise<unknown> {
 }
 export function json(value:unknown,status=200):Response{return Response.json(value,{status,headers:{'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'}});}
 export async function endpoint(request:Request,action:()=>Promise<Response>):Promise<Response> {
-  try{guardRequest(request);return await action();}catch(error){return json({error:error instanceof HttpError?error.message:'The operation failed. Check the server configuration and retry.'},error instanceof HttpError?error.status:500);}
+  try{guardRequest(request);return await action();}catch(error){
+    if(error instanceof HttpError)return json({error:error.message},error.status);
+    // Name and message only: the pathname carries no capability, and a stack or cause could carry provider details.
+    console.error(`[api] ${request.method} ${new URL(request.url).pathname} failed: ${error instanceof Error?`${error.name}: ${error.message}`:'non-Error thrown'}`);
+    return json({error:'The operation failed. Check the server configuration and retry.'},500);
+  }
 }

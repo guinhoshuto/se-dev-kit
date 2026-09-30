@@ -63,27 +63,39 @@ export class LocalStore implements ObjectStore {
   async delete(key:string):Promise<void>{await unlink(await this.path(key)).catch(error=>{if(!isMissing(error))throw error;});}
 }
 
+type BlobModule = Pick<typeof import('@vercel/blob'),'get'|'put'|'list'|'del'>;
+const SUSPENDED='The Vercel Blob store refused access: it is suspended (usually a usage quota was exceeded) or its credential is invalid. Check the store in the Vercel dashboard; projects cannot be read or saved until it is active again.';
+/** A suspended store answers the API with `store_suspended` and a private read with a bare 403, which @vercel/blob reports as "Failed to fetch blob: 403". */
+async function unavailable(error:unknown):Promise<never> {
+  const {BlobStoreSuspendedError,BlobAccessError,BlobError}=await import('@vercel/blob');
+  if(error instanceof BlobStoreSuspendedError||error instanceof BlobAccessError||(error instanceof BlobError&&/Failed to fetch blob: 403\b/.test(error.message)))throw new HttpError(503,SUSPENDED);
+  throw error;
+}
+
 export class BlobStore implements ObjectStore {
+  /** Tests pass a stand-in for the @vercel/blob calls; production loads the package. */
+  constructor(private readonly blob?:BlobModule) {}
+  private async api():Promise<BlobModule>{return this.blob??await import('@vercel/blob');}
   async get(key:string):Promise<ObjectValue|null> {
-    const {get}=await import('@vercel/blob');
-    const response=await get(safeKey(key),{access:'private',useCache:false});
+    const {get}=await this.api();
+    const response=await get(safeKey(key),{access:'private',useCache:false}).catch(unavailable);
     if(!response)return null;
     if(!response.stream)throw new Error('Unexpected empty Blob response.');
     return {body:new Uint8Array(await new Response(response.stream).arrayBuffer()),etag:response.blob.etag};
   }
   async put(key:string,body:Uint8Array,options:PutOptions={}):Promise<{etag:string}> {
-    const {put,BlobPreconditionFailedError,BlobError}=await import('@vercel/blob');
+    const {put}=await this.api();const {BlobPreconditionFailedError,BlobError}=await import('@vercel/blob');
     try {
       const result=await put(safeKey(key),Buffer.from(body),{access:'private',addRandomSuffix:false,allowOverwrite:Boolean(options.overwrite||options.ifMatch),contentType:options.contentType??'application/octet-stream',cacheControlMaxAge:60,...(options.ifMatch?{ifMatch:options.ifMatch}:{})});
       return {etag:result.etag};
-    }catch(error){if(error instanceof BlobPreconditionFailedError||(error instanceof BlobError && /already exists/i.test(error.message)))throw new ConflictError();throw error;}
+    }catch(error){if(error instanceof BlobPreconditionFailedError||(error instanceof BlobError && /already exists/i.test(error.message)))throw new ConflictError();return unavailable(error);}
   }
   async list(prefix:string):Promise<string[]> {
-    safeKey(prefix.replace(/\/$/,''));const {list}=await import('@vercel/blob');const keys:string[]=[];let cursor:string|undefined;
-    do {const result=await list({prefix,cursor,limit:1000});keys.push(...result.blobs.map(b=>b.pathname));cursor=result.hasMore?result.cursor:undefined;}while(cursor);
+    safeKey(prefix.replace(/\/$/,''));const {list}=await this.api();const keys:string[]=[];let cursor:string|undefined;
+    do {const result=await list({prefix,cursor,limit:1000}).catch(unavailable);keys.push(...result.blobs.map(b=>b.pathname));cursor=result.hasMore?result.cursor:undefined;}while(cursor);
     return keys.sort();
   }
-  async delete(key:string):Promise<void>{const {del}=await import('@vercel/blob');await del(safeKey(key));}
+  async delete(key:string):Promise<void>{const {del}=await this.api();await del(safeKey(key)).catch(unavailable);}
 }
 
 export function getStore():ObjectStore {
