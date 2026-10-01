@@ -14,9 +14,9 @@ import {
   estimateRenderBytes,
   isNoSpaceError
 } from "../../dist/capture/disk.js";
-import {encodeFrameSequence} from "../../dist/capture/media.js";
+import {detectMediaTooling, encodeFrameSequence} from "../../dist/capture/media.js";
 import {atomicWriteFile, discardFrameSequence, removeTemporaryFiles} from "../../dist/capture/output.js";
-import {effectiveKeepFrames, planRecipe, renderRecipe, shouldDiscardFrames} from "../../dist/capture/renderer.js";
+import {discardFramesAfterEncode, effectiveKeepFrames, planRecipe, renderRecipe, shouldDiscardFrames} from "../../dist/capture/renderer.js";
 import {loadProject} from "../../dist/config/load.js";
 import {recipeSchema} from "../../dist/config/schemas.js";
 import {StudioError} from "../../dist/shared/errors.js";
@@ -474,4 +474,34 @@ test("the recipe schema accepts only a boolean keepFrames", () => {
   const base = {schemaVersion: 1, id: "kept", name: "Kept", scenes: ["hero"]};
   assert.equal(recipeSchema.safeParse({...base, outputs: {video: {...smallVideo, keepFrames: true}}}).success, true);
   assert.equal(recipeSchema.safeParse({...base, outputs: {video: {...smallVideo, keepFrames: "yes"}}}).success, false);
+});
+
+test("a failed frame cleanup after a validated encode is reported, and a full disk still fails the render", async () => {
+  assert.equal(await discardFramesAfterEncode(async () => {}), undefined);
+  const denied = Object.assign(new Error("EACCES: permission denied, unlink 'frame-0000.png'"), {code: "EACCES"});
+  assert.equal(await discardFramesAfterEncode(async () => {throw denied;}), "EACCES: permission denied, unlink 'frame-0000.png'");
+  const full = Object.assign(new Error("ENOSPC: no space left on device"), {code: "ENOSPC"});
+  await assert.rejects(discardFramesAfterEncode(async () => {throw full;}), (error) => error === full);
+});
+
+test("an encode whose stream frame count differs from the sequence fails with VIDEO_FRAME_COUNT_INVALID", async (t) => {
+  const tooling = await detectMediaTooling();
+  if (!tooling.ffmpegPath || !tooling.ffprobePath) {
+    t.skip("FFmpeg and ffprobe are not installed");
+    return;
+  }
+  const outputRoot = await realpath(await mkdtemp(join(tmpdir(), "sws-frame-count-")));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  const frames = join(outputRoot, "frames");
+  await mkdir(frames);
+  // Five 16×16 frames at 10 fps: half a second of MP4, whose stream reports nb_frames.
+  await execFileAsync(tooling.ffmpegPath, ["-v", "error", "-f", "lavfi", "-i", "color=c=red:s=16x16:r=10:d=0.5", "-frames:v", "5", join(frames, "frame-%04d.png")]);
+  const encode = (name, expectedFrames) => encodeFrameSequence({
+    outputRoot, framePattern: join(frames, "frame-%04d.png"), outputPath: join(outputRoot, name),
+    video: {enabled: true, durationMs: 500, fps: 10, format: "mp4", codec: "h264", pixelFormat: "yuv420p"},
+    force: false, tooling, expectedWidth: 16, expectedHeight: 16, expectedFrames
+  });
+  assert.equal((await encode("match.mp4", 5)).status, "final");
+  await assert.rejects(encode("mismatch.mp4", 6), (error) => error instanceof StudioError && error.code === "VIDEO_FRAME_COUNT_INVALID" && /has 5 frames; expected 6/.test(error.message));
+  await assert.rejects(lstat(join(outputRoot, "mismatch.mp4")), {code: "ENOENT"}, "a rejected encode leaves no video behind");
 });

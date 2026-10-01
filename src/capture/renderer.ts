@@ -713,6 +713,20 @@ export function effectiveKeepFrames(recipe: RecipeDefinition, options: Pick<Rend
  * Frames are discarded only after an encode that ffprobe validated. An unvalidated encode (FFmpeg without
  * ffprobe) or an intermediate result (no FFmpeg) keeps them, because the PNG sequence may be the deliverable.
  */
+/**
+ * Discards the frames of a validated video. The video is already valid, so a failed cleanup does not
+ * fail the render: its message is returned for the manifest's `framesDiscardError`. A full disk still fails it.
+ */
+export async function discardFramesAfterEncode(discard: () => Promise<unknown>): Promise<string | undefined> {
+  try {
+    await discard();
+    return undefined;
+  } catch (error) {
+    if (isNoSpaceError(error)) throw error;
+    return toErrorMessage(error);
+  }
+}
+
 export function shouldDiscardFrames(keepFrames: boolean, encodedStatus: "final" | "intermediate" | "unvalidated"): boolean {
   return !keepFrames && encodedStatus === "final";
 }
@@ -1001,18 +1015,12 @@ export async function renderRecipe(
               await removeStaleManifest(outputRoot, resolve(recipeDirectory, "manifest.json"));
               staleManifestRemoved = true;
             }
-            try {
-              await discardFrameSequence({
-                outputRoot,
-                framesDirectory: renderedFrames.framesDirectory,
-                frameFiles: renderedFrames.frameFiles
-              });
-              framesRetained = false;
-            } catch (error) {
-              // The video is already validated; a failed cleanup must not fail the render. Report it instead.
-              if (isNoSpaceError(error)) throw error;
-              framesDiscardError = toErrorMessage(error);
-            }
+            framesDiscardError = await discardFramesAfterEncode(() => discardFrameSequence({
+              outputRoot,
+              framesDirectory: renderedFrames.framesDirectory,
+              frameFiles: renderedFrames.frameFiles
+            }));
+            if (framesDiscardError === undefined) framesRetained = false;
           }
         } else {
           status = "intermediate";
