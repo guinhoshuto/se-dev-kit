@@ -1,6 +1,6 @@
 # Repository instructions
 
-This repository contains SE Widget Studio Web and its shared StreamElements simulation engine. The Next.js app lives at the repository root. It is a personal, link-accessed application using Vercel Blob, Workflows, and Sandbox; there is no external database.
+This repository contains SE Widget Studio Web and its shared StreamElements simulation engine. The Next.js app lives at the repository root. It is a personal application that runs locally by default (`npm run serve`, loopback only, local storage and jobs); its hosted deployment, using Vercel Blob, Workflows, and Sandbox, is paused since 2026-10-01. There is no external database.
 
 - Use English for UI text, CLI help, field names, errors, tests, and documentation.
 - Preserve strict TypeScript and ESM.
@@ -20,12 +20,14 @@ This repository contains SE Widget Studio Web and its shared StreamElements simu
 - Use local storage only outside Vercel. Vercel deployments must fail clearly if Blob or Sandbox configuration is missing; never silently fall back to ephemeral disk.
 - Report local simulation separately from real StreamElements/OBS validation.
 
-## The live skill and `main`
+## The live checkout, `main`, and worktrees
 
-- The global `se-widget-studio` skill is a symlink to `skills/se-widget-studio/` in this checkout, and consumer sessions run this checkout's `dist/`. Whatever is on disk here is live for every agent session, committed or not.
-- Work on `main`, without a worktree. Before ending a session, run `npm run build:engine` and commit, so `main` is clean and `dist/build-info.json` reports `"dirty": false`.
-- Exception: work that waits for the owner's review (a render to watch, a UI to judge) is committed to a local branch (for example `tutorial-zoom`) and named in the final report, never left uncommitted on `main`. Return to `main` and rebuild `dist/` from it before ending the session.
-- Skill text that depends on a code change ships in the same commit as that change: on the branch while the change waits for review, on `main` only once it is pushed and deployed. The skill never tells an agent to use a field, flag, or behavior that production rejects.
+- The live checkout is this repository's main directory (`~/dev/firulas/se-dev-kit`). The global `se-widget-studio` skill is a symlink to its `skills/se-widget-studio/`, consumer sessions run its `dist/`, and the local Studio (`npm run serve`, `http://127.0.0.1:4310`) runs its `.next/` build with its `.studio-data/`. Whatever is on disk there is live for every agent session, committed or not.
+- The live checkout stays on a clean `main`. Never switch its branch, and never build anything there but `main`.
+- Make every change in a worktree on a `wip/<task>` branch: `git worktree add .claude/worktrees/<task> -b wip/<task> main`. When disk is short, symlink the live `node_modules` into it instead of a second `npm ci` (`node_modules` is listed in `.git/info/exclude`). Test there; `npm run dev` in a worktree serves port 3000 and never touches port 4310.
+- Work that waits for the owner's review (a render to watch, a UI to judge) stays committed on its branch, in its worktree, and is named in the final report.
+- A finished change reaches `main` by merge, with the owner's yes. Then, in the live checkout, run `npm run build` (engine and web app), check that `dist/build-info.json` reports `"dirty": false`, and restart the local Studio if you started it; when another session's server is running, tell the user it serves the old build. Remove the worktree once its branch is merged or dropped: `git worktree remove .claude/worktrees/<task>`.
+- Skill text that depends on a code change ships in the same commit as that change, and reaches `main` only with it. The skill never tells an agent to use a field, flag, or behavior that the local Studio on `main` rejects.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
