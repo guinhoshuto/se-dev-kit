@@ -248,6 +248,9 @@ export async function pinSampleMedia(snapshot: WidgetSnapshot, sampleMedia: Samp
   return pins;
 }
 
+/** Canonical padded base64. A repeated group (`(?:x{4})*`) would recurse once per group and overflow the stack on a few MB (SDK-38). */
+const isBase64 = (value: string) => value.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
+
 export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore, prefix: string, sampleMedia: SampleMediaSource = deployedSampleMedia): Promise<PreparedSnapshot> {
   assertSafeSnapshot(source);
   const deadline = Date.now() + 45_000;
@@ -274,7 +277,7 @@ export async function prepareSnapshot(source: WidgetSnapshot, store: ObjectStore
       const fetched = await fetchPublicAsset(asset.url, {deadline});
       add(asset.path, fetched.body, asset.contentType ?? fetched.contentType, asset.url);
     } else if (asset.content !== undefined) {
-      if (asset.encoding === 'base64' && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.content)) throw new Error('Invalid base64 asset content.');
+      if (asset.encoding === 'base64' && !isBase64(asset.content)) throw new Error('Invalid base64 asset content.');
       add(asset.path, Buffer.from(asset.content, asset.encoding === 'base64' ? 'base64' : 'utf8'), asset.contentType ?? mimeTypes[posix.extname(asset.path).toLowerCase()] ?? 'application/octet-stream');
     } else throw new Error(`Asset has no content: ${asset.path}`);
   }

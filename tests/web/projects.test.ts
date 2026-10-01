@@ -26,3 +26,13 @@ test('project and global render reservations reject concurrent overload',async()
   const outcomes=await Promise.allSettled([createJob(storage,result.project.id,result.revision,'test','all'),createJob(storage,result.project.id,result.revision,'test','all')]);
   assert.equal(outcomes.filter(o=>o.status==='fulfilled').length,1);
 });
+test('an inline base64 asset of 3.5 MB prepares, and malformed base64 is still refused (SDK-38)',async()=>{
+  const storage=await store();const asset=(content:string)=>({...snapshot,assets:[{path:'media/blob.bin',content,encoding:'base64' as const,contentType:'application/octet-stream'}]});
+  const big=await createProject(storage,asset(Buffer.alloc(3_500_000,7).toString('base64')));
+  assert.equal(big.revision.status,'ready',big.revision.diagnostics.join('\n'));
+  for(const content of ['QUJD','QUI=','QQ==',''])assert.equal((await createProject(storage,asset(content))).revision.status,'ready',content);
+  for(const content of ['QUJ','Q===','====','QQ=A','QUJD\n','QU-D','QUJDQQ']){
+    const result=await createProject(storage,asset(content));
+    assert.equal(result.revision.status,'blocked',content);assert.match(result.revision.diagnostics.join('\n'),/Invalid base64/,content);
+  }
+});
