@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
-import {mkdtemp, realpath, rm} from "node:fs/promises";
+import {once} from "node:events";
+import {mkdtemp, realpath, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {setTimeout as sleep} from "node:timers/promises";
 import test from "node:test";
+import {fileURLToPath} from "node:url";
 
 import {BROWSER_MARKER as ENGINE_MARKER} from "../../dist/capture/browser.js";
-import {BROWSER_MARKER, browserGate, checkoutOrphans, listProcesses, otherSessionsWork, parseProcessList} from "../../scripts/lib/machine.mjs";
+import {BROWSER_MARKER, browserGate, checkoutOrphans, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseVerdict} from "../../scripts/lib/machine.mjs";
 import {killStale} from "../../scripts/kill-stale.mjs";
 
 const ROOT = "/work/se-dev-kit";
@@ -84,7 +86,7 @@ test("the caller's ancestors, and a shell or pgrep that only mentions a pattern,
 
 test("the browser gate refuses below 3 GiB free, for orphans and for another session's render, and passes otherwise", async () => {
   const quiet = [{pid: 900, ppid: 1, command: "/opt/homebrew/bin/node scripts/run-tests.mjs"}];
-  const gate = (options) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, ...options});
+  const gate = (options) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, machine: async () => null, ...options});
   assert.deepEqual(await gate({processes: quiet, free: async () => 3 * 1024 ** 3}), {ok: true});
   const low = await gate({processes: quiet, free: async () => 3 * 1024 ** 3 - 1});
   assert.equal(low.ok, false);
@@ -130,4 +132,59 @@ process.stdout.write(String(child.pid)); child.unref();`], {cwd: folder, stdio: 
   for (let attempt = 0; attempt < 50 && (await listProcesses()).some((item) => item.pid === ourPid); attempt += 1) await sleep(100);
   assert.equal((await listProcesses()).some((item) => item.pid === ourPid), false, "our orphan is gone");
   assert.equal((await listProcesses()).find((item) => item.pid === theirPid)?.ppid, 1, "the other folder's orphan still runs");
+});
+
+/** A stand-in for maquina_livre.py that answers `answer` with `exit`; a busy answer also lists its argv. */
+async function fakeCheck(t, answer, exit) {
+  const folder = await mkdtemp(join(tmpdir(), "sws-machine-check-"));
+  t.after(() => rm(folder, {recursive: true, force: true}));
+  const script = join(folder, "maquina_livre.py");
+  await writeFile(script, [
+    "import json, sys",
+    `answer = json.loads(${JSON.stringify(JSON.stringify(answer))})`,
+    "if not answer['livre']: answer['reasons'].append('argv ' + ' '.join(sys.argv[1:]))",
+    "print(json.dumps(answer))",
+    `sys.exit(${exit})`
+  ].join("\n"));
+  return script;
+}
+
+test("the machine check answers busy (exit 3) with its reasons for the caller's family, free (exit 0) without, and null when missing or silent", async (t) => {
+  const busy = await fakeCheck(t, {livre: false, motivos: ["o jogo está aberto"], reasons: ["the game (Client-Mac-Shipping) is open"]}, 3);
+  assert.deepEqual(await machineVerdict([900, 901], busy), {free: false, reasons: ["the game (Client-Mac-Shipping) is open", "argv --json --familia 900 --familia 901"]});
+  assert.deepEqual(await machineVerdict([900], await fakeCheck(t, {livre: true, motivos: [], reasons: []}, 0)), {free: true, reasons: []});
+  assert.equal(await machineVerdict([900], join(tmpdir(), "sws-no-such-folder", "maquina_livre.py")), null);
+  const silent = await fakeCheck(t, {livre: true, reasons: []}, 0);
+  await writeFile(silent, "raise SystemExit(3)\n");
+  assert.equal(await machineVerdict([900], silent), null);
+  assert.equal(parseVerdict('{"livre": "no", "reasons": []}'), null);
+});
+
+test("the browser gate follows the machine check, and the process list only where the check is missing", async () => {
+  const quiet = [{pid: 900, ppid: 1, command: "/opt/homebrew/bin/node scripts/run-tests.mjs"}];
+  const rendering = [...quiet, processes()[1]];
+  const asked = [];
+  const gate = (machine) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, processes: rendering, free: async () => 10 * 1024 ** 3, machine: async (roots) => { asked.push(roots); return machine; }});
+  assert.deepEqual(await gate({free: true, reasons: []}), {ok: true}, "the check already looked at the renders");
+  assert.deepEqual(await gate({free: false, reasons: ["12% of memory free, below 30%", "the game (Client-Mac-Shipping) is open"]}), {ok: false, reason: "the machine check says to wait: 12% of memory free, below 30%; the game (Client-Mac-Shipping) is open"});
+  assert.match((await gate(null)).reason, /another session is rendering: PID 11 /);
+  assert.deepEqual(asked, [[900], [900], [900]], "the check is asked for the runner's family");
+});
+
+test("wait-free waits for what the machine check says, and exits 0 once it says free", {timeout: 60_000}, async (t) => {
+  const waitFree = fileURLToPath(new URL("../../scripts/wait-free.mjs", import.meta.url));
+  const run = async (script) => {
+    const child = spawn(process.execPath, [waitFree, "--timeout-min", "0", "--interval-s", "0"], {cwd: fileURLToPath(new URL("../../", import.meta.url)), env: {...process.env, MACHINE_CHECK: script}, stdio: ["ignore", "pipe", "pipe"]});
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { output += chunk; });
+    const [code] = await once(child, "exit");
+    return {code, output};
+  };
+  const busy = await run(await fakeCheck(t, {livre: false, motivos: [], reasons: ["the game (Client-Mac-Shipping) is open"]}, 3));
+  assert.equal(busy.code, 1, busy.output);
+  assert.match(busy.output, /Still busy after 0 min: the game \(Client-Mac-Shipping\) is open/);
+  const free = await run(await fakeCheck(t, {livre: true, motivos: [], reasons: []}, 0));
+  assert.equal(free.code, 0, free.output);
+  assert.match(free.output, /^Machine free after 0 check\(s\)\.$/m);
 });

@@ -67,7 +67,7 @@ export const leftovers = entries => entries.filter(entry => !/^tsx-\d+$/.test(en
 export async function takeBrowserSlot(options = {}) {
   const {acquireRenderSlot} = await import('../dist/shared/render-slot.js');
   try {
-    const slot = await acquireRenderSlot({command: `node scripts/run-tests.mjs ${process.argv.slice(2).join(' ')}`.trim(), wait: false, ...options});
+    const slot = await acquireRenderSlot({command: `node scripts/run-tests.mjs ${process.argv.slice(2).join(' ')}`.trim(), repo: 'se-dev-kit', wait: false, ...options});
     return {ok: true, release: slot.release};
   } catch (error) {
     return {ok: false, reason: error instanceof Error ? error.message : String(error)};

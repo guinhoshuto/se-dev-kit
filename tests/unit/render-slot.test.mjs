@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {execFile, spawn} from "node:child_process";
 import {once} from "node:events";
 import {mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile} from "node:fs/promises";
-import {tmpdir} from "node:os";
+import {homedir, tmpdir} from "node:os";
 import {join} from "node:path";
 import {setTimeout as sleep} from "node:timers/promises";
 import test from "node:test";
@@ -180,4 +180,11 @@ test("local capture and render wait for the render slot another process holds, a
     assert.match(stderr, /"code": "BROWSER_NOT_FOUND"/, `${name} ran once the holder was gone`);
     assert.equal(await exists(dir), false, `${name} gave the slot back`);
   }
+});
+
+test("src/shared/render-slot.ts is the vault source, byte for byte", async (t) => {
+  const source = join(homedir(), "obsidian", "AI", "scripts", "render-slot.ts");
+  if (!(await exists(source))) return t.skip("no vault on this machine");
+  const copy = await readFile(fileURLToPath(new URL("../../src/shared/render-slot.ts", import.meta.url)));
+  assert.ok(copy.equals(await readFile(source)), "src/shared/render-slot.ts differs from ~/obsidian/AI/scripts/render-slot.ts: edit the source, then run python3 ~/obsidian/AI/scripts/render_slot_copias.py --write");
 });

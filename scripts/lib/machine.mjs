@@ -1,9 +1,12 @@
 // Machine checks shared by the test runner, kill-stale and wait-free. The machine is small (8 GB of
 // RAM), so a test that starts Chrome must not run next to another render, and nothing here may touch
-// a process another session still drives. Only `ps`, `lsof` (macOS) or /proc (Linux) and statfs are used.
+// a process another session still drives. Only `ps`, `lsof` (macOS) or /proc (Linux), statfs and the
+// machine check every repo shares (machineVerdict) are used.
 import {execFile} from 'node:child_process';
+import {existsSync} from 'node:fs';
 import {readlink, statfs} from 'node:fs/promises';
-import {basename, isAbsolute, relative} from 'node:path';
+import {homedir} from 'node:os';
+import {basename, isAbsolute, join, relative} from 'node:path';
 import {promisify} from 'node:util';
 
 const run = promisify(execFile);
@@ -125,15 +128,54 @@ export async function freeBytes(path) {
   return Number(info.bavail) * Number(info.bsize);
 }
 
+/**
+ * The machine check every repo on this Mac shares: ~/obsidian/AI/scripts/maquina_livre.py, in the
+ * owner's vault. It looks at other renders, the render slot, the game, free memory, swap and disk,
+ * with the machine's limits in one place. MACHINE_CHECK overrides its path (the tests use a fake one).
+ */
+export const machineCheckScript = () => process.env.MACHINE_CHECK || join(homedir(), 'obsidian', 'AI', 'scripts', 'maquina_livre.py');
+
+/** The check's --json answer as {free, reasons} (English), or null when `text` is not one. */
+export function parseVerdict(text) {
+  let answer;
+  try {
+    answer = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof answer?.livre !== 'boolean' || !Array.isArray(answer.reasons)) return null;
+  if (answer.livre) return {free: true, reasons: []};
+  const reasons = answer.reasons.filter(reason => typeof reason === 'string');
+  return {free: false, reasons: reasons.length ? reasons : ['the machine check says to wait, without a reason']};
+}
+
+/**
+ * The machine check's verdict, with `familyPids` and everything they started counted as the caller's
+ * own work. Null where the check is missing (another machine) or gave no answer: the caller falls
+ * back to its own process check.
+ */
+export async function machineVerdict(familyPids = [process.pid], script = machineCheckScript()) {
+  if (!existsSync(script)) return null;
+  let stdout;
+  try {
+    ({stdout} = await run('python3', [script, '--json', ...familyPids.flatMap(pid => ['--familia', String(pid)])], {timeout: 60_000, maxBuffer: 4 * 1024 * 1024}));
+  } catch (error) {
+    // Exit 3 is the busy answer, with the JSON on stdout.
+    stdout = String(error?.stdout ?? '');
+  }
+  return parseVerdict(stdout);
+}
+
 // Rounded down, so a volume just under the limit never reads as enough.
 const gib = bytes => `${(Math.floor(bytes / 1024 ** 3 * 10) / 10).toFixed(1)} GiB`;
 export const shortCommand = command => (command.length > 110 ? `${command.slice(0, 107)}...` : command);
 
 /**
- * Whether a suite that starts Chrome may run now. It refuses below MIN_FREE_BYTES, when another
- * session renders, or when this checkout left an orphan (which `npm run kill-stale` removes).
+ * Whether a suite that starts Chrome may run now. It refuses below MIN_FREE_BYTES, when this checkout
+ * left an orphan (which `npm run kill-stale` removes), and when the machine check says to wait; where
+ * that check is missing, when another session renders.
  */
-export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FREE_BYTES, processes, free = freeBytes, cwd = cwdOf}) {
+export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FREE_BYTES, processes, free = freeBytes, cwd = cwdOf, machine = machineVerdict}) {
   for (const path of paths) {
     const bytes = await free(path);
     if (bytes < minFreeBytes) return {ok: false, reason: `only ${gib(bytes)} free on the volume of ${path}; browser suites need ${gib(minFreeBytes)}`};
@@ -141,6 +183,8 @@ export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FRE
   const list = processes ?? await listProcesses();
   const {orphans} = await checkoutOrphans(root, list, {cwd});
   if (orphans.length) return {ok: false, reason: `this checkout left ${orphans.length} orphan process(es) (PID ${orphans.map(item => item.pid).join(', ')}); run npm run kill-stale`};
+  const verdict = await machine(ownRoots);
+  if (verdict) return verdict.free ? {ok: true} : {ok: false, reason: `the machine check says to wait: ${verdict.reasons.join('; ')}`};
   const busy = otherSessionsWork(list, ownRoots);
   if (busy.length) return {ok: false, reason: `another session is rendering: PID ${busy[0].pid} ${shortCommand(busy[0].command)}${busy.length > 1 ? ` (+${busy.length - 1} more)` : ''}`};
   return {ok: true};
