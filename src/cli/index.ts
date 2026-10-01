@@ -15,7 +15,7 @@ import {startStudioServer} from "../server/server.js";
 import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser} from "../capture/browser.js";
 import {planRecipe, renderRecipe, singleSceneRecipe, type RenderResult, type RenderTraceEvent} from "../capture/renderer.js";
 import {assertSupportedNode} from "../shared/node-support.js";
-import {withRenderSlot} from "../shared/render-slot.js";
+import {RenderSlotError, withRenderSlot} from "../shared/render-slot.js";
 import {STUDIO_VERSION} from "../version.js";
 import {cliFlags} from "./flags.js";
 
@@ -280,13 +280,20 @@ function sceneProject(project: ResolvedProject, sceneId: string | undefined, the
 
 /**
  * A local render waits for the machine-wide render slot, which other sessions and background-creator
- * share (src/shared/render-slot.ts): one heavy render at a time on this machine.
+ * share (src/shared/render-slot.ts): one heavy render at a time on this machine. A refusal of the
+ * slot becomes a StudioError with the same code.
  */
-function inRenderSlot<T>(task: () => Promise<T>): Promise<T> {
-  return withRenderSlot(task, {
-    command: `se-widget-studio ${process.argv.slice(2).join(" ")}`.slice(0, 200),
-    log: (message) => process.stderr.write(`${message}\n`)
-  });
+async function inRenderSlot<T>(task: () => Promise<T>): Promise<T> {
+  try {
+    return await withRenderSlot(task, {
+      command: `se-widget-studio ${process.argv.slice(2).join(" ")}`.slice(0, 200),
+      repo: "se-dev-kit",
+      log: (message) => process.stderr.write(`${message}\n`)
+    });
+  } catch (error) {
+    if (error instanceof RenderSlotError) throw new StudioError(error.code, error.detail, error.hint, {cause: error});
+    throw error;
+  }
 }
 
 async function runSingleMedia(

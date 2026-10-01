@@ -94,6 +94,8 @@ test("a browser suite takes the render slot without waiting, and a held slot ski
   const taken = await takeBrowserSlot({dir});
   assert.equal(taken.ok, true, taken.reason);
   assert.equal(await ownerPid(dir), process.pid);
+  const owner = JSON.parse(await readFile(join(dir, "owner.json"), "utf8"));
+  assert.deepEqual([owner.repo, owner.protocol], ["se-dev-kit", 2], "the owner names this repo, not the package or the folder");
   taken.release();
   assert.equal(await exists(dir), false);
 });
