@@ -26,6 +26,11 @@ export async function getRevision(store:ObjectStore,id:string,revisionId:string)
   const revision=await readJson<Revision>(store,revisionKey(id,revisionId));
   if(!revision)throw new HttpError(404,'Revision not found.');return revision;
 }
+/** One job record: a poll reads only this, never the project's whole job list. */
+export async function getJob(store:ObjectStore,id:string,jobId:string):Promise<Job> {
+  const job=await readJson<Job>(store,`projects/${safeId(id)}/jobs/${safeId(jobId)}.json`);
+  if(!job)throw new HttpError(404,'Job not found.');return job;
+}
 export async function listJobs(store:ObjectStore,id:string):Promise<Job[]> {
   const keys=await store.list(`projects/${safeId(id)}/jobs/`);
   const jobs=await Promise.all(keys.filter(k=>k.endsWith('.json')).map(k=>readJson<Job>(store,k)));

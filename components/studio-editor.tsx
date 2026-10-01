@@ -1,8 +1,9 @@
 'use client';
 
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {Artifact, Job, ProjectView, WidgetSnapshot} from '../lib/model';
 import {addressWithoutKey} from '../lib/editor-link';
+import {isActiveJob, readActiveJobs, replaceJobs} from '../lib/job-poll';
 import type {JsonObject, JsonValue, NormalizedField, SceneDefinition} from '../src/types';
 import {normalizeFields} from '../src/config/fields';
 import {applySampleChoice, fillEmptyImageFields, isMultipleMediaField, parseMediaArrayText, splitFieldOverrides, withBackgroundImage, type SampleMediaSummary} from '../src/studio-ui/sample-media';
@@ -74,8 +75,11 @@ export function StudioEditor({projectId}: {projectId: string}) {
   }, [projectId]);
   useEffect(() => {if (!token) return; let active = true; void request<ProjectView>(`/api/v1/projects/${projectId}`).then(next => {if (active) acceptView(next);}).catch(cause => {if (active) setError(errorMessage(cause));}); return () => {active = false;};}, [projectId, token, request, acceptView]);
   useEffect(() => {if (!dirty) return; const guard = (event: BeforeUnloadEvent) => {event.preventDefault();}; window.addEventListener('beforeunload', guard); return () => window.removeEventListener('beforeunload', guard);}, [dirty]);
-  const activeJob = jobs.some(job => job.status === 'queued' || job.status === 'running');
-  useEffect(() => {if (!token || !activeJob) return; const timer = setInterval(() => {void request<Job[]>(`/api/studio/projects/${projectId}/jobs`).then(setJobs).catch(cause => setError(errorMessage(cause)));}, 2500); return () => clearInterval(timer);}, [activeJob, token, projectId, request]);
+  const activeJob = jobs.some(isActiveJob);
+  const jobsRef = useRef(jobs);
+  useEffect(() => {jobsRef.current = jobs;}, [jobs]);
+  // Each tick reads only the active jobs' records; listing the project's jobs costs a Blob list plus one read per job ever run.
+  useEffect(() => {if (!token || !activeJob) return; const timer = setInterval(() => {void readActiveJobs(projectId, jobsRef.current, path => request<Job>(path)).then(fresh => setJobs(previous => replaceJobs(previous, fresh))).catch(cause => setError(errorMessage(cause)));}, 2500); return () => clearInterval(timer);}, [activeJob, token, projectId, request]);
 
   const fields = useMemo(() => {try {return normalizeFields(texts ? JSON.parse(texts.FIELDS) as JsonValue : {}).fields;} catch {return []; }}, [texts]);
   const scene = draft?.scenes.find(item => item.id === sceneId);

@@ -466,9 +466,11 @@ async function runJob(flags) {
     if (job.progress !== lastProgress) {process.stderr.write(`[se-widget-studio] ${job.status}: ${job.progress}\n`); lastProgress = job.progress;}
     check(Date.now() < deadline, 'Polling reached the job deadline. Use status before deciding whether to submit another job.');
     await sleep(Math.min(5000, Math.max(1, deadline - Date.now())));
-    const jobs = expect(await api(access.origin, `/api/studio/projects/${access.projectId}/jobs`, {token: access.token}), [200], 'Job poll');
-    job = jobs.find(candidate => candidate.id === created.id);
-    check(job, 'Accepted job disappeared from the project.');
+    // The job's own route reads one record; the job list reads every job the project ever ran.
+    const polled = await api(access.origin, `/api/studio/projects/${access.projectId}/jobs/${created.id}`, {token: access.token});
+    check(polled.status !== 404, 'Accepted job disappeared from the project.');
+    job = expect(polled, [200], 'Job poll');
+    check(job?.id === created.id, 'Job poll returned a different job.');
   }
   check(job.status === 'completed', `Job ended with ${job.status}. ${job.error ?? ''}`);
   await mkdir(output, {recursive: false, mode: 0o700});

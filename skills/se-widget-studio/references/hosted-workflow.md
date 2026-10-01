@@ -96,7 +96,7 @@ node "$SKILL_DIR/scripts/studio-client.mjs" run \
   --output-dir /absolute/new/render-output
 ```
 
-The output directory must not exist. The command never cleans or overwrites it. It stops on a terminal job status, verifies every download against server metadata, and writes a capability-free `job.json` report beside the artifacts. When the render manifest or the test report lists Google Fonts issues, it prints them on one stderr line and adds them as `fontIssues` to its JSON and to `job.json`; read them before using the media. A job has a ten-minute execution budget. Do not submit a replacement job merely because polling was interrupted; use `status` to find the accepted job first.
+The output directory must not exist. The command never cleans or overwrites it. It stops on a terminal job status, verifies every download against server metadata, and writes a capability-free `job.json` report beside the artifacts. When the render manifest or the test report lists Google Fonts issues, it prints them on one stderr line and adds them as `fontIssues` to its JSON and to `job.json`; read them before using the media. A job has a ten-minute execution budget. Do not submit a replacement job merely because polling was interrupted; use `status` to find the accepted job first. `run` polls every 5 s and reads only that job's record; never watch a job by calling `status` in a loop, because each `status` reads the project's whole revision and job history from storage, and that storage has a monthly operation quota.
 
 ## Plan a large batch
 

@@ -261,6 +261,50 @@ test('run prints the Google Fonts issues of the manifest it downloads, on one li
   }
 });
 
+async function runAgainst(poll: (respond: (status: number, body: string) => void, job: (status: string, artifacts?: unknown[], id?: string) => string, artifact: unknown) => void) {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-run-poll-'));
+  const token = 'private_capability_12345678901234567890';
+  const image = Buffer.from([137, 80, 78, 71]);
+  const artifact = {id: 'image', name: 'stills/a.png', key: 'k/image', contentType: 'image/png', bytes: image.length, sha256: createHash('sha256').update(image).digest('hex')};
+  const job = (status: string, artifacts: unknown[] = [], id = 'job-test') => JSON.stringify({id, projectId: 'project-test', revisionId: 'revision-test', kind: 'render', selection: 'stills', status, createdAt: new Date().toISOString(), progress: status, artifacts});
+  const requests: string[] = [];
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* drain */ }
+    requests.push(`${request.method} ${request.url}`);
+    response.setHeader('Content-Type', 'application/json');
+    const respond = (status: number, body: string | Buffer) => {response.statusCode = status; response.end(body);};
+    if (request.method === 'POST' && request.url === '/api/studio/projects/project-test/jobs') return respond(202, job('queued'));
+    if (request.method === 'GET' && request.url === '/api/studio/projects/project-test/jobs/job-test') return poll(respond, job, artifact);
+    if (request.method === 'GET' && request.url === '/api/studio/projects/project-test/artifacts/image') return respond(200, image);
+    respond(500, '{}');
+  });
+  try {
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const access = join(root, 'access.private.json');
+    await writeFile(access, JSON.stringify({schemaVersion: 1, purpose: 'se-widget-studio-access', origin: `http://127.0.0.1:${address.port}`, projectId: 'project-test', token, editorUrl: `/p/project-test#key=${token}`}), {mode: 0o600});
+    const result = await exec(process.execPath, [script, 'run', '--access', access, '--kind', 'render', '--selection', 'stills', '--output-dir', join(root, 'output')]).then(({stdout}) => ({stdout, stderr: ''}), (error: {stdout: string; stderr: string}) => ({stdout: error.stdout, stderr: error.stderr}));
+    return {...result, requests};
+  } finally {
+    await new Promise<void>(done => server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+}
+
+test('run polls the accepted job on its own route, never the project job list', async () => {
+  const {stdout, stderr, requests} = await runAgainst((respond, job, artifact) => respond(200, job('completed', [artifact])));
+  assert.equal(JSON.parse(stdout).status, 'completed', stderr);
+  assert.deepEqual(requests, ['POST /api/studio/projects/project-test/jobs', 'GET /api/studio/projects/project-test/jobs/job-test', 'GET /api/studio/projects/project-test/artifacts/image']);
+});
+
+test('run stops when the job route answers 404 or returns another job', async () => {
+  const missing = await runAgainst(respond => respond(404, JSON.stringify({error: 'Job not found.'})));
+  assert.match(missing.stderr, /Accepted job disappeared from the project\./);
+  const other = await runAgainst((respond, job) => respond(200, job('completed', [], 'other-job')));
+  assert.match(other.stderr, /Job poll returned a different job\./);
+  assert.equal(other.requests.some(line => line.includes('/artifacts/')), false);
+});
+
 test('fontIssues reads only a manifest or test report, and tolerates what is not one', () => {
   const issues = {fonts: {issues: ['one', 2, 'two']}};
   assert.deepEqual(fontIssues('stills/manifest.json', Buffer.from(JSON.stringify(issues))), ['one', 'two']);

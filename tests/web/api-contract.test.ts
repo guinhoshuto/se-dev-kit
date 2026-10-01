@@ -10,6 +10,7 @@ import {PUT as upload} from '../../app/api/v1/projects/[id]/uploads/[uploadId]/r
 import {POST as restore} from '../../app/api/studio/projects/[id]/restore/route';
 import {GET as revision} from '../../app/api/studio/projects/[id]/revisions/[revisionId]/route';
 import {GET as download} from '../../app/api/studio/projects/[id]/artifacts/[artifactId]/route';
+import {GET as pollJob} from '../../app/api/studio/projects/[id]/jobs/[jobId]/route';
 import {LocalStore, writeJson} from '../../lib/storage';
 import type {ProjectView} from '../../lib/model';
 
@@ -175,6 +176,33 @@ test('artifact downloads are private, project-scoped, uncached attachments with 
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+});
+
+test('a job poll reads the project and that job record only, never the job list', async t => {
+  const storage = await setup(t);
+  const project = await newProject();
+  const other = await newProject();
+  const job = (id: string, status: string) => ({id, projectId: project.projectId, revisionId: project.revisionId, kind: 'render', selection: 'default', status, createdAt: '2025-01-15T12:00:00.000Z', updatedAt: '2025-01-15T12:00:00.000Z', progress: status, artifacts: []});
+  for (let index = 0; index < 5; index++) await writeJson(storage, `projects/${project.projectId}/jobs/old-${index}.json`, job(`old-${index}`, 'completed'));
+  await writeJson(storage, `projects/${project.projectId}/jobs/live-job.json`, job('live-job', 'running'));
+  const target = (id = project.projectId, jobId = 'live-job') => ({params: Promise.resolve({id, jobId})});
+  const path = (id = project.projectId, jobId = 'live-job') => `/api/studio/projects/${id}/jobs/${jobId}`;
+  const reads: string[] = [];
+  const {get: originalGet, list: originalList} = LocalStore.prototype;
+  t.mock.method(LocalStore.prototype, 'get', function (this: LocalStore, key: string) {reads.push(`get ${key}`); return originalGet.call(this, key);});
+  t.mock.method(LocalStore.prototype, 'list', function (this: LocalStore, prefix: string) {reads.push(`list ${prefix}`); return originalList.call(this, prefix);});
+  const response = await pollJob(request(path(), 'GET', project.token), target());
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await response.json(), job('live-job', 'running'));
+  assert.deepEqual(reads, [`get projects/${project.projectId}/project.json`, `get projects/${project.projectId}/jobs/live-job.json`]);
+  assert.equal((await pollJob(request(path()), target())).status, 403);
+  assert.equal((await pollJob(request(path(), 'GET', other.token), target())).status, 403);
+  assert.equal((await pollJob(request(path(other.projectId), 'GET', other.token), target(other.projectId))).status, 404);
+  const missing = await pollJob(request(path(project.projectId, 'no-such-job'), 'GET', project.token), target(project.projectId, 'no-such-job'));
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), {error: 'Job not found.'});
+  assert.equal((await pollJob(request(path(project.projectId, '..'), 'GET', project.token), target(project.projectId, '..'))).status, 400);
 });
 
 test('creation keys and cross-origin guards reject writes without creating projects', async t => {
