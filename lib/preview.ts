@@ -9,7 +9,7 @@ import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/stud
 import {deployedSampleMedia, sampleMediaDataUrl, type SampleMediaSource} from './sample-media';
 import {htmlRefusals, missingPlaceholderWarning, substitutePlaceholders, substitutedHtmlError, hasPlaceholder} from '../src/config/placeholders';
 import {canonicalGoogleFontsUrl, isGoogleFontsHost} from '../src/runtime/google-fonts-url';
-import {previewResponseBytes} from './limits';
+import {previewAssetBytes, previewResponseBytes} from './limits';
 
 /**
  * Resolves a Google Fonts URL on the server for the preview (`cssForPreview` bound to the real
@@ -150,7 +150,7 @@ export async function previewDocument(prepared: PreparedSnapshot, store: ObjectS
     const object = await store.get(asset.key);
     if (!object || object.body.byteLength !== asset.bytes || sha256(object.body) !== asset.sha256) throw new Error(`Preview resource integrity check failed: ${path}`);
     assetBytes += object.body.byteLength;
-    if (assetBytes > PREVIEW_ASSET_LIMIT) throw new Error('Interactive preview supports up to 3 MB of captured assets. Use a smaller preview revision; server-side jobs retain the 100 MB revision limit.');
+    if (assetBytes > previewAssetBytes()) throw new Error(`Interactive preview supports up to ${previewAssetBytes() / 1024 / 1024} MiB of captured assets. Use a smaller preview revision; server-side jobs retain the 100 MB revision limit.`);
     visiting.add(path);
     const body = asset.contentType === 'text/css' || path.endsWith('.css') ? Buffer.from(await rewriteCss(Buffer.from(object.body).toString('utf8'), ref => inline(ref, path))) : Buffer.from(object.body);
     const data = `data:${asset.contentType};base64,${body.toString('base64')}`;
@@ -175,7 +175,7 @@ export async function previewDocument(prepared: PreparedSnapshot, store: ObjectS
   for (const reference of collectSampleMediaReferences({fieldData: state.fieldData, channel: state.channel, recents: state.recents, events: sceneFixture?.events ?? []})) {
     const sample = await sampleMediaDataUrl(reference, sampleMedia, prepared.sampleMedia);
     assetBytes += sample.bytes;
-    if (assetBytes > PREVIEW_ASSET_LIMIT) throw new Error('Interactive preview supports up to 3 MB of captured assets and sample media together. Sample media counts toward this preview budget; use fewer samples in this scene. Server-side jobs are not limited by it.');
+    if (assetBytes > previewAssetBytes()) throw new Error(`Interactive preview supports up to ${previewAssetBytes() / 1024 / 1024} MiB of captured assets and sample media together. Sample media counts toward this preview budget; use fewer samples in this scene. Server-side jobs are not limited by it.`);
     resources.set(reference, sample.dataUrl);
   }
   // Captured media and samples are substituted as the data URLs the runtime maps them to.

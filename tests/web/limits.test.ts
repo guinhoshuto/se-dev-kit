@@ -128,6 +128,36 @@ test('a hosted job does not take the render slot', async () => {
   assert.doesNotMatch(job.stderr(), /render slot/);
 });
 
+// The embedded assets follow the response cap: 3 MiB fit in 4 MB of base64, 8 MiB in 10 MB.
+test('the preview embeds up to 3 MiB of assets on Vercel and up to 8 MiB in a local Studio', async () => {
+  const directory = await temporaryDirectory('sws-limits-assets-');
+  const keys = ['STUDIO_STORAGE', 'STUDIO_DATA_DIR', 'STUDIO_CREATE_KEY'] as const;
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  process.env.STUDIO_STORAGE = 'local';
+  process.env.STUDIO_DATA_DIR = directory;
+  delete process.env.STUDIO_CREATE_KEY;
+  try {
+    const store = new LocalStore(directory);
+    // Files of 1.7 MB: one inline asset of 3.5 MB overflows the stack while the revision is prepared.
+    const project = async (files: number) => as('local', () => createProject(store, {...input, assets: Array.from({length: files}, (_, index) => ({path: `media/blob-${index}.bin`, content: randomBytes(1_700_000).toString('base64'), encoding: 'base64', contentType: 'application/octet-stream'}))}));
+    const call = ({project: {id}, token}: Awaited<ReturnType<typeof project>>) => preview(new Request(`http://127.0.0.1:4310/api/studio/projects/${id}/preview`, {method: 'POST', headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'}, body: '{}'}), {params: Promise.resolve({id})});
+    // 3.4 MB: over the hosted budget, its base64 (4.5 MB) inside the local response cap.
+    const medium = await project(2);
+    const local = await as('local', () => call(medium));
+    assert.equal(local.status, 200, await local.clone().text());
+    const hosted = await as('hosted', () => call(medium));
+    assert.equal(hosted.status, 422);
+    assert.match(await hosted.text(), /up to 3 MiB of captured assets/);
+    // 8.5 MB: over the local budget too, refused before its base64 (11.3 MB) could reach the response cap.
+    const heavy = await project(5);
+    const large = await as('local', () => call(heavy));
+    assert.equal(large.status, 422);
+    assert.match(await large.text(), /up to 8 MiB of captured assets/);
+  } finally {
+    for (const key of keys) saved[key] === undefined ? delete process.env[key] : process.env[key] = saved[key];
+  }
+});
+
 // A Vercel Function answers at most about 4.5 MB; the local Studio has no such cap (SDK-34, the se-windows preview).
 test('the preview response is capped at 4 MB on Vercel and at 10 MB in a local Studio', async () => {
   const directory = await temporaryDirectory('sws-limits-preview-');

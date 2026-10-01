@@ -17,6 +17,10 @@ export function jobBudgetMs(): number {
 export function previewResponseBytes(): number {
   return hostedLimits() ? 4_000_000 : 10_000_000;
 }
+/** The preview's embedded assets and samples: base64 grows them by a third, so the hosted 3 MiB fit its 4 MB response and the local 8 MiB its 10 MB. */
+export function previewAssetBytes(): number {
+  return hostedLimits() ? 3 * 1024 * 1024 : 8 * 1024 * 1024;
+}
 /** Artifact size limits: the hosted ones fit Blob and the Sandbox; the local ones bound memory, since publishing reads each file whole. */
 export function artifactLimits(): {file: number; job: number} {
   return hostedLimits() ? {file: 100 * 1024 * 1024, job: 250 * 1024 * 1024} : {file: 512 * 1024 * 1024, job: 1024 * 1024 * 1024};

@@ -144,15 +144,15 @@ async function catalogCopy(root: string, entries: {reference: string; file: stri
   return () => loadSampleMediaCatalog(root);
 }
 
-test('an injected catalog enforces integrity and the shared 3 MB preview budget', async () => {
+test('an injected catalog enforces integrity and the shared preview budget (8 MiB in a local Studio)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-sample-web-'));
   try {
     const broken = await catalogCopy(join(root, 'broken'), [{reference: STREAMER_1, file: 'gallery/streamer-1.jpg'}], file => writeFile(file, 'tampered'));
     await assert.rejects(prepareSnapshot(snapshot(), new MemoryStore(), 'p', broken), /does not match its recorded size and SHA-256/);
 
     const large = join(root, 'large');
-    const big = Buffer.alloc(1_600_000, 7);
-    const items = ['one', 'two'].map(name => ({id: name, reference: `sws-sample:gallery/${name}.jpg`, file: `gallery/${name}.jpg`, kind: 'gallery', contentType: 'image/jpeg', width: 1, height: 1, bytes: big.byteLength, sha256: createHash('sha256').update(big).digest('hex'), label: name, alt: 'Synthetic test bytes', color: '#000000', origin: 'test'}));
+    const big = Buffer.alloc(3_000_000, 7);
+    const items = ['one', 'two', 'three'].map(name => ({id: name, reference: `sws-sample:gallery/${name}.jpg`, file: `gallery/${name}.jpg`, kind: 'gallery', contentType: 'image/jpeg', width: 1, height: 1, bytes: big.byteLength, sha256: createHash('sha256').update(big).digest('hex'), label: name, alt: 'Synthetic test bytes', color: '#000000', origin: 'test'}));
     await mkdir(join(large, 'gallery'), {recursive: true});
     for (const item of items) await writeFile(join(large, item.file), big);
     await writeFile(join(large, 'manifest.json'), JSON.stringify({schemaVersion: 1, items}));
@@ -162,6 +162,10 @@ test('an injected catalog enforces integrity and the shared 3 MB preview budget'
     const store = new MemoryStore();
     const prepared = await prepareSnapshot(heavy, store, 'p', source);
     await assert.rejects(previewHtml(prepared, store, {...options, sceneId: 'hero'}, source), /sample media counts toward this preview budget/i);
+    // Two of them (6 MB) are over the hosted 3 MiB and inside the local 8 MiB.
+    const pair = snapshot(); pair.fixtures = []; pair.recipes = [];
+    pair.scenes = [{schemaVersion: 1, id: 'hero', name: 'Hero', fieldData: {gallery: items.slice(0, 2).map(item => item.reference)}}];
+    await previewHtml(await prepareSnapshot(pair, store, 'q', source), store, {...options, sceneId: 'hero'}, source);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
