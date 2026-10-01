@@ -11,6 +11,13 @@ import {buildAssetMap} from '../../src/server/assets';
 import {prepareSnapshot} from '../../lib/importer';
 import type {WidgetSnapshot, Revision, Job, ObjectStore} from '../../lib/model';
 import {verificationSnapshot} from '../../scripts/verify-hosted.mjs';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {detectBrowser} from '../../src/capture/browser';
+import {detectMediaTooling} from '../../src/capture/media';
+import {lacksProprietaryCodecs} from '../../src/validation/doctor';
+
+const execFileAsync = promisify(execFile);
 
 function snapshot(): WidgetSnapshot {
   return {schemaVersion: 1, name: 'Worker test', widget: {html: '<div id="ready">Ready</div>', css: 'body{margin:0;background:#182632;color:white}#ready{padding:24px;font:20px sans-serif}', js: 'window.addEventListener("onWidgetLoad",()=>{document.querySelector("#ready").textContent="Loaded";});', fields: {}, viewport: {width: 160, height: 120}, ready: {selector: '#ready', timeoutMs: 5000}}, channel: {username: 'test'}, themes: [], fixtures: [], scenes: [{schemaVersion: 1, id: 'default', name: 'Default', output: {width: 160, height: 120}, captureAtMs: 0}], scenarios: [{schemaVersion: 1, id: 'loaded', name: 'Loaded', steps: [{action: 'assert', selector: '#ready', text: 'Loaded'}]}], recipes: [{schemaVersion: 1, id: 'image', name: 'Image', scenes: ['default'], outputs: {screenshots: true, thumbnails: {width: 80, height: 60}, contactSheet: true}}], assets: []};
@@ -152,6 +159,37 @@ test('[browser] a job loads the widget files a media array names, in a widget th
     assert.equal(tested.status, 'completed', tested.error);
     const report = JSON.parse(Buffer.from((await store.get(tested.artifacts[0]!.key))!.body).toString());
     assert.equal(report.scenarios[0].status, 'passed', JSON.stringify(report.scenarios[0]));
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+// The hosted Sandbox's Chromium could not decode H.264 (SDK-20); the local Studio runs the system Chrome, which can.
+test('[browser] a local job plays an H.264 MP4 the widget loads, in a test and in a render', {timeout: 120_000}, async t => {
+  const [browser, tooling] = await Promise.all([detectBrowser(), detectMediaTooling({})]);
+  if (!browser.executablePath || lacksProprietaryCodecs(browser)) {t.skip('Needs the system Google Chrome; a Chromium build has no H.264.'); return;}
+  if (!tooling.ffmpegPath) {t.skip('FFmpeg is optional and is not installed.'); return;}
+  const root = await mkdtemp(join(tmpdir(), 'sws-worker-mp4-'));
+  try {
+    const clip = join(root, 'clip.mp4');
+    await execFileAsync(tooling.ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=32x16:d=1:r=10', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', clip]);
+    const store = new LocalStore(join(root, 'store'));
+    const source: WidgetSnapshot = {
+      schemaVersion: 1, name: 'MP4 playback',
+      widget: {html: '<video id="clip" muted playsinline src="media/clip.mp4"></video>', css: 'body{margin:0}', js: 'const clip=document.querySelector("#clip");const mark=()=>{clip.dataset.size=`${clip.videoWidth}x${clip.videoHeight}`;};if(clip.readyState>=2)mark();else clip.addEventListener("loadeddata",mark);', fields: {}, viewport: {width: 160, height: 120}, ready: {selector: '#clip', timeoutMs: 5000}},
+      channel: {}, themes: [], fixtures: [],
+      scenes: [{schemaVersion: 1, id: 'default', name: 'Default', output: {width: 160, height: 120}, captureAtMs: 0}],
+      scenarios: [{schemaVersion: 1, id: 'plays', name: 'Plays', steps: [{action: 'assert', selector: '#clip[data-size="32x16"]', count: 1}]}],
+      recipes: [{schemaVersion: 1, id: 'image', name: 'Image', scenes: ['default'], outputs: {screenshots: true}}],
+      assets: [{path: 'media/clip.mp4', content: (await readFile(clip)).toString('base64'), encoding: 'base64'}]
+    };
+    const prepared = await prepareSnapshot(source, store, 'projects/project-test/prepared/revision-mp4');
+    const revision: Revision = {id: 'revision-mp4', projectId: 'project-test', createdAt: new Date().toISOString(), snapshot: source, status: 'ready', diagnostics: [], prepared};
+    const tested = await runJob({...job('test', 'all'), id: 'job-mp4-test', revisionId: 'revision-mp4'}, revision, store);
+    assert.equal(tested.status, 'completed', tested.error);
+    const report = JSON.parse(Buffer.from((await store.get(tested.artifacts[0]!.key))!.body).toString());
+    assert.equal(report.scenarios[0].status, 'passed', JSON.stringify(report.scenarios[0]));
+    // A render waits for every <video> to load and fails the job with "Video failed to load" when it cannot.
+    const rendered = await runJob({...job('render', 'image'), id: 'job-mp4-render', revisionId: 'revision-mp4'}, revision, store);
+    assert.equal(rendered.status, 'completed', rendered.error);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
