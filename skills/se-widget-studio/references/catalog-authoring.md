@@ -19,7 +19,7 @@ FIELDS defaults → theme → fixture → scene → temporary preview override
 
 Never put background, crop, zoom, or output dimensions in `fieldData` unless they are genuine widget FIELDS.
 
-Themes and scenes may set a `googleFont` field freely: hosted preview and jobs load Google Fonts as StreamElements does, and substitute `{{field}}` placeholders with the effective field data in HTML, CSS and JS.
+Themes and scenes may set a `googleFont` field freely: the Studio preview and jobs load Google Fonts as StreamElements does, and substitute `{{field}}` placeholders with the effective field data in HTML, CSS and JS.
 
 ## Field changes
 
@@ -36,7 +36,7 @@ A widget repository keeps each theme in `themes/` as a pair:
 
 ## Sample media
 
-Never generate, download, draw, or upload images just to test a widget. The Studio ships AI-generated sample images, and every mode (hosted preview, hosted jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
+Never generate, download, draw, or upload images just to test a widget. The Studio ships AI-generated sample images, and every mode (Studio preview, Studio jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
 
 | Gallery reference (1672x941, landscape) | Shows |
 |---|---|
@@ -76,9 +76,9 @@ The people in the streamer photos are synthetic. A streamer photo as a 16:9 `bac
 Rules:
 
 - Only a whole string counts. It works as a media value in theme, fixture, scene, scenario `updateFields`, channel, and event data; as an array element of an `image-input` with `multiple: true`; and as `background.image` of a scene or a recipe matrix background.
-- Unknown references fail `validate` (`SAMPLE_MEDIA_UNKNOWN`), block hosted import, and make the skill client refuse `import`/`push` before any change. Never put references in widget HTML or CSS or in FIELDS `value`/`default`, because StreamElements cannot resolve them. Hosted import rejects them there; local `validate` does not, so do not rely on it to catch this.
-- Do not declare samples under `assets`, and never copy them into the widget directory. They cost no upload or revision asset quota. In the hosted interactive preview, captured assets and the samples the selected scene shows share one 3 MiB budget, and the whole response, background image included, must stay under 4,000,000 bytes as base64: plan for well under 3 MB of raw media per previewed scene.
-- Widgets receive an absolute URL: a same-origin `http:` URL in the local CLI and hosted jobs, a verified `data:image/` URL in the hosted interactive preview. Code that resolves media with `new URL(value, location.href)` works unchanged when it also accepts `data:image/` URLs; code that keeps only `http:`, `https:`, or `blob:` shows the image in jobs and the local CLI but not in the hosted preview, as with any captured asset.
+- Unknown references fail `validate` (`SAMPLE_MEDIA_UNKNOWN`), block a Studio import, and make the skill client refuse `import`/`push` before any change. Never put references in widget HTML or CSS or in FIELDS `value`/`default`, because StreamElements cannot resolve them. Hosted import rejects them there; local `validate` does not, so do not rely on it to catch this.
+- Do not declare samples under `assets`, and never copy them into the widget directory. They cost no upload or revision asset quota. In the Studio's interactive preview, captured assets and the samples the selected scene shows share one 3 MiB budget, and the whole response, background image included, must stay under 4,000,000 bytes as base64: plan for well under 3 MB of raw media per previewed scene.
+- Widgets receive an absolute URL: a same-origin `http:` URL in the local CLI and Studio jobs, a verified `data:image/` URL in the Studio's interactive preview. Code that resolves media with `new URL(value, location.href)` works unchanged when it also accepts `data:image/` URLs; code that keeps only `http:`, `https:`, or `blob:` shows the image in jobs and the local CLI but not in the hosted preview, as with any captured asset.
 - Do not fill empty media fields silently. StreamElements shows an empty field as empty, so keep at least one scene with the media fields empty when the widget has an empty state, and put samples in the scenes that show media. The editors' **Fill empty image fields** button is an explicit, temporary choice.
 - `video-input` and `sound-input` have no samples yet, and there are no avatar, emote, transparent, animated, or portrait samples. Leave those fields empty or ask the user; do not generate replacements.
 
@@ -86,9 +86,9 @@ Rules:
 
 Name a widget's own test media by its path relative to the widget root, such as `studio/media/gallery/01.jpg`, alone or in an array for a `multiple` field; in a local config, list it in `widget.assets` when it lives outside `assets/`, `fonts/`, and `media/`. Widgets receive the file's absolute URL in every mode, as with samples above. Do not write the local Studio's internal `/__sws/widget/<path>` URL: local runs still accept it, but hosted import refuses it.
 
-## Hosted assets
+## Studio assets
 
-For hosted import with `--catalog`, list local binary dependencies explicitly as `{path, file, contentType}`. `file` is relative to the production widget root and is consumed only by the skill helper; the server stores the resulting private upload ID. Never use broad directory globs or include credentials, source maps, development configuration, or unrelated repository files. `import --config` declares the files the config's `widget.assets` match, so keep those globs as narrow as the media the catalog uses.
+For a Studio import with `--catalog`, list local binary dependencies explicitly as `{path, file, contentType}`. `file` is relative to the production widget root and is consumed only by the skill helper; the server stores the resulting private upload ID. Never use broad directory globs or include credentials, source maps, development configuration, or unrelated repository files. `import --config` declares the files the config's `widget.assets` match, so keep those globs as narrow as the media the catalog uses.
 
 ## Compact example
 
@@ -151,6 +151,6 @@ For hosted import with `--catalog`, list local binary dependencies explicitly as
 }
 ```
 
-Use synthetic content only. For WebM alpha, select VP9 WebM with `yuva420p`; MP4 requires H.264 and does not preserve alpha. For video the widget plays (a `video-input` value, an asset), use WebM (VP9): hosted jobs cannot decode H.264 input (see "Video input" in [hosted-workflow.md](hosted-workflow.md#current-hosted-boundaries)). A local render deletes the PNG frames after a validated encode; add `"keepFrames": true` to `outputs.video` only when the frames themselves are wanted for inspection or post-processing (loop cuts, posters, stills, a higher-quality re-encode). Leave it out of hosted catalogs: hosted jobs ignore it, and a deployment older than this key rejects it. Video output, MP4 and WebM, local and hosted, is converted with the BT.709 matrix and tagged BT.709 since the deployment of 2026-09-29; earlier videos are BT.601 without tags. A tool that re-encodes a Studio video should let FFmpeg read the tags (its default) instead of forcing `in_color_matrix`: forcing `bt601` on a newer video shifts its colors. Keep marketplace-specific constraints in dated presets with official source URLs, not in generic recipes.
+Use synthetic content only. For WebM alpha, select VP9 WebM with `yuva420p`; MP4 requires H.264 and does not preserve alpha. For video the widget plays (a `video-input` value, an asset), use WebM (VP9): the local Studio's Chrome plays H.264, but the paused hosted deployment's jobs cannot decode it (see [studio-workflow.md](studio-workflow.md#hosted-deployment-paused)). A local render deletes the PNG frames after a validated encode; add `"keepFrames": true` to `outputs.video` only when the frames themselves are wanted for inspection or post-processing (loop cuts, posters, stills, a higher-quality re-encode). Leave it out of Studio catalogs: Studio jobs never publish frames, so `import --config` drops it; keep frames with the local CLI. Video output, MP4 and WebM, local and hosted, is converted with the BT.709 matrix and tagged BT.709 since the deployment of 2026-09-29; earlier videos are BT.601 without tags. A tool that re-encodes a Studio video should let FFmpeg read the tags (its default) instead of forcing `in_color_matrix`: forcing `bt601` on a newer video shifts its colors. Keep marketplace-specific constraints in dated presets with official source URLs, not in generic recipes.
 
 A transparent widget that declares `color-scheme: dark` comes out on an opaque `#121212` box in the Studio's screenshots and videos (seen in a local capture) and in the tutorial's editor replica. Chrome paints an opaque canvas behind an iframe whose color scheme differs from the page that embeds it, and the Studio embeds widgets in a light page. StreamElements and OBS have not been checked. Do not work around it in the catalog: tell the user that the widget declares a dark scheme.

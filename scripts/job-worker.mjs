@@ -5,6 +5,7 @@ import {renderRecipe, planRecipe, singleSceneRecipe} from '../dist/capture/rende
 import {runScenarios, runBrowserSmoke} from '../dist/scenarios/runner.js';
 import {assertSampleMediaPins} from '../dist/config/sample-media.js';
 import {FontResolver, FONTS_MISSING_MAX_URLS, isFontsMissing} from '../dist/fonts/resolver.js';
+import {acquireRenderSlot} from '../dist/shared/render-slot.js';
 
 // Trusted process entry point. Input is data; no submitted Node module is imported.
 // argv: <input.json> <pass>. Everything else derives from the input's directory, so the host never
@@ -35,10 +36,16 @@ try {
   process.exit(0);
 }
 
+// The local Studio sets STUDIO_EXECUTION=local; a Sandbox worker gets no such variable and keeps the hosted limits.
+const local = process.env.STUDIO_EXECUTION === 'local';
+const limits = local ? {file: 512 * 1024 * 1024, job: 1024 * 1024 * 1024} : {file: 100 * 1024 * 1024, job: 250 * 1024 * 1024};
 const project = {...inputProject, outputRoot: resolve(inputProject.outputRoot, `pass-${pass}`)};
 const result = {ok: false, artifacts: [], progress: '', error: undefined, pass};
 const needsFonts = urls => { result.needsFonts = urls.slice(0, FONTS_MISSING_MAX_URLS); result.progress = `Fetching Google Fonts (pass ${pass + 1}).`; };
 try {
+  // On the owner's machine a job is one more heavy render: it waits for the machine-wide slot like the CLI
+  // does, and holds it until this process exits.
+  if (local) await acquireRenderSlot({command: `studio ${job.kind} job ${job.id} pass ${pass}`, log: message => process.stderr.write(`${message}\n`)});
   const fonts = await FontResolver.load(resolve(jobDirectory, 'fonts'), pass);
   // Samples the revision pinned must still have identical bytes in this build (append-only catalog).
   await assertSampleMediaPins(sampleMedia);
@@ -70,15 +77,15 @@ try {
     const recipe = configured ?? (scene ? singleSceneRecipe(scene, {video: job.selection.startsWith('video:')}) : undefined);
     if (!recipe) throw new Error('Select an existing recipe or scene.');
     const video = recipe.outputs?.video;
-    if (video?.enabled && (video.durationMs > 15000 || video.fps > 30)) throw new Error('Video limit is 15 seconds at 30 FPS.');
-    // Hosted jobs never publish frames, so they are removed after each validated encode whatever the recipe says.
-    // The Sandbox free space has not been measured yet, so the local disk guard stays off here until it is.
-    const options = {matrixLimit: 48, allowIntermediate: true, keepFrames: false, allowLowDisk: true, outputRoot: project.outputRoot, fonts,
+    if (!local && video?.enabled && (video.durationMs > 15000 || video.fps > 30)) throw new Error('Video limit is 15 seconds at 30 FPS.');
+    // Jobs never publish frames, so they are removed after each validated encode whatever the recipe says.
+    // The Sandbox free space has not been measured yet, so the disk guard runs only in a local Studio.
+    const options = {matrixLimit: 48, allowIntermediate: true, keepFrames: false, allowLowDisk: !local, outputRoot: project.outputRoot, fonts,
       ...(process.env.STUDIO_FFMPEG_PATH ? {ffmpegPath: process.env.STUDIO_FFMPEG_PATH} : {}),
       ...(process.env.STUDIO_FFPROBE_PATH ? {ffprobePath: process.env.STUDIO_FFPROBE_PATH} : {})};
     const plan = await planRecipe(project, recipe, options);
     if (plan.plan.variants.some(item => item.output.width > 4096 || item.output.height > 4096)) throw new Error('Output dimensions must not exceed 4096 pixels.');
-    if (video?.enabled && plan.plan.totalFrames > 900) throw new Error('A video job is limited to 900 total frames. Split the recipe.');
+    if (!local && video?.enabled && plan.plan.totalFrames > 900) throw new Error('A video job is limited to 900 total frames. Split the recipe.');
     let rendered;
     try { rendered = await renderRecipe(project, recipe, options); }
     catch (error) { if (!isFontsMissing(error)) throw error; needsFonts(error.urls); }
@@ -101,7 +108,7 @@ try {
     if (!name || name.startsWith('..') || isAbsolute(name)) throw new Error('Artifact escaped the output directory.');
     const metadata = await stat(file);
     total += metadata.size;
-    if (metadata.size > 100 * 1024 * 1024 || total > 250 * 1024 * 1024) throw new Error('Artifact size limit exceeded.');
+    if (metadata.size > limits.file || total > limits.job) throw new Error('Artifact size limit exceeded.');
     const bytes = await readFile(file);
     result.artifacts.push({name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex')});
   }

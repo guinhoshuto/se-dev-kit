@@ -184,7 +184,7 @@ function defaultSkillsDirectory() {
   return join(homedir(), ".codex", "skills");
 }
 
-// Run the hosted client through the installed path, not the source path: a file that exists
+// Run the Studio client through the installed path, not the source path: a file that exists
 // but does nothing when reached through a link or copy would otherwise pass as installed.
 async function verifyInstalledSkill(target) {
   const client = join(target, "scripts", "studio-client.mjs");
@@ -195,10 +195,10 @@ async function verifyInstalledSkill(target) {
   try {
     ({ stdout } = await execFileAsync(process.execPath, [client, "--help"], { timeout: 15_000 }));
   } catch {
-    throw new Error(`The installed hosted client failed to run: ${client}`);
+    throw new Error(`The installed Studio client failed to run: ${client}`);
   }
   if (!/^Usage:/m.test(stdout)) {
-    throw new Error(`The installed hosted client printed no usage: ${client}`);
+    throw new Error(`The installed Studio client printed no usage: ${client}`);
   }
 }
 

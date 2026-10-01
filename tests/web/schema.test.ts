@@ -15,7 +15,7 @@ test('widget.fieldUpdate takes reload or event, and nothing else', () => {
   assert.equal(parseSnapshot(input).widget.fieldUpdate, undefined, 'left out, the engine default applies');
   assert.throws(() => parseSnapshot({...input,widget:{...input.widget,fieldUpdate:'sometimes'}}), /widget\.fieldUpdate: Invalid enum value\. Expected 'reload' \| 'event'/);
 });
-test('caps raster and video work before execution', () => {
+// The video caps, which apply only on Vercel, are in limits.test.ts.
+test('caps raster work before execution', () => {
   assert.throws(() => parseSnapshot({...input,widget:{...input.widget,viewport:{width:4096,height:640,deviceScaleFactor:2}}}),/4096/);
-  assert.throws(() => parseSnapshot({...input,recipes:[{schemaVersion:1,id:'film',name:'Film',scenes:['default'],outputs:{video:{enabled:true,durationMs:16000,fps:30}}}]}),/15 seconds/);
 });

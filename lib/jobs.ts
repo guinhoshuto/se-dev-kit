@@ -8,8 +8,8 @@ import {materializeSnapshot, relocateProject} from './materialize';
 import {getStore, mutateJson, readJson} from './storage';
 import {buildJobFontPackage, canonicalNeedsFonts, lockForRevision, resolveMissingFonts, staticGoogleFontUrls, type JobFontPackage, type ResolveGoogleFontOptions} from './fonts';
 import {FONT_CACHE_EPOCH, GOOGLE_FONTS_UA, familiesFromUrl} from '../src/runtime/google-fonts-url';
+import {artifactLimits, jobBudgetMs} from './limits';
 
-const MAX_JOB_MS = 10 * 60_000;
 /** Trusted deployment folders copied into every offline Sandbox; next.config.mjs must trace the same folders. */
 export const SANDBOX_ENGINE_FOLDERS = ['dist', 'presets', 'sample-media'] as const;
 const REMOTE_ROOT = '/vercel/sandbox/studio';
@@ -68,10 +68,11 @@ export async function patchJob(store: ObjectStore, job: Job, patch: JobPatch): P
     return {...latest, ...patch, ...metadata, updatedAt: new Date().toISOString()};
   });
 }
-/** Reservations last eleven minutes; execution must finish within ten minutes of job creation. */
+/** Execution must finish within the job budget (lib/limits.ts) of job creation; reservations last one minute longer. */
 export function remainingJobTime(job: Pick<Job, 'createdAt'>, now = Date.now()): number {
   const created = Date.parse(job.createdAt);
-  const remaining = Math.min(MAX_JOB_MS, created + MAX_JOB_MS - now);
+  const budget = jobBudgetMs();
+  const remaining = Math.min(budget, created + budget - now);
   if (!Number.isFinite(remaining) || remaining < 30_000) throw new Error('This job has less than 30 seconds left in its execution budget. Create a new job.');
   return remaining;
 }
@@ -104,11 +105,12 @@ export async function startJob(job: Job, revision: Revision, store: ObjectStore)
 async function publish(store: ObjectStore, job: Job, result: WorkerResult, read: (name: string) => Promise<Uint8Array>): Promise<Job> {
   if (!Array.isArray(result.artifacts) || result.artifacts.length > 256) throw new Error('Invalid worker artifact list.');
   const artifacts: Artifact[] = [];
+  const limits = artifactLimits();
   let total = 0;
   for (const [index, item] of result.artifacts.entries()) {
     if (!item.name || item.name.includes('\\') || item.name.split('/').some(part => !part || part.startsWith('.'))) throw new Error('Unsafe artifact path.');
     total += item.bytes;
-    if (!Number.isSafeInteger(item.bytes) || item.bytes < 0 || item.bytes > 100 * 1024 * 1024 || total > 250 * 1024 * 1024) throw new Error('Worker artifact size limit exceeded.');
+    if (!Number.isSafeInteger(item.bytes) || item.bytes < 0 || item.bytes > limits.file || total > limits.job) throw new Error('Worker artifact size limit exceeded.');
     const body = await read(item.name);
     if (body.byteLength !== item.bytes || createHash('sha256').update(body).digest('hex') !== item.sha256) throw new Error('Worker artifact integrity check failed.');
     const key = `projects/${job.projectId}/artifacts/${job.id}/${item.name}`;
@@ -165,7 +167,7 @@ const fontFamilies = (url: string) => familiesFromUrl(url).map(family => `"${fam
 function assertAnotherPass(job: Pick<Job, 'createdAt'>, pass: number, missing: readonly string[], now = Date.now()): void {
   const listed = missing.slice(0, 8).join(', ') + (missing.length > 8 ? `, and ${missing.length - 8} more` : '');
   if (pass >= FONT_MAX_PASSES) throw new Error(`FONT_DISCOVERY_LIMIT: after ${FONT_MAX_PASSES} passes the widget still requested Google Fonts outside the job package: ${listed}.`);
-  const left = Date.parse(job.createdAt) + MAX_JOB_MS - now;
+  const left = Date.parse(job.createdAt) + jobBudgetMs() - now;
   if (!(left >= FONT_PASS_MIN_MS)) throw new Error(`FONT_DISCOVERY_LIMIT: not enough job time is left for font pass ${pass + 1} (${Math.max(0, Math.round(left / 1000))} s). Run the job again: the fonts found so far are kept. Missing: ${listed}.`);
 }
 /**
@@ -174,7 +176,7 @@ function assertAnotherPass(job: Pick<Job, 'createdAt'>, pass: number, missing: r
  * cannot serve a font that is not cached.
  */
 async function refillFonts(store: ObjectStore, job: Job, revision: Revision, urls: readonly string[], fonts: FontInjection = {}): Promise<void> {
-  const deadline = Math.min(Date.now() + 20_000, Date.parse(job.createdAt) + MAX_JOB_MS - FONT_PASS_MIN_MS);
+  const deadline = Math.min(Date.now() + 20_000, Date.parse(job.createdAt) + jobBudgetMs() - FONT_PASS_MIN_MS);
   const failures = await resolveMissingFonts(urls, {store, projectId: revision.projectId, revisionId: revision.id, ...fontNamespace(revision), deadline, ...fonts});
   if (failures.length) {
     throw new Error(`FONT_UNAVAILABLE: Google Fonts could not be loaded: ${failures.map(failure => `${fontFamilies(failure.url)} (${failure.url}): ${failure.reason}. ${failure.message}`).join('; ')} Try again later.`);
@@ -190,16 +192,21 @@ function discoveredFonts(result: WorkerResult): string[] {
 
 // Local worker -------------------------------------------------------------------------------
 
+/** STUDIO_EXECUTION=local tells the worker to take the render slot, keep the disk guard, and skip the hosted limits. */
+export function localWorkerEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {PATH: process.env.PATH, TMPDIR: tmpdir(), NODE_ENV: 'production', STUDIO_EXECUTION: 'local'};
+  for (const name of ['SE_WIDGET_STUDIO_BROWSER', 'STUDIO_FFMPEG_PATH', 'STUDIO_FFPROBE_PATH', 'RENDER_SLOT_DIR']) if (process.env[name]) environment[name] = process.env[name];
+  return environment;
+}
 async function runLocalWorker(input: string, pass: number, timeoutMs: number): Promise<void> {
-  const environment: NodeJS.ProcessEnv = {PATH: process.env.PATH, TMPDIR: tmpdir(), NODE_ENV: 'production'};
-  for (const name of ['SE_WIDGET_STUDIO_BROWSER', 'STUDIO_FFMPEG_PATH', 'STUDIO_FFPROBE_PATH']) if (process.env[name]) environment[name] = process.env[name];
+  const environment = localWorkerEnvironment();
   await new Promise<void>((done, reject) => {
     const child = spawn(process.execPath, [resolve(process.cwd(), 'scripts/job-worker.mjs'), input, String(pass)], {env: environment, cwd: process.cwd(), detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe']});
     let errors = '';
     child.stderr?.on('data', chunk => { errors = `${errors}${String(chunk)}`.slice(-4000); });
     const timer = setTimeout(() => {
       if (child.pid) {try {process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL');} catch {child.kill('SIGKILL');}}
-      reject(new Error('Job exceeded the 10 minute execution limit.'));
+      reject(new Error(`Job exceeded its ${Math.round(jobBudgetMs() / 60_000)} minute execution limit.`));
     }, timeoutMs);
     child.once('error', error => {clearTimeout(timer); reject(error);});
     child.once('close', code => {clearTimeout(timer); code === 0 ? done() : reject(new Error(`Worker exited with code ${code}. ${errors}`));});

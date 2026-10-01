@@ -28,7 +28,7 @@ test("render takes several recipes in order, or --all, and keeps a single recipe
 
   const all = await runCli(["render", exampleRoot, "--all", "--dry-run", "--json"]);
   assert.equal(all.code, 0, all.stderr);
-  assert.deepEqual(JSON.parse(all.stdout).map((result) => result.plan.recipe).sort(), ["etsy-listing-images", "etsy-listing-video", "listing-media", "tutorial-setup"]);
+  assert.deepEqual(JSON.parse(all.stdout).map((result) => result.plan.recipe).sort(), ["etsy-listing-images", "etsy-listing-video", "listing-media", "listing-tutorial", "tutorial-setup"]);
 
   const both = await runCli(["render", exampleRoot, "--all", "--recipe", "listing-media", "--dry-run", "--json"]);
   assert.equal(JSON.parse(both.stderr).code, "RECIPE_SELECTION", both.stderr);

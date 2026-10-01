@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "listing-tutorial",
+  "name": "Listing settings tutorial",
+  "description": "A 15-second silent settings walkthrough for a store listing: each FIELDS group opened and closed in turn, within the Etsy video length.",
+  "marketplacePreset": "etsy-listing-2026-09",
+  "scenes": [
+    "tutorial-editor"
+  ],
+  "outputs": {
+    "screenshots": false,
+    "video": {
+      "enabled": true,
+      "mode": "tutorial",
+      "durationMs": 15000,
+      "fps": 30,
+      "format": "mp4",
+      "codec": "h264",
+      "pixelFormat": "yuv420p",
+      "audio": "none",
+      "tutorial": {
+        "overlayName": "Studio Chat overlay",
+        "layerName": "Studio Chat",
+        "widget": {"x": 960, "y": 540, "scale": 1.6},
+        "steps": [
+          {"action": "wait", "ms": 400},
+          {"action": "selectLayer"},
+          {"action": "openGroup", "group": "Content"},
+          {"action": "wait", "ms": 1000},
+          {"action": "click", "target": "group:Content"},
+          {"action": "openGroup", "group": "Colors"},
+          {"action": "wait", "ms": 1000},
+          {"action": "click", "target": "group:Colors"},
+          {"action": "openGroup", "group": "Layout"},
+          {"action": "wait", "ms": 1000},
+          {"action": "click", "target": "group:Layout"},
+          {"action": "openGroup", "group": "Behavior"},
+          {"action": "wait", "ms": 1000},
+          {"action": "chat", "user": "Mira", "text": "Looks great!", "badges": ["subscriber"]}
+        ]
+      }
+    }
+  }
+}

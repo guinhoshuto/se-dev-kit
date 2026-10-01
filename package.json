@@ -34,6 +34,7 @@
     "build": "npm run build:engine && next build --webpack",
     "build:engine": "tsc -p tsconfig.engine.json && node scripts/copy-assets.mjs",
     "start": "next start --hostname 127.0.0.1",
+    "serve": "next start --hostname 127.0.0.1 --port 4310",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.engine.json --noEmit",
     "test": "npm run build:engine && node scripts/run-tests.mjs unit integration web web:browser",
     "test:unit": "npm run build:engine && node scripts/run-tests.mjs unit",

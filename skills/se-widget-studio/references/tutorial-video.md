@@ -41,10 +41,11 @@ Set `"mode": "tutorial"` on a recipe's video and write the script in `outputs.vi
 }
 ```
 
-This is the Studio's bundled example, and it runs 28 seconds: longer than a hosted job allows.
+This is the Studio's bundled example, and it runs 28 seconds.
 
-- **Hosted mode (the default).** A video variant lasts at most 15 seconds at up to 30 fps. Keep the script within that, or split a longer walkthrough into several tutorial recipes of up to 15 seconds, each starting with `selectLayer`. Submit it with `run --kind render --selection <recipe-id>`; `video:<scene-id>` has no tutorial mode.
-- **One longer video** needs the local CLI ([local-workflow.md](local-workflow.md)), which this skill uses only when the user explicitly asks for it. Say so and ask; never switch on your own.
+- **Local Studio (the default).** Submit it with `run --kind render --selection <recipe-id>`; `video:<scene-id>` has no tutorial mode. A tutorial has no length cap there; plan its disk use as [studio-workflow.md](studio-workflow.md#plan-a-large-batch) describes.
+- **For a store listing**, keep the tutorial within the store's video length (15 seconds on Etsy, see [known-limits.md](known-limits.md)): show fewer field groups rather than speeding up the moves, or split a longer walkthrough into several tutorial recipes, each starting with `selectLayer`. The Studio's `examples/basic-chat/recipes/listing-tutorial.json` is the model: each group opened, held for a second, and closed, then one chat message, in 14 of its 15 seconds, with the dated Etsy preset.
+- **The paused hosted deployment** limits a video variant to 15 seconds at up to 30 fps.
 
 ## Layout
 
@@ -76,8 +77,8 @@ Steps run in order, and each one advances the tutorial clock.
 
 ## Duration
 
-- The whole script must fit `durationMs`. One that does not fails with `TUTORIAL_TOO_LONG`, whose hint names the smallest `durationMs` that fits. The local CLI's `validate` and `render --dry-run` report it without rendering; the hosted client has no dry run, so leave margin: a failed hosted job still counts against the daily limit.
-- The camera adds no time. For the disk check, tutorial frames count 0.3 bytes per output pixel (see "Plan a large batch" in [hosted-workflow.md](hosted-workflow.md#plan-a-large-batch)).
+- The whole script must fit `durationMs`. One that does not fails with `TUTORIAL_TOO_LONG`, whose hint names the smallest `durationMs` that fits. The local CLI's `validate` and `render --dry-run` report it without rendering; the client has no dry run, so leave margin.
+- The camera adds no time. For the disk check, tutorial frames count 0.3 bytes per output pixel (see "Plan a large batch" in [studio-workflow.md](studio-workflow.md#plan-a-large-batch)).
 
 ## Auto zoom
 
@@ -89,7 +90,7 @@ Steps run in order, and each one advances the tutorial clock.
 
 ## Fidelity
 
-- The editor's Nunito Sans and the chat's Inter ship with the Studio, so every machine and Sandbox draws the same glyphs. The widget's Google Fonts load as in any job (see "Fonts" in [hosted-workflow.md](hosted-workflow.md#fonts)).
+- The editor's Nunito Sans and the chat's Inter ship with the Studio, so every machine and Sandbox draws the same glyphs. The widget's Google Fonts load as in any job (see "Fonts" in [studio-workflow.md](studio-workflow.md#fonts)).
 - While a color is dragged, the replica shows a small crosshair where the real editor hides the pointer, and the picker's backdrop also dims the chat panel.
 - A transparent widget that declares `color-scheme: dark` shows on an opaque `#121212` box in the replica (see the end of [catalog-authoring.md](catalog-authoring.md)).
 - Repeated renders matched frame for frame in local checks; treat the frame hashes in the render manifest (`frameSequence`) as a strong reproducibility signal, not a guarantee. The manifest also records each field change under `fieldUpdate`.

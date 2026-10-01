@@ -100,11 +100,9 @@ test('job updates retain completed results when a competing write wins the CAS',
     assert.deepEqual(await readJson(store, key), result);
   } finally {await rm(directory, {recursive: true, force: true});}
 });
-test('execution budgets include queue time and cannot outlive concurrency reservations', () => {
-  const now = Date.now();
-  assert.equal(remainingJobTime({createdAt: new Date(now - 60_000).toISOString()}, now), 9 * 60_000);
-  assert.throws(() => remainingJobTime({createdAt: new Date(now - 10 * 60_000).toISOString()}, now), /execution budget/);
-  assert.throws(() => remainingJobTime({createdAt: 'invalid'}, now), /execution budget/);
+// The budget itself, hosted and local, is in limits.test.ts.
+test('execution budgets refuse a job without a valid creation time', () => {
+  assert.throws(() => remainingJobTime({createdAt: 'invalid'}, Date.now()), /execution budget/);
 });
 test('hosted workers have a deterministic provider-safe Sandbox name', () => {
   assert.equal(hostedSandboxName('job_ABC-123'), 'sws-job_ABC-123');

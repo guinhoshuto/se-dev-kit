@@ -7,11 +7,14 @@ import {homedir, platform} from 'node:os';
 import {basename, dirname, extname, isAbsolute, posix, relative, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
-const DEFAULT_ORIGIN = 'https://se-dev-kit.vercel.app';
+// The local Studio that `npm run serve` starts in the Studio checkout. The hosted deployment is paused.
+export const DEFAULT_ORIGIN = 'http://127.0.0.1:4310';
 const JSON_LIMIT = 4_000_000;
-const ARTIFACT_LIMIT = 100 * 1024 * 1024;
 const UPLOAD_LIMIT = 10 * 1024 * 1024;
-const JOB_LIMIT_MS = 10 * 60_000;
+// The server's job budget and artifact limits (lib/limits.ts): a local Studio allows longer jobs and larger files.
+export function originLimits(origin) {
+  return isLoopback(origin) ? {jobMs: 125 * 60_000, artifact: 512 * 1024 * 1024} : {jobMs: 10 * 60_000, artifact: 100 * 1024 * 1024};
+}
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const SAMPLE_SCHEME = 'sws-sample:';
 // The Studio repository's sample-media manifest, reached when the skill runs from a checkout or a linked skill
@@ -19,17 +22,27 @@ const SAMPLE_SCHEME = 'sws-sample:';
 const SAMPLE_MANIFEST = resolve(dirname(fileURLToPath(import.meta.url)), '../../../sample-media/manifest.json');
 // The same checkout's engine build, which --config uses to read a se-widget-studio.config.mjs as the local CLI does.
 const ENGINE_DIST = resolve(dirname(fileURLToPath(import.meta.url)), '../../../dist');
-// Per-revision catalog limit of the hosted API (lib/schema.ts).
+// Per-revision catalog limit of the Studio API (lib/schema.ts).
 const CATALOG_LIMIT = 48;
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
 function fail(message) {throw new Error(message);}
 function check(condition, message) {if (!condition) fail(message);}
+function isLoopback(origin) {return ['127.0.0.1', '[::1]', 'localhost'].includes(new URL(origin).hostname);}
+
+/** fetch, with a refused loopback connection reported as a Studio that is not running. */
+export async function studioFetch(url, init) {
+  try {return await fetch(url, init);} catch (error) {
+    const code = error?.cause?.code ?? error?.code;
+    if (isLoopback(url) && (code === 'ECONNREFUSED' || code === 'ECONNRESET')) fail(`No Studio is running at ${new URL(url).origin}. Start the local Studio in the Studio checkout with \`npm run serve\` (run \`npm run build\` first after a change to the checkout), keep it running in the background, and run this command again. Nothing was changed.`);
+    throw error;
+  }
+}
 
 export function normalizeOrigin(value) {
   let url;
   try {url = new URL(value);} catch {fail('Origin must be an absolute HTTP(S) URL.');}
-  const loopback = ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
+  const loopback = isLoopback(url.origin);
   check(!url.username && !url.password && !url.search && !url.hash && url.pathname === '/', 'Origin must contain only a scheme and host.');
   check(url.protocol === 'https:' || (url.protocol === 'http:' && loopback), 'Remote Studio origins must use HTTPS.');
   return url.origin;
@@ -111,7 +124,7 @@ async function buildImportDefinition(widgetRoot, {catalog, catalogData, layout: 
     check(matches.length === 1, matches.length ? 'Widget root is ambiguous; both supported production layouts are complete.' : 'Widget root does not contain a supported complete production layout.');
     layout = matches[0];
   }
-  check(layout, 'The config names production files that hosted import does not read.');
+  check(layout, 'The config names production files that a Studio import does not read.');
   const [html, css, js, fieldsText] = await Promise.all([safeSource(root, layout.html), safeSource(root, layout.css), safeSource(root, layout.js), safeSource(root, layout.fields)]);
   let fields;
   try {fields = JSON.parse(fieldsText);} catch {fail(`${layout.fields} is not valid JSON.`);}
@@ -133,7 +146,7 @@ async function buildImportDefinition(widgetRoot, {catalog, catalogData, layout: 
   check(new Set([...hostedAssets.map(entry => entry?.path), ...localAssets.map(entry => entry.path)]).size === hostedAssets.length + localAssets.length, 'Asset paths must be unique.');
   const snapshot = {...extra, schemaVersion: 1, name: name ?? extra.name ?? basename(root), widget: {html, css, js, fields, ...widget}, assets: hostedAssets};
   const bytes = Buffer.byteLength(JSON.stringify(snapshot));
-  check(bytes <= JSON_LIMIT, `Snapshot is ${bytes} bytes; the hosted JSON limit is ${JSON_LIMIT}. Use upload reservations for large assets.`);
+  check(bytes <= JSON_LIMIT, `Snapshot is ${bytes} bytes; the Studio JSON limit is ${JSON_LIMIT}. Use upload reservations for large assets.`);
   return {snapshot, localAssets};
 }
 
@@ -150,7 +163,7 @@ function recipeIds(value) {
  */
 export async function configCatalog(configPath, {recipes, engineDist = ENGINE_DIST} = {}) {
   const entry = resolve(engineDist, 'config/hosted-catalog.js');
-  check(await exists(entry), `--config reads the config with the engine of the SE Widget Studio checkout this skill runs from, and ${entry} is missing. Run npm run build:engine in that checkout. A copied skill has no engine: build a JSON catalog by hand as references/hosted-workflow.md describes, and pass --catalog.`);
+  check(await exists(entry), `--config reads the config with the engine of the SE Widget Studio checkout this skill runs from, and ${entry} is missing. Run npm run build:engine in that checkout. A copied skill has no engine: build a JSON catalog by hand as references/studio-workflow.md describes, and pass --catalog.`);
   const {buildFreshness} = await import(pathToFileURL(resolve(engineDist, 'build-info.js')).href);
   for (const warning of (await buildFreshness(engineDist)).warnings) process.stderr.write(`[se-widget-studio] Warning ${warning.code}: ${warning.detail} ${warning.hint}\n`);
   const {hostedCatalogFromConfig} = await import(pathToFileURL(entry).href);
@@ -158,7 +171,7 @@ export async function configCatalog(configPath, {recipes, engineDist = ENGINE_DI
   try {result = await hostedCatalogFromConfig(resolve(configPath), recipes ? {recipes} : {});}
   catch (error) {fail(`${error instanceof Error ? error.message : String(error)}${error?.hint ? ` ${error.hint}` : ''}`);}
   const over = ['themes', 'fixtures', 'scenes', 'scenarios', 'recipes'].filter(kind => result.catalog[kind].length > CATALOG_LIMIT);
-  check(over.length === 0, `A hosted revision holds at most ${CATALOG_LIMIT} of each catalog kind, and this config has ${over.map(kind => `${result.catalog[kind].length} ${kind}`).join(', ')}. Pass --recipes <id,...> to keep only those recipes and the scenes, themes, and fixtures they use.`);
+  check(over.length === 0, `A Studio revision holds at most ${CATALOG_LIMIT} of each catalog kind, and this config has ${over.map(kind => `${result.catalog[kind].length} ${kind}`).join(', ')}. Pass --recipes <id,...> to keep only those recipes and the scenes, themes, and fixtures they use.`);
   // An engine build older than sample-copy detection returns no samples and uploads every widget file, as before.
   for (const sample of result.samples ?? []) {
     const how = sample.identical ? 'a copy of' : 'the original of the recompressed';
@@ -214,7 +227,7 @@ export async function checkSampleMedia(origin, snapshot, {action = 'created', ma
     check(unknown.length === 0, `Unknown sample media reference(s): ${unknown.map(describe).join(', ')}. Valid references: ${local.references.join(', ')}. Nothing was ${action}.`);
   }
   const url = new URL('/api/v1/sample-media', origin);
-  const response = await fetch(url, {redirect: 'manual', signal: AbortSignal.timeout(60_000)});
+  const response = await studioFetch(url, {redirect: 'manual', signal: AbortSignal.timeout(60_000)});
   const bytes = await boundedBody(response, JSON_LIMIT);
   if (response.status === 404) fail(`The Studio at ${origin} does not support sws-sample: references: GET /api/v1/sample-media returned HTTP 404, so this deployment predates built-in sample media. Deploy a Studio version that ships sample-media/ or select one with --origin, and tell the user; do not upload or generate images as a workaround. Nothing was ${action}.`);
   check(response.status === 200, `The Studio at ${origin} could not list its sample media (HTTP ${response.status}). Nothing was ${action}.`);
@@ -244,7 +257,7 @@ async function boundedBody(response, limit) {
 async function api(origin, path, {method = 'GET', token, body, headers = {}} = {}) {
   const url = new URL(path, origin);
   check(url.origin === origin && url.pathname.startsWith('/api/'), 'API request escaped the selected Studio origin.');
-  const response = await fetch(url, {
+  const response = await studioFetch(url, {
     method, redirect: 'manual', signal: AbortSignal.timeout(60_000),
     headers: {...(body === undefined ? {} : {'Content-Type': 'application/json'}), ...(token ? {Authorization: `Bearer ${token}`} : {}), ...headers},
     ...(body === undefined ? {} : {body: JSON.stringify(body)})
@@ -306,7 +319,7 @@ async function importWidget(flags) {
     source = [required(flags, '--widget-root'), {catalog: flags['--catalog'], name: flags['--name']}];
   }
   const {snapshot, localAssets} = await buildImportDefinition(...source);
-  check(localAssets.length <= 128 && localAssets.reduce((total, asset) => total + asset.bytes.length, 0) <= 100 * 1024 * 1024, 'Local asset upload exceeds the hosted revision limits.');
+  check(localAssets.length <= 128 && localAssets.reduce((total, asset) => total + asset.bytes.length, 0) <= 100 * 1024 * 1024, 'Local asset upload exceeds the Studio revision limits.');
   await checkSampleMedia(origin, snapshot);
   const result = await api(origin, '/api/v1/projects', {method: 'POST', body: snapshot, headers: process.env.STUDIO_CREATE_KEY ? {'X-Studio-Key': process.env.STUDIO_CREATE_KEY} : {}});
   const created = expect(result, [201], 'Project creation');
@@ -428,8 +441,8 @@ async function ensureOutputAbsent(path) {
 
 async function downloadArtifact(access, artifact) {
   check(typeof artifact.id === 'string' && /^[a-zA-Z0-9_-]{1,150}$/.test(artifact.id), 'Artifact ID is invalid.');
-  check(Number.isSafeInteger(artifact.bytes) && artifact.bytes > 0 && artifact.bytes <= ARTIFACT_LIMIT && /^[a-f0-9]{64}$/.test(artifact.sha256), 'Artifact metadata is invalid.');
-  let response = await fetch(new URL(`/api/studio/projects/${access.projectId}/artifacts/${artifact.id}`, access.origin), {redirect: 'manual', signal: AbortSignal.timeout(60_000), headers: {Authorization: `Bearer ${access.token}`}});
+  check(Number.isSafeInteger(artifact.bytes) && artifact.bytes > 0 && artifact.bytes <= originLimits(access.origin).artifact && /^[a-f0-9]{64}$/.test(artifact.sha256), 'Artifact metadata is invalid.');
+  let response = await studioFetch(new URL(`/api/studio/projects/${access.projectId}/artifacts/${artifact.id}`, access.origin), {redirect: 'manual', signal: AbortSignal.timeout(60_000), headers: {Authorization: `Bearer ${access.token}`}});
   if (response.status === 307) {
     const destination = new URL(response.headers.get('location') ?? '');
     check(destination.protocol === 'https:' && !destination.username && !destination.password, 'Signed artifact URL must use HTTPS without URL credentials.');
@@ -460,7 +473,8 @@ async function runJob(flags) {
   const created = expect(await api(access.origin, `/api/studio/projects/${access.projectId}/jobs`, {method: 'POST', token: access.token, body: {kind, selection}}), [202], 'Job submission');
   check(ID.test(created.id), 'Job submission returned an invalid ID.');
   let job = created; let lastProgress = '';
-  const deadline = Math.min(Date.now() + JOB_LIMIT_MS, Date.parse(job.createdAt) + JOB_LIMIT_MS);
+  const {jobMs} = originLimits(access.origin);
+  const deadline = Math.min(Date.now() + jobMs, Date.parse(job.createdAt) + jobMs);
   check(Number.isFinite(deadline), 'Job creation time is invalid.');
   while (!['completed', 'failed', 'cancelled'].includes(job.status)) {
     if (job.progress !== lastProgress) {process.stderr.write(`[se-widget-studio] ${job.status}: ${job.progress}\n`); lastProgress = job.progress;}
@@ -492,7 +506,7 @@ async function runJob(flags) {
 }
 
 function help() {
-  console.log(`SE Widget Studio hosted client
+  console.log(`SE Widget Studio client
 
 Usage:
   studio-client.mjs import --widget-root <absolute-dir> [--name <name>] [--catalog <json>] [--origin <url>] [--access-out <private-json>]
@@ -504,7 +518,8 @@ Usage:
   studio-client.mjs push --access <private-json> --draft <json>
   studio-client.mjs run --access <private-json> --kind <test|render> --selection <id|all|scene:id|video:id> --output-dir <new-dir>
 
-The default origin is ${DEFAULT_ORIGIN}. Set SE_WIDGET_STUDIO_URL or pass --origin to select another deployment.
+The default origin is ${DEFAULT_ORIGIN}, the local Studio that \`npm run serve\` starts in the Studio checkout.
+Set SE_WIDGET_STUDIO_URL or pass --origin to select another Studio.
 Creation reads STUDIO_CREATE_KEY from the environment when configured. Capabilities are never printed.
 Open-editor also accepts the access.private.json that scripts/verify-hosted.mjs writes; no other command does.
 Import reads but never modifies production widget files. Pull/push use complete snapshots and optimistic concurrency.

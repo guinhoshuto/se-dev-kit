@@ -2,6 +2,7 @@ import {z} from 'zod';
 import {fieldUpdateSchema, fixtureSchema, jsonObjectSchema, jsonValueSchema, readySchema, recipeSchema, scenarioSchema, sceneSchema, themeSchema} from '../src/config/schemas';
 import type {WidgetSnapshot} from './model';
 import {HttpError} from './errors';
+import {hostedLimits} from './limits';
 
 export const MAX_REQUEST_BYTES = 4_000_000;
 export const ID = /^[a-zA-Z0-9_-]{1,100}$/;
@@ -30,6 +31,7 @@ export function parseSnapshot(input: unknown): WidgetSnapshot {
   if (!parsed.success) throw new HttpError(422, parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '));
   const snapshot = parsed.data as WidgetSnapshot;
   const assert = (okay: boolean, message: string) => { if (!okay) throw new HttpError(422, message); };
+  const hosted = hostedLimits();
   for (const catalog of [snapshot.themes,snapshot.fixtures,snapshot.scenes,snapshot.scenarios,snapshot.recipes]) {
     const ids = new Set<string>();
     for (const item of catalog) { safeId(item.id); assert(!ids.has(item.id), `Duplicate catalog identifier: ${item.id}`); ids.add(item.id); }
@@ -41,7 +43,7 @@ export function parseSnapshot(input: unknown): WidgetSnapshot {
   assert((snapshot.widget.ready?.timeoutMs ?? 10000) <= 30000, 'Ready timeout must not exceed 30 seconds.');
   for (const scene of snapshot.scenes) {
     dimensions(scene.viewport); dimensions(scene.output); dimensions(scene.crop);
-    assert((scene.captureAtMs ?? 0) <= 15000,'Scene capture time must not exceed 15 seconds.');
+    if (hosted) assert((scene.captureAtMs ?? 0) <= 15000,'Scene capture time must not exceed 15 seconds.');
     if (scene.theme) assert(snapshot.themes.some(t => t.id === scene.theme),`Unknown theme: ${scene.theme}`);
     if (scene.fixture) assert(snapshot.fixtures.some(t => t.id === scene.fixture),`Unknown fixture: ${scene.fixture}`);
   }
@@ -58,7 +60,7 @@ export function parseSnapshot(input: unknown): WidgetSnapshot {
     for (const v of matrix?.viewports ?? []) dimensions(v);
     dimensions(recipe.outputs?.thumbnails);
     const video = recipe.outputs?.video;
-    if (video?.enabled) {
+    if (video?.enabled && hosted) {
       assert(video.durationMs <= 15000 && video.fps <= 30,'Video is limited to 15 seconds at 30 fps.');
       assert(count <= 4,'Video recipes are limited to four variants.');
     }

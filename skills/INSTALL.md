@@ -1,6 +1,6 @@
 # Install the bundled skills
 
-This repository contains the complete `se-widget-studio` skill, including its hosted client, operational references, and agent metadata. Install the whole skill directory; `SKILL.md` alone is not enough.
+This repository contains the complete `se-widget-studio` skill, including its Studio client, operational references, and agent metadata. Install the whole skill directory; `SKILL.md` alone is not enough.
 
 Use Node.js `>=22.20 <23` or `>=24 <25`, matching the repository's supported runtime. The installer uses only built-in Node.js modules.
 
@@ -44,7 +44,7 @@ Linked installations stop working if the repository is moved or removed. Use the
 
 ## Verify
 
-The installer runs the installed hosted client with `--help` and removes the installation if it does not print its usage. To check an existing installation, run the client through the installed path; it must print `Usage:`:
+The installer runs the installed Studio client with `--help` and removes the installation if it does not print its usage. To check an existing installation, run the client through the installed path; it must print `Usage:`:
 
 ```bash
 test -f "${CODEX_HOME:-$HOME/.codex}/skills/se-widget-studio/SKILL.md"
@@ -53,4 +53,4 @@ node "${CODEX_HOME:-$HOME/.codex}/skills/se-widget-studio/scripts/studio-client.
 
 A file-existence check is not enough: the client must also run when it is reached through a linked skill directory.
 
-The skill uses the deployed Studio for hosted workflows and the repository package for local workflows. It never embeds consumer widget code in the skill itself.
+The skill uses the local Studio (`npm run serve` in this checkout) by default, and the repository package for CLI workflows. It never embeds consumer widget code in the skill itself.

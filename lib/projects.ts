@@ -6,6 +6,7 @@ import {mutateJson,readJson,writeJson} from './storage';
 import {prepareSnapshot} from './importer';
 import {copyFontLock,prewarmGoogleFonts,staticGoogleFontUrls,type PrewarmOptions} from './fonts';
 import {FONT_CACHE_EPOCH,GOOGLE_FONTS_UA} from '../src/runtime/google-fonts-url';
+import {hostedLimits,jobBudgetMs} from './limits';
 
 /** Injection for tests: the prewarm upstream and memory. Production passes nothing. */
 export interface RevisionOptions {fonts?:Pick<PrewarmOptions,'memory'|'lookup'|'transport'|'now'|'budgetLimits'>}
@@ -42,7 +43,9 @@ export async function projectView(store:ObjectStore,project:ProjectRecord,etag:s
   const {accessHash:_secret,...visible}=project;
   return {project:visible,revision,etag,jobs,revisions:history.filter((r):r is Revision=>r!==null).map(r=>({id:r.id,createdAt:r.createdAt,status:r.status})).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))};
 }
+/** The hosted deployment's daily quotas; a local Studio has none (lib/limits.ts). */
 export async function dailyBudget(store:ObjectStore,kind:'projects'|'jobs'|'uploads',amount=1):Promise<void> {
+  if(!hostedLimits())return;
   const limits={projects:10,jobs:50,uploads:100*1024*1024};
   await mutateJson(store,`usage/${new Date().toISOString().slice(0,10)}.json`,{projects:0,jobs:0,uploads:0},v=>{
     if(v[kind]+amount>limits[kind])throw new HttpError(429,`The personal daily ${kind} limit has been reached.`);
@@ -114,7 +117,7 @@ export async function createJob(store:ObjectStore,id:string,revision:Revision,ki
     const leases=v.leases.filter(l=>l.expires>Date.now()&&!finished.has(l.id));
     if(leases.some(l=>l.projectId===id))throw new HttpError(409,'This project already has an active job.');
     if(leases.length>=2)throw new HttpError(429,'Two jobs are already active. Wait for one to finish.');
-    return {leases:[...leases,{id:job.id,projectId:id,expires:Date.now()+11*60*1000}]};
+    return {leases:[...leases,{id:job.id,projectId:id,expires:Date.now()+jobBudgetMs()+60_000}]};
   });
   try{await dailyBudget(store,'jobs');await writeJson(store,`projects/${id}/jobs/${job.id}.json`,job);}catch(error){await mutateJson(store,'usage/active.json',{leases:[] as Lease[]},v=>({leases:v.leases.filter(l=>l.id!==job.id)}));throw error;}
   return job;

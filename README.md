@@ -30,12 +30,14 @@ npm run dev
 
 Open `http://127.0.0.1:3000` and choose **Open demo project**, or import a [WidgetSnapshot JSON document](docs/API.md#snapshot-format). No Vercel credentials are needed locally. The default storage directory is `.studio-data`; keep it private and backed up if the projects matter.
 
-Both `npm run dev` and `npm start` bind to `127.0.0.1`. To run the production build locally:
+Both `npm run dev` and `npm start` bind to `127.0.0.1`. The Studio that agents use by default is the production build on port 4310, which the `se-widget-studio` skill's client targets:
 
 ```sh
 npm run build
-npm start
+npm run serve    # http://127.0.0.1:4310
 ```
+
+Outside Vercel the Studio drops the hosted deployment's quotas (daily budgets, ten-minute jobs, 15-second videos, four video variants, 900 frames per job); a job instead waits for the machine-wide render slot and keeps the render disk guard (`lib/limits.ts`). The hosted deployment is paused since 2026-10-01.
 
 The repository uses `playwright-core`. Normal startup, tests, and rendering never download Chromium, FFmpeg, codecs, or fonts. Install or select these tools deliberately; `SE_WIDGET_STUDIO_BROWSER`, `STUDIO_FFMPEG_PATH`, and `STUDIO_FFPROBE_PATH` can point to existing local executables.
 

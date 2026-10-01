@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {promisify} from 'node:util';
 import {createHash} from 'node:crypto';
-import {buildSnapshot, configCatalog, fontIssues, main, normalizeOrigin} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
+import {buildSnapshot, configCatalog, DEFAULT_ORIGIN, fontIssues, main, normalizeOrigin, originLimits, studioFetch} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
 
 const exec = promisify(execFile);
 const script = resolve('skills/se-widget-studio/scripts/studio-client.mjs');
@@ -475,4 +475,21 @@ test('hosted skill client runs when invoked through a linked skill directory', a
     const {stdout} = await exec(process.execPath, [join(linked, 'scripts/studio-client.mjs'), '--help']);
     assert.match(stdout, /^Usage:/m);
   } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test('the client defaults to the local Studio and names it when nothing listens there', async () => {
+  assert.equal(DEFAULT_ORIGIN, 'http://127.0.0.1:4310');
+  const {stdout} = await exec(process.execPath, [script, '--help']);
+  assert.match(stdout, /default origin is http:\/\/127\.0\.0\.1:4310, the local Studio that `npm run serve` starts/);
+  // A port that was just free: nothing listens there.
+  const server = createServer();
+  await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const {port} = server.address() as {port: number};
+  await new Promise(done => server.close(done));
+  await assert.rejects(studioFetch(`http://127.0.0.1:${port}/api/v1/version`), new RegExp(`No Studio is running at http://127\\.0\\.0\\.1:${port}\\. Start the local Studio in the Studio checkout with \`npm run serve\``));
+});
+
+test('the client waits for a local job and accepts its artifacts within the local limits', () => {
+  assert.deepEqual(originLimits('http://127.0.0.1:4310'), {jobMs: 125 * 60_000, artifact: 512 * 1024 * 1024});
+  assert.deepEqual(originLimits('https://se-dev-kit.vercel.app'), {jobMs: 10 * 60_000, artifact: 100 * 1024 * 1024});
 });
