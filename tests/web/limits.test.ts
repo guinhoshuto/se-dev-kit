@@ -5,7 +5,9 @@ import {mkdir, readFile, stat, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {hostedLimits, jobBudgetMs} from '../../lib/limits';
 import {localWorkerEnvironment, remainingJobTime} from '../../lib/jobs';
-import {dailyBudget} from '../../lib/projects';
+import {createProject, dailyBudget} from '../../lib/projects';
+import {POST as preview} from '../../app/api/studio/projects/[id]/preview/route';
+import {randomBytes} from 'node:crypto';
 import {parseSnapshot} from '../../lib/schema';
 import {LocalStore} from '../../lib/storage';
 import {temporaryDirectory} from './temporary';
@@ -124,4 +126,30 @@ test('a hosted job does not take the render slot', async () => {
   assert.equal(await job.exited, 0);
   assert.match((await job.result()).error ?? '', /Unknown job kind/);
   assert.doesNotMatch(job.stderr(), /render slot/);
+});
+
+// A Vercel Function answers at most about 4.5 MB; the local Studio has no such cap (SDK-34, the se-windows preview).
+test('the preview response is capped at 4 MB on Vercel and at 10 MB in a local Studio', async () => {
+  const directory = await temporaryDirectory('sws-limits-preview-');
+  const keys = ['STUDIO_STORAGE', 'STUDIO_DATA_DIR', 'STUDIO_CREATE_KEY'] as const;
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  process.env.STUDIO_STORAGE = 'local';
+  process.env.STUDIO_DATA_DIR = directory;
+  delete process.env.STUDIO_CREATE_KEY;
+  try {
+    // 3,000,000 bytes stay inside the 3 MiB asset budget; with 300 KB of source the page passes 4 MiB too.
+    const media = randomBytes(3_000_000).toString('base64');
+    const {project, token} = await as('local', () => createProject(new LocalStore(directory), {...input, widget: {...input.widget, js: `/*${'x'.repeat(300_000)}*/`}, assets: [{path: 'media/blob.bin', content: media, encoding: 'base64', contentType: 'application/octet-stream'}]}));
+    const call = () => preview(new Request(`http://127.0.0.1:4310/api/studio/projects/${project.id}/preview`, {method: 'POST', headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'}, body: '{}'}), {params: Promise.resolve({id: project.id})});
+    const local = await as('local', call);
+    assert.equal(local.status, 200, await local.clone().text());
+    const body = await local.text();
+    assert.ok(Buffer.byteLength(body) > 4_000_000 && Buffer.byteLength(body) < 10_000_000, String(Buffer.byteLength(body)));
+    const hosted = await as('hosted', call);
+    // The preview document check (422) or the route's response check (413) refuses it first, both at 4 MB.
+    assert.ok([413, 422].includes(hosted.status), String(hosted.status));
+    assert.match(await hosted.text(), /exceeds (the )?4 MB/);
+  } finally {
+    for (const key of keys) saved[key] === undefined ? delete process.env[key] : process.env[key] = saved[key];
+  }
 });

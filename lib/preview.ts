@@ -9,6 +9,7 @@ import {claimsSampleMediaScheme, collectSampleMediaReferences} from '../src/stud
 import {deployedSampleMedia, sampleMediaDataUrl, type SampleMediaSource} from './sample-media';
 import {htmlRefusals, missingPlaceholderWarning, substitutePlaceholders, substitutedHtmlError, hasPlaceholder} from '../src/config/placeholders';
 import {canonicalGoogleFontsUrl, isGoogleFontsHost} from '../src/runtime/google-fonts-url';
+import {previewResponseBytes} from './limits';
 
 /**
  * Resolves a Google Fonts URL on the server for the preview (`cssForPreview` bound to the real
@@ -221,6 +222,6 @@ export async function previewDocument(prepared: PreparedSnapshot, store: ObjectS
   const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
   const head = `<meta http-equiv="Content-Security-Policy" content="${escape(csp)}"><meta name="referrer" content="no-referrer"><link rel="stylesheet" href="${escape(cssUrl)}">`;
   const page = serialize(document).replace(/<head>/, `<head>${head}`).replace('</body>', `<script type="module" nonce="${options.nonce}">${bootstrap}</script></body>`);
-  if (Buffer.byteLength(page) > 4 * 1024 * 1024) throw new Error('Interactive preview document exceeds the 4 MB response limit. Reduce embedded assets or source size.');
+  if (Buffer.byteLength(page) > previewResponseBytes()) throw new Error(`Interactive preview document exceeds the ${previewResponseBytes() / 1_000_000} MB response limit. Reduce embedded assets or source size.`);
   return {html: page, warnings};
 }

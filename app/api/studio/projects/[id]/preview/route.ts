@@ -8,6 +8,7 @@ import {previewDocument,previewState,previewBackground,type PreviewFontSource} f
 import {cssForPreview} from '@/lib/fonts';
 import {FONT_CACHE_EPOCH,GOOGLE_FONTS_UA} from '@/src/runtime/google-fonts-url';
 import {HttpError} from '@/lib/errors';
+import {previewResponseBytes} from '@/lib/limits';
 import {z} from 'zod';
 import {jsonObjectSchema} from '@/src/config/schemas';
 import type {JsonObject} from '@/src/types';
@@ -44,7 +45,8 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
     const state=previewState(prepared.snapshot,options);const {html,warnings}=await previewDocument(prepared,target,{...options,fonts});
     const backgroundImage=await previewBackground(prepared,target,options);
     const response={html,state,backgroundImage,warnings,sessionId:options.sessionId,nonce:options.nonce,...(fontRevisionId?{fontRevisionId}:{})};
-    if(Buffer.byteLength(JSON.stringify(response))>4_000_000)throw new HttpError(413,'Preview response exceeds 4 MB. Reduce source, preview assets, the sample media this scene uses, or the background image; server-side jobs are not limited by it.');
+    const limit=previewResponseBytes();
+    if(Buffer.byteLength(JSON.stringify(response))>limit)throw new HttpError(413,`Preview response exceeds ${limit/1_000_000} MB. Reduce source, preview assets, the sample media this scene uses, or the background image; server-side jobs are not limited by it.`);
     return json(response);
   }catch(error){if(error instanceof HttpError)throw error;throw new HttpError(422,error instanceof Error?error.message:'Preview preparation failed.');}
 });}

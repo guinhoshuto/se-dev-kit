@@ -129,7 +129,7 @@ A local job has no daily quota and no video length, frame-rate, or variant cap b
 
 These hold in the local Studio and in the hosted deployment:
 
-- Complete JSON request/preview response: 4 MB.
+- Complete JSON request: 4 MB. Preview response: 10 MB in the local Studio, 4 MB in the hosted deployment (a Vercel Function's cap); base64 makes embedded uploads and samples about a third larger, so 3 MiB of them need the local Studio.
 - A revision holds at most 48 themes, fixtures, scenes, scenarios, and recipes each, and at most 128 asset files and 100 MB of assets, 10 MB per file (4 MB per upload in the local Studio).
 - A render recipe has at most 48 variants.
 - Interactive editor preview: captured assets and the `sws-sample:` images the previewed scene uses share one 3 MiB budget. The preview response carries them as base64 together with the stage background image and must stay under 4,000,000 bytes, so plan for well under 3 MB of raw media in total, background included; an image the widget HTML or CSS references directly is embedded more than once. When a revision is too large to preview, preview a smaller revision; render jobs keep the 100 MB revision budget. Sample media never count toward the 128-file or 100 MB revision budget.

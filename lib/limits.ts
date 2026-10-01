@@ -13,6 +13,10 @@ export const LOCAL_JOB_MS = 120 * 60_000;
 export function jobBudgetMs(): number {
   return hostedLimits() ? HOSTED_JOB_MS : LOCAL_JOB_MS;
 }
+/** The preview response cap: a Vercel Function answers at most about 4.5 MB; a local Studio has no such cap, and 10 MB bounds memory. */
+export function previewResponseBytes(): number {
+  return hostedLimits() ? 4_000_000 : 10_000_000;
+}
 /** Artifact size limits: the hosted ones fit Blob and the Sandbox; the local ones bound memory, since publishing reads each file whole. */
 export function artifactLimits(): {file: number; job: number} {
   return hostedLimits() ? {file: 100 * 1024 * 1024, job: 250 * 1024 * 1024} : {file: 512 * 1024 * 1024, job: 1024 * 1024 * 1024};
