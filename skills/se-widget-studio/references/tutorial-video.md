@@ -2,7 +2,7 @@
 
 A tutorial video shows a buyer how to set up the widget. The widget runs inside a replica of the StreamElements overlay editor: the top toolbar, the Layers/Settings sidebar built from the widget's FIELDS, the overlay canvas, and the bottom bar with **Emulate**. A scripted cursor clicks through it, an optional chat panel sends messages to the widget, and the Emulate menu dispatches alert events.
 
-The replica was measured from the live editor on 2026-09-25 and can drift from later editor changes. It is a Studio simulation, and nothing reaches StreamElements: report it as such, never as a recording of StreamElements.
+The replica was measured from the live editor on 2026-09-25 and can drift from later editor changes. Its reference measurements and the read-only script that measures the editor again are in the Studio repository's `docs/tutorial-reference/`; measure on a test overlay only, never one that is sold or on stream. It is a Studio simulation, and nothing reaches StreamElements: report it as such, never as a recording of StreamElements.
 
 ## Recipe
 
