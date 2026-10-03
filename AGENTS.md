@@ -2,7 +2,7 @@
 
 This repository contains SE Widget Studio Web and its shared StreamElements simulation engine. The Next.js app lives at the repository root. It is a personal application that runs locally by default (`npm run serve`, loopback only, local storage and jobs); its hosted deployment, using Vercel Blob, Workflows, and Sandbox, is paused since 2026-10-01. There is no external database.
 
-- Use English for UI text, CLI help, field names, errors, tests, and documentation.
+- Use English for UI text, CLI help, field names, errors, tests, and documentation. Talk to the owner in Portuguese, including after reading English code, docs, or reports.
 - Preserve strict TypeScript and ESM.
 - Use React and Next.js for the application; consumer widgets remain plain HTML/CSS/JS/FIELDS.
 - Never copy or rewrite consumer production widget files.
