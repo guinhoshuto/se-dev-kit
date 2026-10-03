@@ -182,7 +182,7 @@ export function sampleMediaNotFound(reference: string, retiredOn?: string): Stud
   return new StudioError(
     "SAMPLE_MEDIA_NOT_FOUND",
     unknownSampleMediaText(reference, retiredOn),
-    "Use a reference listed in sample-media/manifest.json, for example sws-sample:gallery/streamer-2.jpg."
+    "Use a reference listed in sample-media/manifest.json, for example sws-sample:gallery/streamer-2-blur.jpg."
   );
 }
 
