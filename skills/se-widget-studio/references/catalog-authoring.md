@@ -64,7 +64,7 @@ The people in the streamer photos are synthetic. A streamer photo as a 16:9 `bac
       "schemaVersion": 1,
       "id": "gallery-on-blueprint",
       "name": "Gallery on blueprint",
-      "fieldData": {"galleryImages": ["sws-sample:gallery/streamer-1-blur.jpg", "sws-sample:gallery/streamer-2.jpg", "sws-sample:backdrops/cute.jpg"]},
+      "fieldData": {"galleryImages": ["sws-sample:gallery/streamer-1-blur.jpg", "sws-sample:gallery/streamer-2-blur.jpg", "sws-sample:backdrops/cute.jpg"]},
       "background": {"id": "blueprint", "image": "sws-sample:backdrops/blueprint.jpg", "color": "#0d4474"}
     }
   ],

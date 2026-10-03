@@ -10,7 +10,7 @@ Use the whole JSON string `sws-sample:<file>` where a catalog accepts media:
 - `scene.background.image` and `recipe.matrix.backgrounds[].image`.
 
 ```json
-{"fieldData": {"image": "sws-sample:gallery/streamer-1-blur.jpg", "gallery": ["sws-sample:gallery/streamer-2.jpg", "sws-sample:backdrops/cute.jpg"]}}
+{"fieldData": {"image": "sws-sample:gallery/streamer-1-blur.jpg", "gallery": ["sws-sample:gallery/streamer-2-blur.jpg", "sws-sample:backdrops/cute.jpg"]}}
 {"background": {"id": "plants", "image": "sws-sample:backdrops/plants.jpg", "color": "#e7dcce"}}
 ```
 
