@@ -40,8 +40,9 @@ Never generate, download, draw, or upload images just to test a widget. The Stud
 
 | Gallery reference (1672x941, landscape) | Shows |
 |---|---|
-| `sws-sample:gallery/streamer-1.jpg` | Webcam shot of a smiling streamer with brown hair, headphones, and a mic in a pink-lit bedroom |
 | `sws-sample:gallery/streamer-2.jpg` | Webcam shot of a smiling streamer with black bangs, headphones, and a mic in a dim purple-lit room |
+| `sws-sample:gallery/streamer-1-blur.jpg` | Heavily blurred webcam shot of a streamer with dark brown hair and a cream sweater in a mauve room with pink and violet lights |
+| `sws-sample:gallery/streamer-2-blur.jpg` | Heavily blurred `streamer-2`: black hair and top in a dark purple room with a pink and blue light |
 
 | Backdrop reference (1254x1254, drawn with cover) | Tone | Pair with `color` | Shows |
 |---|---|---|---|
@@ -53,17 +54,17 @@ Never generate, download, draw, or upload images just to test a widget. The Stud
 | `sws-sample:backdrops/plants.jpg` | light | `#e7dcce` | Watercolor eucalyptus sprigs and blush blotches in the corners of cream paper |
 | `sws-sample:backdrops/plants-2.jpg` | light | `#cbb09d` | Risograph red, blue, and yellow leaves and halftone dots around a cream center |
 
-The people in the streamer photos are synthetic. A streamer photo as a 16:9 `background` shows the widget on a stream; the backdrops leave their center open for the widget. Either kind works in an image field or as a background. Pick a backdrop by contrast: a light or white-text widget on a `dark` one (`blueprint`, or `streamer-2` at 16:9), a dark-text widget, or one with white cards, on a `light` one. Backdrops are 1254 px square, so a larger stage scales them up (a 2000x2000 still by 1.6x) and softens them. A retired reference fails `validate`, import, and push with the date it was retired; replace it with one from these tables. Alt text and exact metadata are in `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json` from a checkout or linked skill) and in `GET /api/v1/sample-media` on a deployment that supports samples.
+The people in the streamer photos are synthetic. A streamer photo as a 16:9 `background` shows the widget on a stream, and a blurred one keeps the photo from competing with the widget; the backdrops leave their center open for the widget. Either kind works in an image field or as a background. Pick a backdrop by contrast: a light or white-text widget on a `dark` one (`blueprint`, or `streamer-2` or `streamer-2-blur` at 16:9), a dark-text widget, or one with white cards, on a `light` one. Backdrops are 1254 px square, so a larger stage scales them up (a 2000x2000 still by 1.6x) and softens them. A retired reference fails `validate`, import, and push with the date it was retired; replace it with one from these tables. Alt text and exact metadata are in `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json` from a checkout or linked skill) and in `GET /api/v1/sample-media` on a deployment that supports samples.
 
 ```json
 {
-  "themes": [{"schemaVersion": 1, "id": "photo", "name": "Photo", "fieldData": {"image": "sws-sample:gallery/streamer-1.jpg"}}],
+  "themes": [{"schemaVersion": 1, "id": "photo", "name": "Photo", "fieldData": {"image": "sws-sample:gallery/streamer-1-blur.jpg"}}],
   "scenes": [
     {
       "schemaVersion": 1,
       "id": "gallery-on-blueprint",
       "name": "Gallery on blueprint",
-      "fieldData": {"galleryImages": ["sws-sample:gallery/streamer-1.jpg", "sws-sample:gallery/streamer-2.jpg", "sws-sample:backdrops/cute.jpg"]},
+      "fieldData": {"galleryImages": ["sws-sample:gallery/streamer-1-blur.jpg", "sws-sample:gallery/streamer-2.jpg", "sws-sample:backdrops/cute.jpg"]},
       "background": {"id": "blueprint", "image": "sws-sample:backdrops/blueprint.jpg", "color": "#0d4474"}
     }
   ],

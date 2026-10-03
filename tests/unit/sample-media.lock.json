@@ -21,5 +21,7 @@
   "sws-sample:backdrops/cute-2.jpg": "6cc6cc8bc79fdd4cc3754406318bcc2899e65102ad583575176a3e913d7095b7",
   "sws-sample:backdrops/patterns.jpg": "8806094b5624e3185e34949a40cd9fc21bc4ca34e0344b23d1004680fc8dfd8c",
   "sws-sample:backdrops/plants.jpg": "c438dc44beee915b78d2e60328ae01f8105699e59ea30e60bb71c9bfa34c112d",
-  "sws-sample:backdrops/plants-2.jpg": "eb0e9f5b419eccda3b222c7b260eb5c39dd89883f4e12f3df61c3179c0b109d0"
+  "sws-sample:backdrops/plants-2.jpg": "eb0e9f5b419eccda3b222c7b260eb5c39dd89883f4e12f3df61c3179c0b109d0",
+  "sws-sample:gallery/streamer-1-blur.jpg": "99d4058ce88611664583b2fdc583909791dda1b8386012057d4179ecac193bc6",
+  "sws-sample:gallery/streamer-2-blur.jpg": "e4f9ebf2d90abee82a8294410ee741ad2742367b90f3d04ec50825110461a962"
 }

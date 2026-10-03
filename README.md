@@ -66,7 +66,7 @@ The [API reference](docs/API.md) includes runnable import examples, schemas, upl
 
 ## Sample media
 
-[`sample-media/`](sample-media/README.md) holds 2 gallery images (webcam-style streamer photos, 1672x941) and 7 stage backdrops (1254x1254), all AI-generated. Reference one in catalog data as the whole string `sws-sample:<file>`, for example `"image": "sws-sample:gallery/streamer-1.jpg"`, an array for `multiple` image fields, or `"background": {"id": "plants", "image": "sws-sample:backdrops/plants.jpg"}`. The local CLI, the hosted preview, and hosted jobs resolve the same verified files; nothing is copied into the widget. Empty image fields stay empty unless you choose a sample or press **Fill empty image fields** in an editor, because StreamElements shows them empty too. The list of references, alt text, and backdrop tones is in [`sample-media/manifest.json`](sample-media/manifest.json).
+[`sample-media/`](sample-media/README.md) holds 3 gallery images (webcam-style streamer photos, two of them blurred, 1672x941) and 7 stage backdrops (1254x1254), all AI-generated. Reference one in catalog data as the whole string `sws-sample:<file>`, for example `"image": "sws-sample:gallery/streamer-1-blur.jpg"`, an array for `multiple` image fields, or `"background": {"id": "plants", "image": "sws-sample:backdrops/plants.jpg"}`. The local CLI, the hosted preview, and hosted jobs resolve the same verified files; nothing is copied into the widget. Empty image fields stay empty unless you choose a sample or press **Fill empty image fields** in an editor, because StreamElements shows them empty too. The list of references, alt text, and backdrop tones is in [`sample-media/manifest.json`](sample-media/manifest.json).
 
 ## Safety and scope
 

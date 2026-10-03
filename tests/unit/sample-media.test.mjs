@@ -64,8 +64,8 @@ async function filesUnder(directory) {
 
 test("the sample media manifest matches its files, dimensions, and provenance", async () => {
   const items = manifest.items;
-  assert.equal(items.length, 9);
-  assert.equal(items.filter((item) => item.kind === "gallery").length, 2);
+  assert.equal(items.length, 10);
+  assert.equal(items.filter((item) => item.kind === "gallery").length, 3);
   assert.equal(items.filter((item) => item.kind === "backdrop").length, 7);
   assert.equal(new Set(items.map((item) => item.id)).size, items.length);
   for (const item of items) {
@@ -87,7 +87,7 @@ test("the sample media manifest matches its files, dimensions, and provenance", 
 test("published sample references are append-only against the frozen lock", () => {
   const current = new Map(manifest.items.map((item) => [item.reference, item.sha256]));
   const retired = new Set(manifest.retired.map((item) => item.reference));
-  assert.equal(retired.size, 14);
+  assert.equal(retired.size, 15);
   for (const [reference, sha256] of Object.entries(lock)) {
     if (retired.has(reference)) assert.equal(current.has(reference), false, `${reference} is retired and must never return`);
     else assert.equal(current.get(reference), sha256, `${reference} was removed or changed bytes; add a new file instead`);
@@ -97,7 +97,7 @@ test("published sample references are append-only against the frozen lock", () =
 });
 
 test("the reference grammar accepts only whole, normalized sample file references", () => {
-  assert.equal(isSampleMediaReference("sws-sample:gallery/streamer-1.jpg"), true);
+  assert.equal(isSampleMediaReference("sws-sample:gallery/streamer-1-blur.jpg"), true);
   assert.equal(isSampleMediaReference("sws-sample:backdrops/cute-2.jpg"), true);
   for (const value of [
     "sws-sample:../package.json",
@@ -134,20 +134,20 @@ test("the skill documents every published sample reference and never a retired o
 
 test("sample references are collected from strings, arrays, and nested objects without duplicates", () => {
   const value = {
-    image: "sws-sample:gallery/streamer-1.jpg",
-    gallery: ["sws-sample:gallery/streamer-2.jpg", "sws-sample:gallery/streamer-1.jpg", "assets/local.png"],
+    image: "sws-sample:gallery/streamer-1-blur.jpg",
+    gallery: ["sws-sample:gallery/streamer-2.jpg", "sws-sample:gallery/streamer-1-blur.jpg", "assets/local.png"],
     nested: {events: [{data: {avatar: "sws-sample:backdrops/cute.jpg", text: "mentions sws-sample:gallery/x.jpg"}}]},
     date: new Date(0)
   };
   assert.deepEqual(collectSampleMediaReferences(value), [
-    "sws-sample:gallery/streamer-1.jpg",
+    "sws-sample:gallery/streamer-1-blur.jpg",
     "sws-sample:gallery/streamer-2.jpg",
     "sws-sample:backdrops/cute.jpg"
   ]);
 });
 
 test("filling empty image fields is explicit, deterministic, and returns only the patch", () => {
-  // Eight references exercise the rotation; the shipped gallery has two (checked at the end).
+  // Eight references exercise the rotation; the shipped gallery has three (checked at the end).
   const gallery = Array.from({length: 8}, (_value, index) => `sws-sample:gallery/image-${index}.jpg`);
   const fields = [
     {id: "missing", type: "image-input", definition: {}},
@@ -170,18 +170,18 @@ test("filling empty image fields is explicit, deterministic, and returns only th
   assert.deepEqual(fillEmptyImageFields(fields, values, []), {});
 
   const shipped = manifest.items.filter((item) => item.kind === "gallery").map((item) => item.reference);
-  assert.deepEqual(fillEmptyImageFields(fields.slice(0, 4), {}, shipped), {missing: shipped[0], empty: shipped[1], set: shipped[0], list: [shipped[1], shipped[0]]});
+  assert.deepEqual(fillEmptyImageFields(fields.slice(0, 4), {}, shipped), {missing: shipped[0], empty: shipped[1], set: shipped[2], list: [shipped[0], shipped[1], shipped[2]]});
 });
 
 test("media controls keep arrays and resolve sample URLs only through the served catalog", () => {
-  assert.deepEqual(parseMediaArrayText('["a.png", "sws-sample:gallery/streamer-1.jpg"]'), ["a.png", "sws-sample:gallery/streamer-1.jpg"]);
+  assert.deepEqual(parseMediaArrayText('["a.png", "sws-sample:gallery/streamer-1-blur.jpg"]'), ["a.png", "sws-sample:gallery/streamer-1-blur.jpg"]);
   assert.deepEqual(parseMediaArrayText(""), []);
   assert.equal(parseMediaArrayText('"a.png"'), undefined);
   assert.equal(parseMediaArrayText("[broken"), undefined);
-  assert.deepEqual(applySampleChoice(["a.png"], "sws-sample:gallery/streamer-1.jpg", true), ["a.png", "sws-sample:gallery/streamer-1.jpg"]);
-  assert.deepEqual(applySampleChoice(["sws-sample:gallery/streamer-1.jpg"], "sws-sample:gallery/streamer-1.jpg", true), ["sws-sample:gallery/streamer-1.jpg"]);
-  assert.deepEqual(applySampleChoice("", "sws-sample:gallery/streamer-1.jpg", true), ["sws-sample:gallery/streamer-1.jpg"]);
-  assert.equal(applySampleChoice(["x"], "sws-sample:gallery/streamer-1.jpg", false), "sws-sample:gallery/streamer-1.jpg");
+  assert.deepEqual(applySampleChoice(["a.png"], "sws-sample:gallery/streamer-1-blur.jpg", true), ["a.png", "sws-sample:gallery/streamer-1-blur.jpg"]);
+  assert.deepEqual(applySampleChoice(["sws-sample:gallery/streamer-1-blur.jpg"], "sws-sample:gallery/streamer-1-blur.jpg", true), ["sws-sample:gallery/streamer-1-blur.jpg"]);
+  assert.deepEqual(applySampleChoice("", "sws-sample:gallery/streamer-1-blur.jpg", true), ["sws-sample:gallery/streamer-1-blur.jpg"]);
+  assert.equal(applySampleChoice(["x"], "sws-sample:gallery/streamer-1-blur.jpg", false), "sws-sample:gallery/streamer-1-blur.jpg");
 
   const samples = [{reference: "sws-sample:backdrops/blueprint.jpg", kind: "backdrop", label: "Blueprint", alt: "", width: 1254, height: 1254, url: "http://127.0.0.1:9/__sws/sample/backdrops/blueprint.jpg"}];
   assert.equal(browserAssetUrl("sws-sample:backdrops/blueprint.jpg", "http://127.0.0.1:9", samples), samples[0].url);
@@ -193,8 +193,8 @@ test("media controls keep arrays and resolve sample URLs only through the served
   assert.deepEqual(parseBackgroundSelectValue("sample:sws-sample:backdrops/blueprint.jpg", samples), {mode: "image", image: "sws-sample:backdrops/blueprint.jpg"});
   assert.equal(parseBackgroundSelectValue("sample:sws-sample:backdrops/unknown.jpg", samples), undefined);
   assert.deepEqual(parseBackgroundSelectValue("white", samples), {mode: "white"});
-  assert.equal(sampleMediaDisplayText("sws-sample:gallery/streamer-1.jpg"), "streamer-1.jpg");
-  assert.equal(sampleMediaDisplayText('["sws-sample:gallery/streamer-1.jpg","a.png"]'), "streamer-1.jpg, a.png");
+  assert.equal(sampleMediaDisplayText("sws-sample:gallery/streamer-1-blur.jpg"), "streamer-1-blur.jpg");
+  assert.equal(sampleMediaDisplayText('["sws-sample:gallery/streamer-1-blur.jpg","a.png"]'), "streamer-1-blur.jpg, a.png");
   assert.equal(sampleMediaDisplayText("assets/logo.png"), "assets/logo.png");
 });
 
@@ -203,7 +203,7 @@ test("frame asset mapping rewrites only plain data and never prototype keys", ()
   const date = new Date(0);
   const map = new Map([["a", 1]]);
   const input = {
-    image: "sws-sample:gallery/streamer-1.jpg",
+    image: "sws-sample:gallery/streamer-1-blur.jpg",
     list: ["sws-sample:gallery/streamer-2.jpg", "keep"],
     date,
     map,
@@ -212,7 +212,7 @@ test("frame asset mapping rewrites only plain data and never prototype keys", ()
     untouched: {a: ["plain"]}
   };
   const output = mapRuntimeAssets(input, {"assets/a.png": "data:image/png;base64,AA=="}, base);
-  assert.equal(output.image, `${base}gallery/streamer-1.jpg`);
+  assert.equal(output.image, `${base}gallery/streamer-1-blur.jpg`);
   assert.deepEqual(output.list, [`${base}gallery/streamer-2.jpg`, "keep"]);
   assert.equal(output.date, date);
   assert.equal(output.map, map);
@@ -221,13 +221,13 @@ test("frame asset mapping rewrites only plain data and never prototype keys", ()
   assert.equal(output.untouched, input.untouched);
   assert.equal(mapRuntimeAssets(input.untouched, undefined, base), input.untouched);
   assert.equal(mapRuntimeAssets("constructor", {}), "constructor");
-  assert.equal(mapRuntimeAssets("sws-sample:gallery/streamer-1.jpg", undefined, undefined), "sws-sample:gallery/streamer-1.jpg");
-  assert.equal(mapRuntimeAssets("sws-sample:gallery/streamer-1.jpg", {"sws-sample:gallery/streamer-1.jpg": "data:x"}, base), "data:x");
+  assert.equal(mapRuntimeAssets("sws-sample:gallery/streamer-1-blur.jpg", undefined, undefined), "sws-sample:gallery/streamer-1-blur.jpg");
+  assert.equal(mapRuntimeAssets("sws-sample:gallery/streamer-1-blur.jpg", {"sws-sample:gallery/streamer-1-blur.jpg": "data:x"}, base), "data:x");
 });
 
 test("the catalog loader verifies bytes, rejects tampering, and checks revision pins", async (t) => {
   const catalog = await loadSampleMediaCatalog(mediaRoot);
-  assert.equal(catalog.items.length, 9);
+  assert.equal(catalog.items.length, 10);
   assert.equal(catalog.body("sws-sample:backdrops/cute.jpg").byteLength, 47_742);
   assert.deepEqual(await sampleMediaHashes({a: ["sws-sample:backdrops/cute.jpg"]}, mediaRoot), {
     "sws-sample:backdrops/cute.jpg": lock["sws-sample:backdrops/cute.jpg"]
@@ -302,7 +302,7 @@ test("validate reports unknown sample references and accepts known ones", async 
     schemaVersion: 1,
     id: "sample",
     name: "Sample",
-    fieldData: {image: "sws-sample:gallery/streamer-1.jpg", gallery: ["sws-sample:gallery/streamer-2.jpg"]},
+    fieldData: {image: "sws-sample:gallery/streamer-1-blur.jpg", gallery: ["sws-sample:gallery/streamer-2.jpg"]},
     background: {id: "blueprint", image: "sws-sample:backdrops/blueprint.jpg"}
   });
   const knownDiagnostics = await validateProject(known);
@@ -343,7 +343,7 @@ test("a JPEG sample backdrop satisfies marketplace opacity without a paired colo
 test("the tutorial editor replica shows sample file names, never the internal scheme", () => {
   const fields = [{id: "image", label: "Image", type: "image-input", value: "", group: "Media", options: [], definition: {}, editable: true}];
   const timeline = compileTutorial({
-    tutorial: {steps: [{action: "setField", field: "image", value: "sws-sample:gallery/streamer-1.jpg"}]},
+    tutorial: {steps: [{action: "setField", field: "image", value: "sws-sample:gallery/streamer-1-blur.jpg"}]},
     fields,
     fieldData: {image: "sws-sample:gallery/streamer-2.jpg"},
     channel: "synthetic"
@@ -351,8 +351,8 @@ test("the tutorial editor replica shows sample file names, never the internal sc
   assert.equal(timeline.initialValues.image, "streamer-2.jpg");
   const shown = JSON.stringify(timeline.patches);
   assert.equal(shown.includes("sws-sample:"), false);
-  assert.ok(shown.includes("streamer-1.jpg"));
-  assert.ok(timeline.widget.some((action) => action.fieldData?.image === "sws-sample:gallery/streamer-1.jpg"));
+  assert.ok(shown.includes("streamer-1-blur.jpg"));
+  assert.ok(timeline.widget.some((action) => action.fieldData?.image === "sws-sample:gallery/streamer-1-blur.jpg"));
 });
 
 test("render provenance hashes the sample bytes used by catalogs and leaves sample-free digests alone", async (t) => {

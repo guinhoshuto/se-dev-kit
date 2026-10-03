@@ -44,7 +44,7 @@ async function widget(t, extra = {}) {
     "studio/themes/aurora.json": JSON.stringify({schemaVersion: 1, id: "aurora", name: "Aurora", fieldData: {accent: "#66ffcc"}}),
     "studio/scenes/gallery.json": JSON.stringify({
       schemaVersion: 1, id: "gallery", name: "Gallery", theme: "01-signal",
-      fieldData: {gallery: ["/__sws/widget/studio/media/a.png", "studio/media/b%20c.png", "sws-sample:gallery/streamer-1.jpg"], image: "/__sws/widget/studio/media/b%20c.png"},
+      fieldData: {gallery: ["/__sws/widget/studio/media/a.png", "studio/media/b%20c.png", "sws-sample:gallery/streamer-1-blur.jpg"], image: "/__sws/widget/studio/media/b%20c.png"},
       background: {id: "backdrop", image: "/__sws/widget/studio/media/a.png"}
     }),
     "studio/scenes/empty.json": JSON.stringify({schemaVersion: 1, id: "empty", name: "Empty", theme: "aurora", fieldData: {gallery: []}}),
@@ -77,7 +77,7 @@ test("a local config flattens into the catalog a hosted import takes, with widge
   assert.deepEqual(ids(catalog.recipes), ["clip", "stills"]);
 
   const gallery = catalog.scenes.find((scene) => scene.id === "gallery");
-  assert.deepEqual(gallery.fieldData, {gallery: ["studio/media/a.png", "studio/media/b%20c.png", "sws-sample:gallery/streamer-1.jpg"], image: "studio/media/b c.png"}, "only whole /__sws/widget/ values change, and they are decoded");
+  assert.deepEqual(gallery.fieldData, {gallery: ["studio/media/a.png", "studio/media/b%20c.png", "sws-sample:gallery/streamer-1-blur.jpg"], image: "studio/media/b c.png"}, "only whole /__sws/widget/ values change, and they are decoded");
   assert.equal(gallery.background.image, "studio/media/a.png");
   const clip = catalog.recipes.find((recipe) => recipe.id === "clip");
   assert.deepEqual(clip.outputs.video, {enabled: true, durationMs: 1000, fps: 10}, "keepFrames is dropped");
@@ -134,11 +134,11 @@ test("a widget image that copies a built-in sample becomes its sws-sample: refer
     // A copy that the widget's own HTML loads must stay an upload at its path.
     "index.html": '<main id="stage"><img src="studio/media/logo.jpg"></main>\n',
     "studio/media/logo.jpg": await sampleBytes("gallery/streamer-2.jpg"),
-    "studio/media/gallery/01-streamer-1.jpg": await sampleBytes("gallery/streamer-1.jpg"),
+    "studio/media/gallery/01-streamer-1-blur.jpg": await sampleBytes("gallery/streamer-1-blur.jpg"),
     "studio/media/backdrops/bd-plants-2.jpg": await sampleBytes("backdrops/plants-2.jpg"),
     "studio/scenes/samples.json": JSON.stringify({
       schemaVersion: 1, id: "samples", name: "Samples", theme: "aurora",
-      fieldData: {gallery: ["studio/media/gallery/01-streamer-1.jpg", "/__sws/widget/studio/media/gallery/01-streamer-1.jpg", "studio/media/a.png"], image: "studio/media/logo.jpg"},
+      fieldData: {gallery: ["studio/media/gallery/01-streamer-1-blur.jpg", "/__sws/widget/studio/media/gallery/01-streamer-1-blur.jpg", "studio/media/a.png"], image: "studio/media/logo.jpg"},
       background: {id: "plants", image: "studio/media/backdrops/bd-plants-2.jpg"}
     }),
     "studio/recipes/backdrops.json": JSON.stringify({
@@ -149,11 +149,11 @@ test("a widget image that copies a built-in sample becomes its sws-sample: refer
   const {catalog, samples} = await hostedCatalogFromConfig(config);
   assert.deepEqual(samples, [
     {path: "studio/media/backdrops/bd-plants-2.jpg", reference: "sws-sample:backdrops/plants-2.jpg", identical: true},
-    {path: "studio/media/gallery/01-streamer-1.jpg", reference: "sws-sample:gallery/streamer-1.jpg", identical: true}
+    {path: "studio/media/gallery/01-streamer-1-blur.jpg", reference: "sws-sample:gallery/streamer-1-blur.jpg", identical: true}
   ]);
   const scene = catalog.scenes.find((item) => item.id === "samples");
   assert.deepEqual(scene.fieldData, {
-    gallery: ["sws-sample:gallery/streamer-1.jpg", "sws-sample:gallery/streamer-1.jpg", "studio/media/a.png"],
+    gallery: ["sws-sample:gallery/streamer-1-blur.jpg", "sws-sample:gallery/streamer-1-blur.jpg", "studio/media/a.png"],
     image: "studio/media/logo.jpg"
   }, "every whole value naming a copy names the sample, in either path form");
   assert.equal(scene.background.image, "sws-sample:backdrops/plants-2.jpg");
@@ -164,8 +164,8 @@ test("a widget image that copies a built-in sample becomes its sws-sample: refer
 test("the PNG originals that sample-media/ was converted from stand for every sample", async () => {
   const manifest = JSON.parse(await readFile(new URL("manifest.json", SAMPLES), "utf8"));
   const originals = Object.entries(SAMPLE_MEDIA_ORIGINALS);
-  // All nine samples were converted from PNG on 2026-09-29 (sample-media/README.md), so each has an original.
-  assert.equal(originals.length, 9);
+  // Every sample was converted from a PNG original, on 2026-09-29 or 2026-10-02 (sample-media/README.md).
+  assert.equal(originals.length, 10);
   assert.deepEqual(originals.map(([, reference]) => reference).sort(), manifest.items.map((item) => item.reference).sort(), "one original per sample");
   for (const [sha256, reference] of originals) {
     assert.match(sha256, /^[a-f0-9]{64}$/);
