@@ -2,21 +2,6 @@
   "schemaVersion": 1,
   "items": [
     {
-      "id": "streamer-1",
-      "reference": "sws-sample:gallery/streamer-1.jpg",
-      "file": "gallery/streamer-1.jpg",
-      "kind": "gallery",
-      "contentType": "image/jpeg",
-      "width": 1672,
-      "height": 941,
-      "bytes": 129245,
-      "sha256": "2c939f0097473cbe184c3815a06bb666709e19569780398fa9d044d4f46573f2",
-      "label": "Streamer 1",
-      "alt": "Webcam-style photo of a smiling young woman with shoulder-length brown hair, black over-ear headphones and a cream knit sweater behind a black studio microphone, in a pink-lit bedroom with wave and torii-gate art prints, a plush toy on the bed, fairy lights and white shelves of figurines.",
-      "color": "#785f62",
-      "origin": "Generated with ChatGPT (OpenAI gpt-image) and supplied by the repository owner on 2026-09-29; the original PNG carried OpenAI's C2PA credentials marking it AI-generated. The person is synthetic, not a real individual; no legible text or logo."
-    },
-    {
       "id": "streamer-2",
       "reference": "sws-sample:gallery/streamer-2.jpg",
       "file": "gallery/streamer-2.jpg",
@@ -30,6 +15,36 @@
       "alt": "Webcam-style photo of a smiling young woman with black hair, bangs and winged eyeliner, wearing black over-ear headphones and a black top behind a black studio microphone, in a dim room lit purple and pink with a white wardrobe, bookshelves, a trailing plant and a small glowing lamp.",
       "color": "#362a40",
       "origin": "Generated with ChatGPT (OpenAI gpt-image) and supplied by the repository owner on 2026-09-29; the original PNG carried OpenAI's C2PA credentials marking it AI-generated. The person is synthetic, not a real individual; no legible text or logo."
+    },
+    {
+      "id": "streamer-1-blur",
+      "reference": "sws-sample:gallery/streamer-1-blur.jpg",
+      "file": "gallery/streamer-1-blur.jpg",
+      "kind": "gallery",
+      "contentType": "image/jpeg",
+      "width": 1672,
+      "height": 941,
+      "bytes": 29358,
+      "sha256": "99d4058ce88611664583b2fdc583909791dda1b8386012057d4179ecac193bc6",
+      "label": "Streamer 1 blur",
+      "alt": "Heavily blurred webcam-style photo of a young woman with shoulder-length dark brown hair and a cream sweater in a dim mauve room, with soft pink, violet and white light blobs behind her; no detail is legible.",
+      "color": "#7e6567",
+      "origin": "Edited by the repository owner in Canva on 2026-10-02 (background blur) from the retired streamer-1 original generated with ChatGPT (OpenAI gpt-image) and supplied on 2026-09-29; the edit dropped the original's C2PA credentials, so the PNG supplied on 2026-10-02 carries none. The person is synthetic, not a real individual; no legible text or logo."
+    },
+    {
+      "id": "streamer-2-blur",
+      "reference": "sws-sample:gallery/streamer-2-blur.jpg",
+      "file": "gallery/streamer-2-blur.jpg",
+      "kind": "gallery",
+      "contentType": "image/jpeg",
+      "width": 1672,
+      "height": 941,
+      "bytes": 27808,
+      "sha256": "e4f9ebf2d90abee82a8294410ee741ad2742367b90f3d04ec50825110461a962",
+      "label": "Streamer 2 blur",
+      "alt": "Heavily blurred webcam-style photo of a young woman with long black hair and bangs, headphones and a black top in a dim purple room, with a bright pink and blue light blob behind her; no detail is legible.",
+      "color": "#392c43",
+      "origin": "Edited by the repository owner in Canva on 2026-10-02 (background blur) from the streamer-2 original generated with ChatGPT (OpenAI gpt-image) and supplied on 2026-09-29; the edit dropped the original's C2PA credentials, so the PNG supplied on 2026-10-02 carries none. The person is synthetic, not a real individual; no legible text or logo."
     },
     {
       "id": "aero",
@@ -200,6 +215,10 @@
     {
       "reference": "sws-sample:backdrops/sunset-mesh.jpg",
       "retiredOn": "2026-09-29"
+    },
+    {
+      "reference": "sws-sample:gallery/streamer-1.jpg",
+      "retiredOn": "2026-10-02"
     }
   ]
 }

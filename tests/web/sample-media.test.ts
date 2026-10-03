@@ -26,7 +26,7 @@ class MemoryStore implements ObjectStore {
 const manifest = JSON.parse(await readFile(resolve('sample-media/manifest.json'), 'utf8')) as {items: {reference: string; file: string; sha256: string; bytes: number; color: string; kind: string}[]};
 const sha = (reference: string) => manifest.items.find(item => item.reference === reference)!.sha256;
 const options = {origin: 'http://127.0.0.1:3000', sessionId: 'session', nonce: 'abcdefghijklmnop'};
-const STREAMER_1 = 'sws-sample:gallery/streamer-1.jpg';
+const STREAMER_1 = 'sws-sample:gallery/streamer-1-blur.jpg';
 const STREAMER_2 = 'sws-sample:gallery/streamer-2.jpg';
 const CUTE = 'sws-sample:backdrops/cute.jpg';
 const BLUEPRINT = 'sws-sample:backdrops/blueprint.jpg';
@@ -121,7 +121,7 @@ test('saved revisions fail clearly when a pinned sample changed instead of rende
   const store = new MemoryStore();
   const prepared = await prepareSnapshot(snapshot(), store, 'p');
   const tampered = {...prepared, sampleMedia: {...prepared.sampleMedia, [STREAMER_1]: '0'.repeat(64), [BLUEPRINT]: '1'.repeat(64)}};
-  await assert.rejects(previewHtml(tampered, store, {...options, sceneId: 'hero'}), /Sample media changed since this revision was saved: sws-sample:gallery\/streamer-1\.jpg/);
+  await assert.rejects(previewHtml(tampered, store, {...options, sceneId: 'hero'}), /Sample media changed since this revision was saved: sws-sample:gallery\/streamer-1-blur\.jpg/);
   await assert.rejects(previewBackground(tampered, store, {sceneId: 'hero'}), /Sample media changed since this revision was saved/);
 
   // A revision saved before 2026-09-29 pinned a sample that was retired since: it says so instead of rendering.
@@ -147,7 +147,7 @@ async function catalogCopy(root: string, entries: {reference: string; file: stri
 test('an injected catalog enforces integrity and the shared preview budget (8 MiB in a local Studio)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-sample-web-'));
   try {
-    const broken = await catalogCopy(join(root, 'broken'), [{reference: STREAMER_1, file: 'gallery/streamer-1.jpg'}], file => writeFile(file, 'tampered'));
+    const broken = await catalogCopy(join(root, 'broken'), [{reference: STREAMER_1, file: 'gallery/streamer-1-blur.jpg'}], file => writeFile(file, 'tampered'));
     await assert.rejects(prepareSnapshot(snapshot(), new MemoryStore(), 'p', broken), /does not match its recorded size and SHA-256/);
 
     const large = join(root, 'large');

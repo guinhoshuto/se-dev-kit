@@ -57,7 +57,7 @@ test('hosted skill client passes built-in sample references through without uplo
   try {
     await widget(root);
     const catalog = join(root, 'catalog.json');
-    const scene = {schemaVersion: 1, id: 'gallery', name: 'Gallery', fieldData: {image: 'sws-sample:gallery/streamer-1.jpg', galleryImages: ['sws-sample:gallery/streamer-2.jpg', 'sws-sample:backdrops/cute.jpg']}, background: {id: 'blueprint', image: 'sws-sample:backdrops/blueprint.jpg', color: '#0d4474'}};
+    const scene = {schemaVersion: 1, id: 'gallery', name: 'Gallery', fieldData: {image: 'sws-sample:gallery/streamer-1-blur.jpg', galleryImages: ['sws-sample:gallery/streamer-2.jpg', 'sws-sample:backdrops/cute.jpg']}, background: {id: 'blueprint', image: 'sws-sample:backdrops/blueprint.jpg', color: '#0d4474'}};
     await writeFile(catalog, JSON.stringify({scenes: [scene]}));
     const snapshot = await buildSnapshot(root, {catalog});
     assert.deepEqual(snapshot.scenes[0], scene);
@@ -65,7 +65,7 @@ test('hosted skill client passes built-in sample references through without uplo
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
-const SAMPLE_SCENE = {schemaVersion: 1, id: 'gallery', name: 'Gallery', fieldData: {galleryImages: ['sws-sample:gallery/streamer-1.jpg', 'sws-sample:gallery/streamer-2.jpg']}, background: {id: 'blueprint', image: 'sws-sample:backdrops/blueprint.jpg', color: '#0d4474'}};
+const SAMPLE_SCENE = {schemaVersion: 1, id: 'gallery', name: 'Gallery', fieldData: {galleryImages: ['sws-sample:gallery/streamer-1-blur.jpg', 'sws-sample:gallery/streamer-2.jpg']}, background: {id: 'blueprint', image: 'sws-sample:backdrops/blueprint.jpg', color: '#0d4474'}};
 const TEST_TOKEN = 'private_capability_12345678901234567890';
 
 /** A fake Studio whose sample-media support is selectable: `old` predates the list, `partial` lacks the backdrop. */
@@ -104,7 +104,7 @@ test('hosted import checks sample references offline and against the deployment 
     const run = (out: string) => exec(process.execPath, [script, 'import', '--widget-root', root, '--catalog', catalog, '--origin', studio.origin, '--access-out', join(root, out)], {env: {...process.env, STUDIO_CREATE_KEY: undefined}});
 
     await writeFile(catalog, JSON.stringify({scenes: [{...SAMPLE_SCENE, fieldData: {galleryImages: ['sws-sample:gallery/not-a-sample.jpg']}}]}));
-    await assert.rejects(run('a.json'), failure(/Unknown sample media reference\(s\): sws-sample:gallery\/not-a-sample\.jpg\. Valid references: .*sws-sample:gallery\/streamer-1\.jpg.*Nothing was created\./));
+    await assert.rejects(run('a.json'), failure(/Unknown sample media reference\(s\): sws-sample:gallery\/not-a-sample\.jpg\. Valid references: .*sws-sample:gallery\/streamer-1-blur\.jpg.*Nothing was created\./));
     await writeFile(catalog, JSON.stringify({scenes: [{...SAMPLE_SCENE, fieldData: {galleryImages: ['sws-sample:gallery/neon-city.jpg']}}]}));
     await assert.rejects(run('a.json'), failure(/Unknown sample media reference\(s\): sws-sample:gallery\/neon-city\.jpg \(retired on 2026-09-29\)\. Valid references: /));
     assert.deepEqual(studio.requests, [], 'an unknown or retired reference must fail before any request');

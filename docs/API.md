@@ -189,7 +189,7 @@ The JSON schema accepts up to 256 asset declarations, but preparation enforces a
 
 ## Sample media
 
-The deployment ships the AI-generated images in [`sample-media/`](../sample-media/README.md) so a widget can be tested without creating or uploading media. Reference one as the whole JSON string `sws-sample:<file>`, for example `sws-sample:gallery/streamer-1.jpg` or `sws-sample:backdrops/plants.jpg`:
+The deployment ships the AI-generated images in [`sample-media/`](../sample-media/README.md) so a widget can be tested without creating or uploading media. Reference one as the whole JSON string `sws-sample:<file>`, for example `sws-sample:gallery/streamer-1-blur.jpg` or `sws-sample:backdrops/plants.jpg`:
 
 - as a media value in theme, fixture, scene, scenario, or channel data, including arrays of `image-input` fields with `multiple: true`;
 - as `scene.background.image` or `recipe.matrix.backgrounds[].image`.

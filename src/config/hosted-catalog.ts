@@ -28,12 +28,13 @@ const HOSTED_LAYOUTS: ResolvedWidgetFiles[] = [
 ];
 
 /**
- * SHA-256 of the PNG originals that sample-media/ was converted from on 2026-09-29: the ChatGPT art the owner
- * supplied, which a widget may carry as its own test files. Copies of the art retired that day are uploads again.
+ * SHA-256 of the PNG originals that sample-media/ was converted from on 2026-09-29 and 2026-10-02: the art the owner
+ * supplied, which a widget may carry as its own test files. Copies of retired art are uploads again.
  */
 export const SAMPLE_MEDIA_ORIGINALS: Readonly<Record<string, string>> = Object.freeze({
-  "c185b2d559ff197c34b70db39c7f35e2d921ea6791fcc5d3e6d6771963704aa8": "sws-sample:gallery/streamer-1.jpg",
   "295a157f2ee6a0a77645643d701a3243f7435b31a1ae586f252accb41c2dd7a2": "sws-sample:gallery/streamer-2.jpg",
+  "a449ae723eafc2eba8e4012abf8d09fa4ffa3d72de6590cccaf2d15158c9ba7a": "sws-sample:gallery/streamer-1-blur.jpg",
+  "f5437868dd609605507a3ca87844b3d6b3f8ef533165161d8e8c9ae9e9d735e2": "sws-sample:gallery/streamer-2-blur.jpg",
   "57e5e2a3c54a799791c5ff76d4860db4005148c9ae152ac54c49e2bd2e13bc69": "sws-sample:backdrops/aero.jpg",
   "e9c1198c7321d17b1512456e02bee85173a1b69262ff7a5f11bb6233c3b8c72b": "sws-sample:backdrops/blueprint.jpg",
   "26e5ecf681cdea93be3b12515fde680a9e5905c15218e3dad0e8d9ba23c7fc7f": "sws-sample:backdrops/cute.jpg",

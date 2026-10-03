@@ -264,7 +264,7 @@ test("built-in sample media reach widgets as absolute same-origin URLs in fields
     name: "Samples",
     viewport: {width: 320, height: 240},
     output: {width: 320, height: 240, format: "png"},
-    fieldData: {image: "sws-sample:gallery/streamer-1.jpg", gallery: ["sws-sample:gallery/streamer-2.jpg", "sws-sample:backdrops/cute.jpg"]},
+    fieldData: {image: "sws-sample:gallery/streamer-1-blur.jpg", gallery: ["sws-sample:gallery/streamer-2.jpg", "sws-sample:backdrops/cute.jpg"]},
     background: {id: "blueprint", image: "sws-sample:backdrops/blueprint.jpg"}
   };
   const server = await startStudioServer(project, {port: 0, watch: false});
@@ -276,7 +276,7 @@ test("built-in sample media reach widgets as absolute same-origin URLs in fields
       const sampleBase = `${server.frameOrigin}/__sws/sample/`;
       const images = await frame.locator("img").evaluateAll((nodes) => nodes.map((node) => ({src: node.src, width: node.naturalWidth})));
       assert.deepEqual(images, [
-        {src: `${sampleBase}gallery/streamer-1.jpg`, width: 1672},
+        {src: `${sampleBase}gallery/streamer-1-blur.jpg`, width: 1672},
         {src: `${sampleBase}gallery/streamer-2.jpg`, width: 1672},
         {src: `${sampleBase}backdrops/cute.jpg`, width: 1254}
       ]);
