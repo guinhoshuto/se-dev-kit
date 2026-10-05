@@ -10,7 +10,8 @@ import {renderRecipe} from "../../dist/capture/renderer.js";
 import {loadProject} from "../../dist/config/load.js";
 import {captureHostUpdateFields, openScene} from "../../dist/scenarios/runner.js";
 import {startStudioServer} from "../../dist/server/server.js";
-import {compileVariantTutorial, EMULATE_MENU, tutorialCamera} from "../../dist/tutorial/variant.js";
+import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera} from "../../dist/tutorial/variant.js";
+import {createHash} from "node:crypto";
 
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
 
@@ -25,6 +26,14 @@ test("tutorial mode records the widget inside the editor replica with scripted U
   const project = await loadProject({inputDirectory: exampleRoot});
   const recipe = structuredClone(project.recipes.find((item) => item.id === "tutorial-setup").value);
   recipe.outputs.video.fps = 2;
+  const steps = recipe.outputs.video.tutorial.steps;
+  steps.splice(
+    steps.findIndex((step) => step.action === "selectLayer") + 1,
+    0,
+    {action: "still", name: "layer-selected"},
+    {action: "still", name: "layer-selected-full", camera: "full"}
+  );
+  steps.unshift({action: "still", name: "start"});
 
   const result = await renderRecipe(project, recipe, {
     outputRoot,
@@ -50,6 +59,32 @@ test("tutorial mode records the widget inside the editor replica with scripted U
   assert.equal(frames.height, 1080);
   const hashes = new Set(frames.frames.map((frame) => frame.sha256));
   assert.ok(hashes.size > frames.frames.length / 2, "the scripted editor changes across the recording");
+
+  // Each still is a byte copy of the frame it names, written next to the video and kept after the frames go.
+  const full = entry.stills.pop();
+  assert.deepEqual(entry.stills.map((still) => still.name), ["start", "layer-selected"]);
+  assert.deepEqual(entry.stills.map((still) => still.camera), ["video", "video"]);
+  assert.equal(entry.stills[0].atMs, 0);
+  assert.ok(entry.stills[1].atMs > 0);
+  for (const still of entry.stills) {
+    assert.equal(still.frame, stillFrameIndex(still.atMs, 2, frames.frames.length));
+    assert.equal(still.timestampMs, frames.frames[still.frame].timestampMs);
+    assert.equal(still.file.file, `tutorial-setup/${entry.id}-still-${still.name}.png`);
+    assert.deepEqual([still.file.width, still.file.height], [1920, 1080]);
+    const bytes = await readFile(join(outputRoot, still.file.file));
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    assert.equal(digest, still.file.sha256);
+    assert.equal(digest, frames.frames[still.frame].sha256, `still ${still.name} is frame ${still.frame}`);
+    assert.ok(result.artifacts.some((path) => path.endsWith(`/${still.file.file}`)), `still ${still.name} is an artifact`);
+  }
+  assert.notEqual(entry.stills[0].file.sha256, entry.stills[1].file.sha256, "the editor changed between the two stills");
+  // A full still is the same instant redrawn without the camera and the pointer, so it is not the frame.
+  assert.equal(full.name, "layer-selected-full");
+  assert.equal(full.camera, "full");
+  assert.equal(full.frame, entry.stills[1].frame);
+  assert.deepEqual([full.file.width, full.file.height], [1920, 1080]);
+  assert.notEqual(full.file.sha256, frames.frames[full.frame].sha256);
+  assert.equal(createHash("sha256").update(await readFile(join(outputRoot, full.file.file))).digest("hex"), full.file.sha256);
 });
 
 test("colorpicker steps open the md-color-picker dialog on stage and commit the exact value", {timeout: 180_000}, async (t) => {
@@ -611,6 +646,26 @@ test("auto zoom frames are a function of time and keep popups, captions, and the
     }
   }
   assert.ok(zoomed > probes.length / 4, `the camera zooms in: ${zoomed} of ${probes.length} probes above 1.2x`);
+
+  // A full still draws a zoomed instant with the whole editor and no pointer, and leaves no trace:
+  // the next render of that instant is the same picture as before it.
+  const closeUp = probes.find((time) => zoomOf(tenFps[time].camera) > 1.5);
+  const draw = (time, full) => page.evaluate(({time, full}) => {
+    window.__SWS_TUTORIAL__.render(time, {full});
+    return {
+      camera: document.querySelector("#se-camera").style.transform,
+      cursor: getComputedStyle(document.querySelector("#se-cursor")).visibility,
+      ripple: getComputedStyle(document.querySelector("#se-ripple")).visibility
+    };
+  }, {time, full});
+  assert.equal((await draw(closeUp, false)).camera, tenFps[closeUp].camera);
+  const before = await page.screenshot();
+  assert.deepEqual(await draw(closeUp, true), {camera: "none", cursor: "hidden", ripple: "hidden"}, `full still at ${closeUp} ms`);
+  const whole = await page.screenshot();
+  assert.deepEqual(await draw(closeUp, false), {camera: tenFps[closeUp].camera, cursor: "visible", ripple: "visible"});
+  const after = await page.screenshot();
+  assert.ok(!whole.equals(before), "the full still differs from the close-up frame");
+  assert.ok(after.equals(before), "the frame after a full still is the same picture as before it");
 
   const inStage = (rect) => rect.left >= -1 && rect.top >= -1 && rect.right <= width + 1 && rect.bottom <= height + 1;
   const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;

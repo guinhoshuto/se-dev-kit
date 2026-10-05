@@ -165,6 +165,11 @@ export interface TutorialTimeline {
   /** The resolved `tutorial.autoZoom`; null keeps the full editor. */
   autoZoom: {zoom: number} | null;
   widget: TutorialWidgetAction[];
+  /**
+   * One per `still` step, in step order: the timeline time where the step ran, and whether the PNG is
+   * the video frame (`video`) or the same instant with the full editor and no pointer (`full`).
+   */
+  stills: {name: string; atMs: number; camera: "video" | "full"}[];
 }
 
 export const DEFAULT_GROUP = "General";
@@ -465,6 +470,7 @@ export function compileTutorial(options: {
   const presses: TutorialPress[] = [];
   const cues: TutorialCue[] = [];
   const widget: TutorialWidgetAction[] = [];
+  const stills: TutorialTimeline["stills"] = [];
   let t = 0;
   let selected = false;
   let openGroup: string | null = null;
@@ -666,6 +672,9 @@ export function compileTutorial(options: {
         break;
       case "caption":
         patch(t, {caption: step.text});
+        break;
+      case "still":
+        stills.push({name: step.name, atMs: t, camera: step.camera ?? "video"});
         break;
       case "move":
         move(step.target, step.durationMs);
@@ -893,6 +902,7 @@ export function compileTutorial(options: {
     autoZoom: tutorial.autoZoom === false
       ? null
       : {zoom: (typeof tutorial.autoZoom === "object" ? tutorial.autoZoom.zoom : undefined) ?? DEFAULT_AUTO_ZOOM},
-    widget: widget.sort((left, right) => left.atMs - right.atMs)
+    widget: widget.sort((left, right) => left.atMs - right.atMs),
+    stills
   };
 }

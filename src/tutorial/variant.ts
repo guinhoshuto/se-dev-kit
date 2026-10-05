@@ -1,5 +1,6 @@
 import type {CameraDefinition, CaptureVariant, ResolvedProject, VideoDefinition} from "../types.js";
 import {StudioError} from "../shared/errors.js";
+import {assertSafeId} from "../shared/ids.js";
 import {resolveSceneState} from "../scenarios/state.js";
 import {compileTutorial, EMULATE_MENU, type TutorialTimeline} from "./timeline.js";
 
@@ -44,4 +45,29 @@ export function tutorialCamera(timeline: TutorialTimeline): CameraDefinition {
     y: widget.y - overlay.height / 2,
     origin: "center center"
   };
+}
+
+/**
+ * The names of a tutorial video's `still` steps, in step order, checked to be safe file-name ids and
+ * unique. Each becomes `<variant>-still-<name>.png` next to the video.
+ */
+export function tutorialStillNames(video: VideoDefinition | undefined): string[] {
+  if (!video?.enabled || video.mode !== "tutorial" || !video.tutorial) return [];
+  const names: string[] = [];
+  for (const step of video.tutorial.steps) {
+    if (step.action !== "still") continue;
+    assertSafeId(step.name, "tutorial still name");
+    if (names.includes(step.name)) {
+      throw new StudioError("TUTORIAL_STILL_DUPLICATE", `Two tutorial still steps are named "${step.name}".`, "Give every still step its own name.");
+    }
+    names.push(step.name);
+  }
+  return names;
+}
+
+/** The first video frame at or after `atMs`, or the last frame when the video ends first. */
+export function stillFrameIndex(atMs: number, fps: number, frameCount: number): number {
+  let index = Math.max(0, Math.ceil((atMs * fps) / 1000) - 1);
+  while (Math.round((index * 1000) / fps) < atMs) index += 1;
+  return Math.min(index, frameCount - 1);
 }
