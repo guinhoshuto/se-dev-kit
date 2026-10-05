@@ -5,6 +5,7 @@
 Each scenario or variant gets a fresh, ephemeral Playwright context with:
 
 - Fixed `en-US` locale and `UTC` timezone.
+- Software raster: every Chrome the Studio starts runs with `--disable-gpu` (`REPRODUCIBLE_RASTER_ARGS` in `src/capture/browser.ts`). With the GPU, two renders of the same frames differed by one level on edges and text in 4 to 13% of tutorial-setup's frames; in software, renders on the same machine and Chrome version are pixel-identical, and frame capture takes about 22% longer (2026-10-05). WebGL still works, served by SwiftShader instead of the GPU, so a heavy WebGL widget may capture more slowly.
 - Explicit viewport and device scale factor. The page is never shorter than 120 px: headless Chrome 154 never answered the screenshot of a page under 88 px tall once the page was idle, so a shorter scene is drawn at the top of a 120 px page and its screenshot is clipped to the scene (2026-10-04).
 - A fixed clock installed before navigation.
 - Seeded `Math.random` inside the widget frame.
