@@ -236,15 +236,28 @@ export function isGoogleFontsRequestUrl(url: string): boolean {
   }
 }
 
+/**
+ * The shortest page the Studio opens. Headless Chrome 154 (macOS) never answers a screenshot of a page
+ * shorter than 88 px once the page has been idle for a few hundred milliseconds (2026-10-04), so a shorter
+ * scene is drawn at the top of a page this tall, and its screenshot is clipped to the scene.
+ */
+export const MIN_PAGE_HEIGHT = 120;
+
+/** The page viewport for content of `size`: the same width, and the same height but never below MIN_PAGE_HEIGHT. */
+export function pageViewport(size: {width: number; height: number}): {width: number; height: number} {
+  return {width: size.width, height: Math.max(size.height, MIN_PAGE_HEIGHT)};
+}
+
 export async function createIsolatedContext(options: {
   browser: Browser;
   allowedOrigins: string[];
+  /** The content size; the page is never shorter than MIN_PAGE_HEIGHT. */
   viewport: {width: number; height: number};
   deviceScaleFactor?: number;
   fontRoute?: FontRoute;
 }): Promise<BrowserContext> {
   const context = await options.browser.newContext({
-    viewport: options.viewport,
+    viewport: pageViewport(options.viewport),
     deviceScaleFactor: options.deviceScaleFactor ?? 1,
     locale: "en-US",
     timezoneId: "UTC",

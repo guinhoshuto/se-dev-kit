@@ -555,3 +555,41 @@ test("a still shows an animation that a timer starts during the replay at its pr
   assert.notEqual(timedHash, restHash, "the still samples the animation the timer started instead of leaving it at rest");
   assert.equal(timedHash, midwayHash, "625 ms into the animation, the box stands at its 100px step");
 });
+
+test("a scene shorter than 88 px renders its still and thumbnail at their exact size instead of hanging", {timeout: 120_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  // Headless Chrome never answered the screenshot of a page under 88 px tall once the page was idle, so an
+  // 80 px scene waited 30 s and failed (2026-10-04).
+  const root = await mkdtemp(join(tmpdir(), "sws-low-scene-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await Promise.all([
+    writeFile(join(root, "widget.html"), '<div id="bar"></div>'),
+    writeFile(join(root, "widget.css"), "html,body{margin:0;background:transparent}#bar{position:absolute;inset:8px;background:#fff}"),
+    writeFile(join(root, "widget.js"), ""),
+    writeFile(join(root, "widget.json"), "{}")
+  ]);
+  const project = await loadProject({inputDirectory: root});
+  project.scenes.push({
+    id: "bar",
+    filePath: "",
+    value: {
+      schemaVersion: 1,
+      id: "bar",
+      name: "Bar",
+      viewport: {width: 320, height: 80},
+      output: {width: 320, height: 80, format: "png"},
+      background: {id: "dark", color: "#10172b"}
+    }
+  });
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-low-scene-out-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  const recipe = {schemaVersion: 1, id: "low-scene", name: "Low scene", scenes: ["bar"], outputs: {screenshots: true, thumbnails: {width: 64, height: 48}}};
+  const result = await renderRecipe(project, recipe, {outputRoot, browserPath: detection.executablePath});
+  const entry = JSON.parse(await readFile(result.manifestPath, "utf8")).artifacts[0];
+  assert.deepEqual(pngDimensions(await readFile(join(outputRoot, entry.files.screenshot.file))), {width: 320, height: 80});
+  assert.deepEqual(pngDimensions(await readFile(join(outputRoot, entry.files.thumbnail.file))), {width: 64, height: 48});
+});
