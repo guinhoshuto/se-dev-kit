@@ -17,7 +17,7 @@ How to make store-listing media (cover images, field images, demo and tutorial v
 
 ## Stills
 
-- A still in the middle of an animation comes from the video's frames, not from `captureAtMs`, when the animation is started by a timer (see [known-limits.md](known-limits.md#capture)).
+- Take a still in the middle of an animation with `captureAtMs`, also when a widget timer starts the animation: the replay samples animations every 16 ms, as a browser frame does, so the still may trail the timer by up to 16 ms. A `captureAtMs` late in the timeline is slower, about 4.5 s per minute.
 
 ## Loops
 

@@ -501,3 +501,57 @@ test("a CLI capture records the build and the command-line flags it ran with in 
     cliFlags: ["--json", "--scene", "hero", "--output", "<path>", "--force"]
   });
 });
+
+// A widget whose box a test positions or animates; the still is taken at captureAtMs 1125.
+async function timingWidget(t, {css = "", js = ""} = {}) {
+  const root = await mkdtemp(join(tmpdir(), "sws-still-timing-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await Promise.all([
+    writeFile(join(root, "widget.html"), '<div id="box"></div>'),
+    writeFile(join(root, "widget.css"), `html,body{margin:0;background:transparent}#box{position:absolute;left:0;top:40px;width:40px;height:40px;background:#fff}\n${css}`),
+    writeFile(join(root, "widget.js"), js),
+    writeFile(join(root, "widget.json"), "{}")
+  ]);
+  const project = await loadProject({inputDirectory: root});
+  project.scenes.push({
+    id: "still",
+    filePath: "",
+    value: {
+      schemaVersion: 1,
+      id: "still",
+      name: "Still",
+      viewport: {width: 320, height: 120},
+      output: {width: 320, height: 120, format: "png"},
+      background: {id: "dark", color: "#10172b"},
+      captureAtMs: 1125
+    }
+  });
+  const outputRoot = await mkdtemp(join(tmpdir(), "sws-still-timing-out-"));
+  t.after(() => rm(outputRoot, {recursive: true, force: true}));
+  return {project, outputRoot};
+}
+
+test("a still shows an animation that a timer starts during the replay at its progress, not at its first frame", {timeout: 120_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const recipe = {schemaVersion: 1, id: "still-timing", name: "Still timing", scenes: ["still"], outputs: {screenshots: true}};
+  const shot = async (widget) => {
+    const result = await renderRecipe(widget.project, recipe, {outputRoot: widget.outputRoot, browserPath: detection.executablePath});
+    return JSON.parse(await readFile(result.manifestPath, "utf8")).artifacts[0].hashes.screenshot;
+  };
+  // With steps(4), the box stands at 100px from 500 to 750 ms into the animation, so the check does not
+  // depend on the replay's step: the timer fires at 500 ms and the still is 625 ms into the animation.
+  const timed = await timingWidget(t, {
+    css: "@keyframes slide{from{transform:translateX(0)}to{transform:translateX(200px)}}#box.go{animation:slide 1000ms steps(4,end) forwards}",
+    js: 'setTimeout(() => document.getElementById("box").classList.add("go"), 500);'
+  });
+  const midway = await timingWidget(t, {css: "#box{transform:translateX(100px)}"});
+  const atRest = await timingWidget(t);
+  const [timedHash, midwayHash, restHash] = [await shot(timed), await shot(midway), await shot(atRest)];
+  assert.notEqual(midwayHash, restHash, "the two references differ");
+  assert.notEqual(timedHash, restHash, "the still samples the animation the timer started instead of leaving it at rest");
+  assert.equal(timedHash, midwayHash, "625 ms into the animation, the box stands at its 100px step");
+});
