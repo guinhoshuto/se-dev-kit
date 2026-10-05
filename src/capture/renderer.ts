@@ -409,20 +409,36 @@ function assertRenderWorkload(recipe: RecipeDefinition, workload: RenderWorkload
   }
 }
 
+/** A still's replay samples animations at least this often, like a 60 Hz browser frame. */
+const STILL_SAMPLE_STEP_MS = 16;
+
+/**
+ * Advances the paused clock from `fromMs` to `toMs` in steps of at most 16 ms and samples CSS/Web
+ * Animations after each, then at `toMs` even when there is nothing to advance. An animation that a
+ * timer starts in between is first seen, and so starts, within one step of its timer, as in a browser,
+ * instead of at the end of one long jump, which would leave it at its first frame.
+ */
+async function advanceSampling(page: Page, fromMs: number, toMs: number): Promise<void> {
+  for (let time = fromMs; time < toMs; ) {
+    const step = Math.min(STILL_SAMPLE_STEP_MS, toMs - time);
+    await page.clock.fastForward(step);
+    time += step;
+    if (time < toMs) await sampleFrameAnimations(page, time);
+  }
+  await sampleFrameAnimations(page, toMs);
+}
+
 async function replayUntil(page: Page, variant: CaptureVariant, targetTimeMs: number): Promise<void> {
   let currentTime = 0;
   for (const timelineEvent of [...(variant.fixture?.events ?? [])].sort((left, right) => left.atMs - right.atMs)) {
     if (timelineEvent.atMs > targetTimeMs) break;
-    const delta = timelineEvent.atMs - currentTime;
-    if (delta > 0) await page.clock.fastForward(delta);
-    await sampleFrameAnimations(page, timelineEvent.atMs);
+    await advanceSampling(page, currentTime, timelineEvent.atMs);
     await captureHostDispatch(page, timelineEvent.listener, timelineEvent.event);
     await sampleFrameAnimations(page, timelineEvent.atMs);
     await page.clock.fastForward(1);
     currentTime = timelineEvent.atMs + 1;
   }
-  if (targetTimeMs > currentTime) await page.clock.fastForward(targetTimeMs - currentTime);
-  await sampleFrameAnimations(page, targetTimeMs);
+  await advanceSampling(page, currentTime, targetTimeMs);
 }
 
 async function screenshotScene(

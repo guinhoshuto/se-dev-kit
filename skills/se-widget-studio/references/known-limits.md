@@ -5,7 +5,6 @@ What the Studio does not do yet, or does differently from StreamElements, and wh
 ## Capture
 
 - **Very short scenes hang.** A scene about 80 px tall makes the screenshot of the stage wait "for element to be stable" until its 30-second timeout, with or without fonts (found on 2026-09-27; the tests use 320×120). Give a thin widget, such as an alert bar, a scene at least 120 px tall and crop the output to the widget.
-- **A still of a timer-driven animation comes out at rest.** `captureAtMs` does not sample a CSS animation that the widget starts from a timer; the still shows the resting state. Take the still from the video's frames instead: render with the local CLI and `--keep-frames` (the widget must need no Google Fonts), and pick the frame.
 - **`color-scheme: dark` on a transparent widget** shows on an opaque `#121212` box in screenshots, videos, and the tutorial replica (see the end of [catalog-authoring.md](catalog-authoring.md)). Do not work around it in the catalog; tell the user.
 - **Runtime network.** Only Google Fonts load at runtime. A script the widget injects from a CDN (three.js, for example) does not load, so whatever depends on it breaks; stop before rendering marketing media and ask (see "Known gaps" in [studio-workflow.md](studio-workflow.md#known-gaps)).
 - **Unproven font paths.** Canvas text (`fillText`) with a Google Font and a widget that reassigns the same stylesheet `href` have not been verified: look at the render before using it.
