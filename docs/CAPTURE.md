@@ -5,7 +5,7 @@
 Each scenario or variant gets a fresh, ephemeral Playwright context with:
 
 - Fixed `en-US` locale and `UTC` timezone.
-- Explicit viewport and device scale factor.
+- Explicit viewport and device scale factor. The page is never shorter than 120 px: headless Chrome 154 never answered the screenshot of a page under 88 px tall once the page was idle, so a shorter scene is drawn at the top of a 120 px page and its screenshot is clipped to the scene (2026-10-04).
 - A fixed clock installed before navigation.
 - Seeded `Math.random` inside the widget frame.
 - Service workers blocked.
