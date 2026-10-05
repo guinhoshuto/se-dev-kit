@@ -85,6 +85,14 @@ const OUTER_DEADLINE = Symbol("launch deadline");
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Chrome switches on every browser this module starts so that two renders of the same frames give
+ * the same pixels. With the GPU, Chrome's raster varies by one level on edges and text from run to
+ * run (35 to 124 of tutorial-setup's 945 frame hashes differed on an idle machine); its software
+ * raster is reproducible, at about 22% more capture time (SDK-39).
+ */
+export const REPRODUCIBLE_RASTER_ARGS: readonly string[] = ["--disable-gpu"];
+
 export async function launchStudioBrowser(options: {
   browserPath?: string;
   headed?: boolean;
@@ -106,7 +114,7 @@ export async function launchStudioBrowser(options: {
     `Chrome did not start within ${timeout / 1000} s (${detection.executablePath}).`,
     "The machine may be busy with another render: check for running headless Chrome, wait, and retry. The process this launch started was killed."
   );
-  const launching = chromium.launch({executablePath: detection.executablePath, headless: !options.headed, args: [marker], timeout});
+  const launching = chromium.launch({executablePath: detection.executablePath, headless: !options.headed, args: [marker, ...REPRODUCIBLE_RASTER_ARGS], timeout});
   let deadline: NodeJS.Timeout | undefined;
   try {
     const browser = await Promise.race([

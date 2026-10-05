@@ -55,6 +55,33 @@ test("a Chrome frozen at close is killed at the deadline, found by its launch ma
   assert.equal(alive(pid), false, "the frozen Chrome is gone");
 });
 
+test("a launched Chrome rasters in software and still gives a page WebGL", {timeout: 60_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  t.after(() => closeStudioBrowser(browser));
+  const page = await browser.newPage();
+  await page.setContent("<p>webgl</p>");
+  const contexts = await page.evaluate(() => ["webgl", "webgl2"].map((kind) => {
+    const gl = document.createElement("canvas").getContext(kind);
+    if (!gl) return {kind, renderer: null};
+    gl.clearColor(1, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    const pixel = new Uint8Array(4);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+    const debug = gl.getExtension("WEBGL_debug_renderer_info");
+    return {kind, renderer: gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER), pixel: [...pixel]};
+  }));
+  for (const context of contexts) {
+    // Chrome 154 with --disable-gpu serves WebGL from SwiftShader; with the GPU on a Mac it is ANGLE Metal.
+    assert.match(String(context.renderer), /SwiftShader/, `${context.kind} renders in software (${context.renderer})`);
+    assert.deepEqual(context.pixel, [255, 0, 0, 255], `${context.kind} draws`);
+  }
+});
+
 test("a render reports each phase in order, and two renders can share one browser", {timeout: 120_000}, async (t) => {
   const [detection, tooling] = await Promise.all([detectBrowser(), detectMediaTooling()]);
   if (!detection.executablePath || !tooling.ffmpegPath || !tooling.ffprobePath) {

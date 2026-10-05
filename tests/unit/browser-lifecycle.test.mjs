@@ -5,7 +5,7 @@ import {join} from "node:path";
 import {setTimeout as sleep} from "node:timers/promises";
 import test from "node:test";
 
-import {closeStudioBrowser, launchStudioBrowser} from "../../dist/capture/browser.js";
+import {closeStudioBrowser, launchStudioBrowser, REPRODUCIBLE_RASTER_ARGS} from "../../dist/capture/browser.js";
 
 const alive = (pid) => {
   try {
@@ -36,6 +36,21 @@ test("a browser that never starts fails the launch with BROWSER_LAUNCH_TIMEOUT a
   assert.ok(Number.isSafeInteger(pid) && pid > 1, `the fake browser wrote its PID (${pid})`);
   for (let attempt = 0; attempt < 50 && alive(pid); attempt += 1) await sleep(100);
   assert.equal(alive(pid), false, "the hung browser process was killed");
+});
+
+test("every launched browser gets the switches for a reproducible raster", {timeout: 30_000, skip: process.platform === "win32"}, async (t) => {
+  assert.deepEqual(REPRODUCIBLE_RASTER_ARGS, ["--disable-gpu"]);
+  const directory = await mkdtemp(join(tmpdir(), "sws-launch-args-"));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  const argsFile = join(directory, "args");
+  // Writes its arguments one per line, then exits: the launch fails, but the command line is on disk.
+  const fake = join(directory, "fake-chrome");
+  await writeFile(fake, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\n`, {mode: 0o755});
+  for (const headed of [false, true]) {
+    await assert.rejects(launchStudioBrowser({browserPath: fake, headed, launchTimeoutMs: 5_000}));
+    const args = (await readFile(argsFile, "utf8")).split("\n");
+    assert.ok(args.includes("--disable-gpu"), `headed: ${headed}, args: ${args.join(" ")}`);
+  }
 });
 
 test("a close that never returns gives up at its deadline; a close that fails still counts as closed", async () => {
