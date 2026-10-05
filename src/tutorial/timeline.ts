@@ -165,8 +165,11 @@ export interface TutorialTimeline {
   /** The resolved `tutorial.autoZoom`; null keeps the full editor. */
   autoZoom: {zoom: number} | null;
   widget: TutorialWidgetAction[];
-  /** One per `still` step, in step order: the timeline time where the step ran. */
-  stills: {name: string; atMs: number}[];
+  /**
+   * One per `still` step, in step order: the timeline time where the step ran, and whether the PNG is
+   * the video frame (`video`) or the same instant with the full editor and no pointer (`full`).
+   */
+  stills: {name: string; atMs: number; camera: "video" | "full"}[];
 }
 
 export const DEFAULT_GROUP = "General";
@@ -671,7 +674,7 @@ export function compileTutorial(options: {
         patch(t, {caption: step.text});
         break;
       case "still":
-        stills.push({name: step.name, atMs: t});
+        stills.push({name: step.name, atMs: t, camera: step.camera ?? "video"});
         break;
       case "move":
         move(step.target, step.durationMs);

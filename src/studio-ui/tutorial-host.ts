@@ -1048,7 +1048,11 @@ class TutorialController {
     }
   }
 
-  render(timeMs: number): void {
+  /**
+   * Draws the frame at `timeMs`. `full` draws the same instant with the camera on the whole frame and
+   * no pointer, for a `still` step with `camera: "full"`; the next render draws the video again.
+   */
+  render(timeMs: number, options: {full?: boolean} = {}): void {
     if (!this.timeline || !this.#plan) throw new Error("Tutorial host is not set up.");
     const state = this.#state(timeMs);
     // Measure with the camera removed: getBoundingClientRect and elementFromPoint then see stage px.
@@ -1057,9 +1061,11 @@ class TutorialController {
     this.#cursor = this.#pointerAt(timeMs);
     const shape = this.#cursorShape(state, timeMs);
     // Apply the camera last. It frames the crop (or the whole stage) and never shows outside it.
-    const {zoom, tx, ty, css, view} = cameraTransform(this.#plan, timeMs);
+    const {zoom, tx, ty, css, view} = cameraTransform(options.full ? {frame: this.#plan.frame, keys: []} : this.#plan, timeMs);
     this.cameraLayer.style.transform = css;
     this.#placeCursor(state, timeMs, shape, {x: this.#cursor.x * zoom + tx, y: this.#cursor.y * zoom + ty}, zoom);
+    this.cursor.style.visibility = options.full ? "hidden" : "";
+    this.ripple.style.visibility = options.full ? "hidden" : "";
     this.#placeCaption(state, timeMs, view);
   }
 

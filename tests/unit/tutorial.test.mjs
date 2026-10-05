@@ -270,14 +270,14 @@ test("the recipe schema accepts autoZoom as a switch or a zoom from 1.2 to 2.5",
 test("a still step takes no time and records where the timeline is", () => {
   const steps = [{action: "wait", ms: 400}, {action: "selectLayer"}, {action: "openGroup", group: "Colors"}];
   const plain = compile(steps);
-  const withStills = compile([{action: "still", name: "start"}, steps[0], {action: "still", name: "before-layer"}, steps[1], steps[2], {action: "still", name: "colors"}]);
+  const withStills = compile([{action: "still", name: "start"}, steps[0], {action: "still", name: "before-layer"}, steps[1], steps[2], {action: "still", name: "colors", camera: "full"}]);
   assert.equal(withStills.endMs, plain.endMs);
   assert.deepEqual(withStills.patches, plain.patches);
   assert.deepEqual(withStills.moves, plain.moves);
   assert.deepEqual(withStills.stills, [
-    {name: "start", atMs: 0},
-    {name: "before-layer", atMs: 400},
-    {name: "colors", atMs: plain.endMs}
+    {name: "start", atMs: 0, camera: "video"},
+    {name: "before-layer", atMs: 400, camera: "video"},
+    {name: "colors", atMs: plain.endMs, camera: "full"}
   ]);
   assert.deepEqual(plain.stills, []);
 });
@@ -295,7 +295,9 @@ test("still names are safe, unique file-name ids, and only a tutorial video has 
   assert.deepEqual(tutorialStillNames(undefined), []);
   const recipe = {schemaVersion: 1, id: "r", name: "R", scenes: ["s"], outputs: {screenshots: false, video: video([{action: "still", name: "a"}])}};
   assert.equal(recipeSchema.safeParse(recipe).success, true);
-  for (const steps of [[{action: "still"}], [{action: "still", name: "Colors Open"}], [{action: "still", name: "a--b"}]]) {
+  recipe.outputs.video.tutorial.steps = [{action: "still", name: "a", camera: "full"}];
+  assert.equal(recipeSchema.safeParse(recipe).success, true);
+  for (const steps of [[{action: "still"}], [{action: "still", name: "Colors Open"}], [{action: "still", name: "a--b"}], [{action: "still", name: "a", camera: "zoom"}]]) {
     recipe.outputs.video.tutorial.steps = steps;
     assert.equal(recipeSchema.safeParse(recipe).success, false, JSON.stringify(steps));
   }

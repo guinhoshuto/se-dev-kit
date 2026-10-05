@@ -30,7 +30,7 @@
           {"action": "click", "target": "group:Content"},
           {"action": "openGroup", "group": "Colors"},
           {"action": "wait", "ms": 1000},
-          {"action": "still", "name": "colors-open"},
+          {"action": "still", "name": "colors-open", "camera": "full"},
           {"action": "click", "target": "group:Colors"},
           {"action": "openGroup", "group": "Layout"},
           {"action": "wait", "ms": 1000},

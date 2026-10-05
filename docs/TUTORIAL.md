@@ -51,7 +51,7 @@ Steps run in order. Each one advances an internal clock, and the whole script mu
 | --- | --- |
 | `wait` | Pause for `ms`. |
 | `caption` | Show a centered caption; `null` hides it. Captions do not take time. |
-| `still` | Save a PNG of the editor at this point of the script as `<variant>-still-<name>.png` (see [Stills](#stills)). Stills do not take time. |
+| `still` | Save a PNG of the editor at this point of the script as `<variant>-still-<name>.png`, as the video shows it or, with `camera: "full"`, the whole editor without the pointer (see [Stills](#stills)). Stills do not take time. |
 | `selectLayer` | Click the layer, then the **Settings** section. |
 | `openGroup` | Expand a FIELDS group (ungrouped fields are in `General`). |
 | `setField` | Open the field's group if needed and edit it the way a person would: select and type text and numbers; open the color picker for `colorpicker` fields (see below); drag sliders; open dropdowns and pick an option; toggle checkboxes. When the edit is committed, the widget reloads with the new value, as in StreamElements (`widget.fieldUpdate: "reload"`, the default), or receives `onWidgetUpdate` with `"event"`. |
@@ -64,14 +64,17 @@ Fixture events still run at their `atMs` times, and fixture chat messages also a
 
 ### Stills
 
-A `still` step (`{"action": "still", "name": "colors-open"}`) keeps one frame of the video as a PNG, for a listing image of the editor with a group open. It changes nothing in the video: the step takes no time, and the PNG is a byte copy of the first video frame at or after the step's time (the last frame when the video ends first), at the video's size and crop, with the camera, cursor, and captions as they are in that frame. Put a `wait` before it so an opening group or menu has settled, and turn `autoZoom` off or let the camera return to the full editor when the still should show the whole editor.
+A `still` step (`{"action": "still", "name": "colors-open", "camera": "full"}`) keeps the editor at one instant of the video as a PNG, for a listing image of the editor with a group open. It changes nothing in the video: the step takes no time, and the instant is the first video frame at or after the step's time (the last frame when the video ends first), at the video's size and crop. Put a `wait` before it so an opening group or menu has settled.
+
+- **`camera: "video"`** (the default). The PNG is a byte copy of that frame, with the camera, pointer, and captions as the video shows them; with auto zoom that is often a close-up.
+- **`camera: "full"`**. The same instant is drawn again with the camera on the whole editor (or the whole crop) and without the pointer and click ripple, then screenshotted; captions, menus, and the widget stay as they are at that instant. The next frame draws the video again, so the video is the same with or without it.
 
 - **Name.** `name` is lowercase letters, numbers, and single hyphens, unique within the script; the file is `<variant>-still-<name>.png` next to the video. A malformed name fails `validate`; a repeated one fails `--dry-run` and the render, before any file is written.
 - **Kept.** Stills stay when the frames are deleted after the encode, and Studio jobs publish them with the video. Like every planned target, an existing still needs `--force`.
-- **Manifest.** The variant's entry lists them under `stills`: `name`, the step's `atMs`, the copied `frame` and its `timestampMs`, and the `file` with its size and SHA-256, which equals that frame's hash in `frameSequence`.
+- **Manifest.** The variant's entry lists them under `stills`: `name`, `camera`, the step's `atMs`, the `frame` it shows and its `timestampMs`, and the `file` with its size and SHA-256. For a `video` still that hash equals the frame's hash in `frameSequence`.
 - **Disk.** The estimate counts each still as one tutorial frame, kept in the final size.
 
-The listing example `examples/basic-chat/recipes/listing-tutorial.json` keeps `colors-open`, the editor with the Colors group open.
+The listing example `examples/basic-chat/recipes/listing-tutorial.json` keeps `colors-open`, the whole editor with the Colors group open.
 
 The sidebar has no scrollbar, and like the real one it stays where it was left. When the cursor heads for a group header or a field row outside it (a long open group pushes the next ones below the editor), the sidebar scrolls just enough, eased over the first 450 ms of the move, to show it with a 24 px margin, which keeps a field's label in view too. A target already in view does not scroll it, so scripts take the same time either way. When an open group closes and the content gets shorter, the browser clamps the scroll, as the real editor does. A select menu opens over its field wherever the scroll left it, and stays 8 px inside the editor, as md-select does.
 

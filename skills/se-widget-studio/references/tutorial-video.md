@@ -44,7 +44,7 @@ Set `"mode": "tutorial"` on a recipe's video and write the script in `outputs.vi
 This is the Studio's bundled example, and it runs 28 seconds.
 
 - **Local Studio (the default).** Submit it with `run --kind render --selection <recipe-id>`; `video:<scene-id>` has no tutorial mode. A tutorial has no length cap there; plan its disk use as [studio-workflow.md](studio-workflow.md#plan-a-large-batch) describes.
-- **For a store listing**, keep the tutorial within the store's video length (15 seconds on Etsy, see [known-limits.md](known-limits.md)): show fewer field groups rather than speeding up the moves, or split a longer walkthrough into several tutorial recipes, each starting with `selectLayer`. The Studio's `examples/basic-chat/recipes/listing-tutorial.json` is the model: each group opened, held for a second, and closed, then one chat message, in 14 of its 15 seconds, with the dated Etsy preset. Its `still` step keeps the editor with Colors open as a listing image (the panels slot of the thumbnail generator); put a `wait` before a still so the group has settled. The render manifest lists the stills under `stills`.
+- **For a store listing**, keep the tutorial within the store's video length (15 seconds on Etsy, see [known-limits.md](known-limits.md)): show fewer field groups rather than speeding up the moves, or split a longer walkthrough into several tutorial recipes, each starting with `selectLayer`. The Studio's `examples/basic-chat/recipes/listing-tutorial.json` is the model: each group opened, held for a second, and closed, then one chat message, in 14 of its 15 seconds, with the dated Etsy preset. Its `still` step (`camera: "full"`) keeps the whole editor with Colors open as a listing image (the panels slot of the thumbnail generator); put a `wait` before a still so the group has settled. The render manifest lists the stills under `stills`.
 - **The paused hosted deployment** limits a video variant to 15 seconds at up to 30 fps.
 
 ## Layout
@@ -62,7 +62,7 @@ Steps run in order, and each one advances the tutorial clock.
 |---|---|
 | `wait` | Pause for `ms`. |
 | `caption` | Show a centered caption `text`; `null` hides it. Captions take no time. |
-| `still` | Keep the video frame at this point as `<variant>-still-<name>.png` (`name`: lowercase letters, numbers, and hyphens, unique). It takes no time and changes nothing in the video; the PNG is a byte copy of the first frame at or after the step, camera and cursor included, and it stays when the frames are deleted. |
+| `still` | Keep the editor at this point as `<variant>-still-<name>.png` (`name`: lowercase letters, numbers, and hyphens, unique). It takes no time and changes nothing in the video, and the PNG stays when the frames are deleted. By default it is a byte copy of the first frame at or after the step, camera zoom and pointer included; `camera: "full"` draws that instant with the whole editor and no pointer, the usual choice for a listing image. |
 | `selectLayer` | Click the layer, then the **Settings** section. |
 | `openGroup` | Expand a FIELDS group (ungrouped fields are in `General`). |
 | `setField` | Set `field` to `value` as a person would: select and type text and numbers, drag sliders, open dropdowns and pick an option, toggle checkboxes, and use the color picker for `colorpicker` fields. The widget reloads when the edit is committed. |

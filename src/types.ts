@@ -195,7 +195,7 @@ export type TutorialEmulateKind = "follower" | "subscriber" | "tip" | "cheer" | 
 export type TutorialStep =
   | {action: "wait"; ms: number}
   | {action: "caption"; text: string | null}
-  | {action: "still"; name: string}
+  | {action: "still"; name: string; camera?: "video" | "full"}
   | {action: "move"; target: TutorialTarget; durationMs?: number}
   | {action: "click"; target: TutorialTarget; durationMs?: number}
   | {action: "selectLayer"}

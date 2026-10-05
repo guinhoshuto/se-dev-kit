@@ -125,6 +125,7 @@ interface ArtifactFonts {
 /** A tutorial `still` step's PNG: the frame it copies and where it was written. */
 interface VideoStill {
   name: string;
+  camera: "video" | "full";
   /** Timeline time of the step. */
   atMs: number;
   frame: number;
@@ -661,12 +662,7 @@ async function renderVideoFrames(options: {
       await sampleFrameAnimations(opened.page, timestampMs);
       // A light settle catches stylesheet swaps made by timers; it costs next to nothing when idle.
       noteFonts(await captureHostSettle(opened.page, SETTLE_DEADLINE_MS, true), false);
-      if (tutorial) {
-        await opened.page.evaluate(
-          (time) => (window as unknown as {__SWS_TUTORIAL__: {render: (value: number) => void}}).__SWS_TUTORIAL__.render(time),
-          timestampMs
-        );
-      }
+      if (tutorial) await renderTutorialFrame(opened.page, timestampMs, false);
       // A discovery pass keeps the timeline running for the URLs it would still request, without frames.
       if (discovering()) continue;
       const target = resolve(framesDirectory, `frame-${String(index).padStart(4, "0")}.png`);
@@ -681,8 +677,14 @@ async function renderVideoFrames(options: {
       for (const still of stillPlan) {
         if (still.frame !== index) continue;
         const path = resolve(options.recipeDirectory, `${options.variant.id}-still-${still.name}.png`);
-        await atomicWriteFile(options.outputRoot, path, await readFile(target), options.temporaryFiles);
-        stills.push({name: still.name, atMs: still.atMs, frame: index, timestampMs, path});
+        if (still.camera === "full") {
+          // The same instant with the full editor and no pointer; the next frame draws the video again.
+          await renderTutorialFrame(opened.page, timestampMs, true);
+          await screenshotScene(opened.page, {...options.variant, output: {...options.variant.output, format: "png"}}, options.outputRoot, path, options.temporaryFiles);
+        } else {
+          await atomicWriteFile(options.outputRoot, path, await readFile(target), options.temporaryFiles);
+        }
+        stills.push({name: still.name, camera: still.camera, atMs: still.atMs, frame: index, timestampMs, path});
       }
       options.onFrame(frames.length);
     }
@@ -731,6 +733,14 @@ async function renderVideoFrames(options: {
     sequence,
     sequenceText
   };
+}
+
+/** Draws the tutorial editor at `timeMs`; `full` frames the whole editor without the pointer, for a still. */
+async function renderTutorialFrame(page: Page, timeMs: number, full: boolean): Promise<void> {
+  await page.evaluate(
+    ({time, whole}) => (window as unknown as {__SWS_TUTORIAL__: {render: (value: number, options: {full: boolean}) => void}}).__SWS_TUTORIAL__.render(time, {full: whole}),
+    {time: timeMs, whole: full}
+  );
 }
 
 /** Deletes an earlier run's manifest.json when it is a regular file inside the output root; anything else stays. */
@@ -1085,6 +1095,7 @@ export async function renderRecipe(
       for (const still of videoStills) {
         stillEntries.push({
           name: still.name,
+          camera: still.camera,
           atMs: still.atMs,
           frame: still.frame,
           timestampMs: still.timestampMs,
