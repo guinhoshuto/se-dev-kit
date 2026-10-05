@@ -10,7 +10,8 @@ import {renderRecipe} from "../../dist/capture/renderer.js";
 import {loadProject} from "../../dist/config/load.js";
 import {captureHostUpdateFields, openScene} from "../../dist/scenarios/runner.js";
 import {startStudioServer} from "../../dist/server/server.js";
-import {compileVariantTutorial, EMULATE_MENU, tutorialCamera} from "../../dist/tutorial/variant.js";
+import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera} from "../../dist/tutorial/variant.js";
+import {createHash} from "node:crypto";
 
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
 
@@ -25,6 +26,9 @@ test("tutorial mode records the widget inside the editor replica with scripted U
   const project = await loadProject({inputDirectory: exampleRoot});
   const recipe = structuredClone(project.recipes.find((item) => item.id === "tutorial-setup").value);
   recipe.outputs.video.fps = 2;
+  const steps = recipe.outputs.video.tutorial.steps;
+  steps.splice(steps.findIndex((step) => step.action === "selectLayer") + 1, 0, {action: "still", name: "layer-selected"});
+  steps.unshift({action: "still", name: "start"});
 
   const result = await renderRecipe(project, recipe, {
     outputRoot,
@@ -50,6 +54,23 @@ test("tutorial mode records the widget inside the editor replica with scripted U
   assert.equal(frames.height, 1080);
   const hashes = new Set(frames.frames.map((frame) => frame.sha256));
   assert.ok(hashes.size > frames.frames.length / 2, "the scripted editor changes across the recording");
+
+  // Each still is a byte copy of the frame it names, written next to the video and kept after the frames go.
+  assert.deepEqual(entry.stills.map((still) => still.name), ["start", "layer-selected"]);
+  assert.equal(entry.stills[0].atMs, 0);
+  assert.ok(entry.stills[1].atMs > 0);
+  for (const still of entry.stills) {
+    assert.equal(still.frame, stillFrameIndex(still.atMs, 2, frames.frames.length));
+    assert.equal(still.timestampMs, frames.frames[still.frame].timestampMs);
+    assert.equal(still.file.file, `tutorial-setup/${entry.id}-still-${still.name}.png`);
+    assert.deepEqual([still.file.width, still.file.height], [1920, 1080]);
+    const bytes = await readFile(join(outputRoot, still.file.file));
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    assert.equal(digest, still.file.sha256);
+    assert.equal(digest, frames.frames[still.frame].sha256, `still ${still.name} is frame ${still.frame}`);
+    assert.ok(result.artifacts.some((path) => path.endsWith(`/${still.file.file}`)), `still ${still.name} is an artifact`);
+  }
+  assert.notEqual(entry.stills[0].file.sha256, entry.stills[1].file.sha256, "the editor changed between the two stills");
 });
 
 test("colorpicker steps open the md-color-picker dialog on stage and commit the exact value", {timeout: 180_000}, async (t) => {

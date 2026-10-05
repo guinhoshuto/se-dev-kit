@@ -1,6 +1,7 @@
 import {StudioError} from "./errors.js";
 
-const SAFE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** Lowercase letters and numbers in hyphen-separated runs: safe in a file name and a URL. */
+export const SAFE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export function slugify(value: string): string {
   const slug = value

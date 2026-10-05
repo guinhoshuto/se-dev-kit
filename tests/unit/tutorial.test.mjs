@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import {fileURLToPath} from "node:url";
 import test from "node:test";
 
 import {normalizeFields} from "../../dist/config/fields.js";
 import {recipeSchema} from "../../dist/config/schemas.js";
 import {compileTutorial} from "../../dist/tutorial/timeline.js";
+import {stillFrameIndex, tutorialStillNames} from "../../dist/tutorial/variant.js";
+import {planRecipe} from "../../dist/capture/renderer.js";
+import {loadProject} from "../../dist/config/load.js";
 
 const fields = [
   {id: "title", label: "Title", type: "text", group: "Content", value: "Hello", options: [], definition: {}, editable: true},
@@ -261,4 +265,70 @@ test("the recipe schema accepts autoZoom as a switch or a zoom from 1.2 to 2.5",
   for (const value of [{zoom: 1.1}, {zoom: 2.6}, {zoom: "2"}, {enabled: true}, "yes"]) {
     assert.equal(recipeSchema.safeParse(recipe(value)).success, false, JSON.stringify(value));
   }
+});
+
+test("a still step takes no time and records where the timeline is", () => {
+  const steps = [{action: "wait", ms: 400}, {action: "selectLayer"}, {action: "openGroup", group: "Colors"}];
+  const plain = compile(steps);
+  const withStills = compile([{action: "still", name: "start"}, steps[0], {action: "still", name: "before-layer"}, steps[1], steps[2], {action: "still", name: "colors"}]);
+  assert.equal(withStills.endMs, plain.endMs);
+  assert.deepEqual(withStills.patches, plain.patches);
+  assert.deepEqual(withStills.moves, plain.moves);
+  assert.deepEqual(withStills.stills, [
+    {name: "start", atMs: 0},
+    {name: "before-layer", atMs: 400},
+    {name: "colors", atMs: plain.endMs}
+  ]);
+  assert.deepEqual(plain.stills, []);
+});
+
+test("still names are safe, unique file-name ids, and only a tutorial video has them", () => {
+  const video = (steps, extra = {}) => ({enabled: true, mode: "tutorial", durationMs: 5000, fps: 30, tutorial: {steps}, ...extra});
+  assert.deepEqual(tutorialStillNames(video([{action: "still", name: "panel"}, {action: "wait", ms: 1}, {action: "still", name: "colors-open"}])), ["panel", "colors-open"]);
+  assert.throws(() => tutorialStillNames(video([{action: "still", name: "Panel"}])), (error) => error.code === "INVALID_ID");
+  assert.throws(() => tutorialStillNames(video([{action: "still", name: "../x"}])), (error) => error.code === "INVALID_ID");
+  assert.throws(
+    () => tutorialStillNames(video([{action: "still", name: "a"}, {action: "still", name: "a"}])),
+    (error) => error.code === "TUTORIAL_STILL_DUPLICATE"
+  );
+  assert.deepEqual(tutorialStillNames(video([{action: "still", name: "a"}], {enabled: false})), []);
+  assert.deepEqual(tutorialStillNames(undefined), []);
+  const recipe = {schemaVersion: 1, id: "r", name: "R", scenes: ["s"], outputs: {screenshots: false, video: video([{action: "still", name: "a"}])}};
+  assert.equal(recipeSchema.safeParse(recipe).success, true);
+  for (const steps of [[{action: "still"}], [{action: "still", name: "Colors Open"}], [{action: "still", name: "a--b"}]]) {
+    recipe.outputs.video.tutorial.steps = steps;
+    assert.equal(recipeSchema.safeParse(recipe).success, false, JSON.stringify(steps));
+  }
+});
+
+test("a still is the first frame at or after its step, or the last frame", () => {
+  // At 30 fps, frame 12 is at 400 ms and frame 13 at 433 ms.
+  assert.equal(stillFrameIndex(0, 30, 450), 0);
+  assert.equal(stillFrameIndex(400, 30, 450), 12);
+  assert.equal(stillFrameIndex(401, 30, 450), 13);
+  assert.equal(stillFrameIndex(433, 30, 450), 13);
+  assert.equal(stillFrameIndex(434, 30, 450), 14);
+  assert.equal(stillFrameIndex(1250, 2, 30), 3);
+  assert.equal(stillFrameIndex(15000, 30, 450), 449);
+});
+
+test("the plan lists one PNG per still next to the video and counts its bytes", async () => {
+  const project = await loadProject({inputDirectory: fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url))});
+  const recipe = structuredClone(project.recipes.find((item) => item.id === "listing-tutorial").value);
+  const {plan: before} = await planRecipe(project, recipe, {ffmpegPath: "/usr/bin/true", ffprobePath: "/usr/bin/true"});
+  recipe.outputs.video.tutorial.steps.splice(4, 0, {action: "still", name: "content-open"});
+  recipe.outputs.video.tutorial.steps.push({action: "still", name: "chat"});
+  const {plan} = await planRecipe(project, recipe, {ffmpegPath: "/usr/bin/true", ffprobePath: "/usr/bin/true"});
+  const stills = plan.targets.filter((target) => /-still-/.test(target));
+  // In step order: the added one with Content open, the example's own with Colors open, the added last one.
+  assert.deepEqual(stills.map((target) => target.split("/").slice(-2).join("/")), [
+    `listing-tutorial/${plan.variants[0].id}-still-content-open.png`,
+    `listing-tutorial/${plan.variants[0].id}-still-colors-open.png`,
+    `listing-tutorial/${plan.variants[0].id}-still-chat.png`
+  ]);
+  assert.equal(plan.totalTargets, before.totalTargets + 2);
+  // Each still is a full-HD tutorial frame at the frame rate, kept after the frames are discarded.
+  const still = Math.ceil((1920 * 1080 * plan.estimate.bytesPerPixel.frame * 1000) / 1000);
+  assert.equal(plan.estimate.variants[0].persistentBytes, before.estimate.variants[0].persistentBytes + 2 * still);
+  assert.equal(plan.estimate.finalBytes, before.estimate.finalBytes + 2 * still);
 });

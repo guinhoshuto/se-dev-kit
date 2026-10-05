@@ -31,7 +31,7 @@ import {
   SETTLE_DEADLINE_MS,
   type OpenSceneResult
 } from "../scenarios/runner.js";
-import {compileVariantTutorial, EMULATE_MENU, tutorialCamera} from "../tutorial/variant.js";
+import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, tutorialStillNames} from "../tutorial/variant.js";
 import type {TutorialTimeline} from "../tutorial/timeline.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
 import {closeStudioBrowser, launchStudioBrowser, type BrowserDetection, type FontRoute} from "./browser.js";
@@ -120,6 +120,16 @@ interface ArtifactFonts {
   warnings: string[];
   /** Virtual time added to a still so canvas text drawn in fallback could redraw with its face. */
   redrawMs: number;
+}
+
+/** A tutorial `still` step's PNG: the frame it copies and where it was written. */
+interface VideoStill {
+  name: string;
+  /** Timeline time of the step. */
+  atMs: number;
+  frame: number;
+  timestampMs: number;
+  path: string;
 }
 
 /** One field change of a tutorial video: its time, and the virtual time a reload's ready selector used. */
@@ -333,6 +343,7 @@ function targetPaths(
   const targets: string[] = [];
   const directory = resolve(outputRoot, recipe.id);
   const screenshots = recipe.outputs?.screenshots !== false;
+  const stills = tutorialStillNames(recipe.outputs?.video);
   for (const variant of variants) {
     const format = variant.output.format ?? "png";
     if (screenshots) targets.push(resolve(directory, `${variant.id}.${format === "jpeg" ? "jpg" : "png"}`));
@@ -347,6 +358,7 @@ function targetPaths(
         targets.push(resolve(directory, variant.id, "frames", `frame-${String(index).padStart(4, "0")}.png`));
       }
       targets.push(resolve(directory, variant.id, "frames", "frames.json"));
+      for (const name of stills) targets.push(resolve(directory, `${variant.id}-still-${name}.png`));
       if (includeVideo) targets.push(resolve(directory, `${variant.id}.${video.format ?? "mp4"}`));
     }
   }
@@ -383,7 +395,7 @@ function renderWorkload(
   let targetsPerVariant = 0n;
   if (recipe.outputs?.screenshots !== false) targetsPerVariant += 1n;
   if (recipe.outputs?.thumbnails) targetsPerVariant += 1n;
-  if (video) targetsPerVariant += BigInt(frameCountPerVariant) + 1n + (includeVideo ? 1n : 0n);
+  if (video) targetsPerVariant += BigInt(frameCountPerVariant) + 1n + (includeVideo ? 1n : 0n) + BigInt(tutorialStillNames(video).length);
   const totalFrames = variantCount * BigInt(frameCountPerVariant);
   const totalTargets = variantCount * targetsPerVariant
     + (recipe.outputs?.contactSheet ? 1n : 0n)
@@ -551,6 +563,8 @@ async function renderVideoFrames(options: {
   framesDirectory: string;
   framesManifest: string;
   frameFiles: string[];
+  /** One per tutorial `still` step: a copy of the first frame at or after the step, kept with the video. */
+  stills: VideoStill[];
   /** The exact frames.json content and text, so the manifest keeps them after the files are discarded. */
   sequence: JsonObject;
   sequenceText: string;
@@ -581,6 +595,8 @@ async function renderVideoFrames(options: {
   const framesDirectory = resolve(options.recipeDirectory, options.variant.id, "frames");
   const frameCount = videoFrameCount(options.video);
   const frames: {file: string; timestampMs: number; sha256: string}[] = [];
+  const stillPlan = (tutorial?.stills ?? []).map((still) => ({...still, frame: stillFrameIndex(still.atMs, options.video.fps, frameCount)}));
+  const stills: VideoStill[] = [];
   const fieldUpdates: FieldUpdateRecord[] = [];
   let currentTime = 0;
   let eventIndex = 0;
@@ -662,6 +678,12 @@ async function renderVideoFrames(options: {
         options.temporaryFiles
       );
       frames.push({file: portable(framesDirectory, target), timestampMs, sha256: await hashFile(target)});
+      for (const still of stillPlan) {
+        if (still.frame !== index) continue;
+        const path = resolve(options.recipeDirectory, `${options.variant.id}-still-${still.name}.png`);
+        await atomicWriteFile(options.outputRoot, path, await readFile(target), options.temporaryFiles);
+        stills.push({name: still.name, atMs: still.atMs, frame: index, timestampMs, path});
+      }
       options.onFrame(frames.length);
     }
     const runtimeErrors = (await frameEvents(opened.page)).filter(
@@ -683,7 +705,7 @@ async function renderVideoFrames(options: {
   }
   const framesManifest = resolve(framesDirectory, "frames.json");
   if (discovering()) {
-    return {discovery: true, fonts: {families: fontFamilies, warnings: [...fontWarnings], redrawMs: 0}, framesDirectory, framesManifest, frameFiles: [], sequence: {}, sequenceText: ""};
+    return {discovery: true, fonts: {families: fontFamilies, warnings: [...fontWarnings], redrawMs: 0}, framesDirectory, framesManifest, frameFiles: [], stills: [], sequence: {}, sequenceText: ""};
   }
   const sequence: JsonObject = {
     schemaVersion: 1,
@@ -705,6 +727,7 @@ async function renderVideoFrames(options: {
     framesDirectory,
     framesManifest,
     frameFiles: frames.map((frame) => frame.file),
+    stills,
     sequence,
     sequenceText
   };
@@ -920,6 +943,7 @@ export async function renderRecipe(
       let screenshotPath: string | undefined;
       let thumbnailPath: string | undefined;
       let videoPath: string | undefined;
+      let videoStills: VideoStill[] = [];
       let framesPath: string | undefined;
       let framesManifestPath: string | undefined;
       let framesManifestHash: string | undefined;
@@ -991,6 +1015,8 @@ export async function renderRecipe(
         if (renderedFrames.discovery) return;
         videoFonts = renderedFrames.fonts;
         videoFieldUpdate = renderedFrames.fieldUpdate;
+        videoStills = renderedFrames.stills;
+        for (const still of videoStills) artifacts.push(still.path);
         framesPath = renderedFrames.framesDirectory;
         framesManifestPath = renderedFrames.framesManifest;
         framesManifestHash = sha256(renderedFrames.sequenceText);
@@ -1055,6 +1081,16 @@ export async function renderRecipe(
       if (thumbnailPath) files.thumbnail = await describeArtifact(outputRoot, thumbnailPath);
       if (videoPath) files.video = await describeArtifact(outputRoot, videoPath, videoDimensions);
       if (framesManifestPath && framesRetained) files.framesManifest = await describeArtifact(outputRoot, framesManifestPath);
+      const stillEntries: JsonObject[] = [];
+      for (const still of videoStills) {
+        stillEntries.push({
+          name: still.name,
+          atMs: still.atMs,
+          frame: still.frame,
+          timestampMs: still.timestampMs,
+          file: await describeArtifact(outputRoot, still.path)
+        });
+      }
       for (const fonts of [stillFonts, videoFonts]) {
         if (!fonts) continue;
         fonts.warnings.forEach((warning) => fontAccount.issues.add(warning));
@@ -1074,6 +1110,7 @@ export async function renderRecipe(
         ...(manifestFonts(stillFonts) ? {fonts: manifestFonts(stillFonts)!} : {}),
         ...(manifestFonts(videoFonts) ? {videoFonts: manifestFonts(videoFonts)!} : {}),
         ...(videoFieldUpdate ? {fieldUpdate: videoFieldUpdate} : {}),
+        ...(stillEntries.length > 0 ? {stills: stillEntries} : {}),
         parameters: JSON.parse(JSON.stringify({
           background: variant.background,
           viewport: variant.viewport,

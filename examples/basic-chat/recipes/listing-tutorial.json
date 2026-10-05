@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "listing-tutorial",
   "name": "Listing settings tutorial",
-  "description": "A 15-second silent settings walkthrough for a store listing: each FIELDS group opened and closed in turn, within the Etsy video length.",
+  "description": "A 15-second silent settings walkthrough for a store listing: each FIELDS group opened and closed in turn, within the Etsy video length, plus a still of the editor with Colors open.",
   "marketplacePreset": "etsy-listing-2026-09",
   "scenes": [
     "tutorial-editor"
@@ -30,6 +30,7 @@
           {"action": "click", "target": "group:Content"},
           {"action": "openGroup", "group": "Colors"},
           {"action": "wait", "ms": 1000},
+          {"action": "still", "name": "colors-open"},
           {"action": "click", "target": "group:Colors"},
           {"action": "openGroup", "group": "Layout"},
           {"action": "wait", "ms": 1000},

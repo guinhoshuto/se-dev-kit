@@ -1,4 +1,5 @@
 import {z} from "zod";
+import {SAFE_ID} from "../shared/ids.js";
 
 const jsonPrimitiveSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()]);
 export const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
@@ -193,6 +194,7 @@ const tutorialMoveDurationSchema = z.number().int().min(0).max(10_000).optional(
 const tutorialStepSchema = z.discriminatedUnion("action", [
   z.object({action: z.literal("wait"), ms: z.number().int().min(0).max(120_000)}).strict(),
   z.object({action: z.literal("caption"), text: z.string().max(240).nullable()}).strict(),
+  z.object({action: z.literal("still"), name: z.string().max(64).regex(SAFE_ID, "still names use lowercase letters, numbers, and single hyphens")}).strict(),
   z.object({action: z.literal("move"), target: tutorialTargetSchema, durationMs: tutorialMoveDurationSchema}).strict(),
   z.object({action: z.literal("click"), target: tutorialTargetSchema, durationMs: tutorialMoveDurationSchema}).strict(),
   z.object({action: z.literal("selectLayer")}).strict(),
