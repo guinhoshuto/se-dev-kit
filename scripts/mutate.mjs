@@ -11,8 +11,14 @@
  * {file, from, to, test, name?, occurrences?}, or {"mutations": [...]}. Paths are relative to the
  * checkout. `from` must occur exactly `occurrences` times (default 1) and every occurrence is swapped.
  *
- * Exit codes: 0 every mutation was killed; 1 at least one survived; 2 usage or setup error (nothing
- * was judged and every file is back); 3 a file could not be put back (the backup path is printed).
+ * A test under tests/integration starts Chrome, so a run with one passes the test runner's gate for a
+ * browser suite (scripts/run-tests.mjs): it takes the machine-wide render slot without waiting, asks
+ * the machine check, and holds the slot until its last test ends; the tests inherit it
+ * (RENDER_SLOT_HELD). A held slot or a busy machine stops the run before any test or mutation.
+ *
+ * Exit codes: 0 every mutation was killed; 1 at least one survived; 2 usage or setup error, or no free
+ * machine for a test that starts Chrome (nothing was judged and every file is back); 3 a file could
+ * not be put back (the backup path is printed).
  */
 import {execFileSync, spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -20,6 +26,7 @@ import {existsSync, rmSync, writeFileSync} from 'node:fs';
 import {lstat, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {dirname, isAbsolute, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
+import {SUITES, gate, takeBrowserSlot} from './run-tests.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const EXIT = {killed: 0, survived: 1, usage: 2, restore: 3};
@@ -40,8 +47,11 @@ Swaps a literal (split/join, so $ patterns stay literal), checks the swap landed
 file is under src/, runs the test file with --test-timeout and --test-force-exit ([browser] tests skipped),
 and restores the file, checked byte for byte, and git diff. The named test must be green before the swap.
 A mutation is killed when the run is not green: a failure, a cancellation (a timeout), a crash or a hang.
+A test under tests/integration starts Chrome: the run then holds the render slot, taken without waiting,
+once the machine check says the machine is free, as a browser suite of npm test does; otherwise it stops
+before anything runs.
 A plan is a JSON array of {file, from, to, test, name?, occurrences?}, or {"mutations": [...]}.
-Exit codes: 0 all killed, 1 some survived, 2 usage or setup error, 3 a file could not be restored.`;
+Exit codes: 0 all killed, 1 some survived, 2 usage or setup error or no free machine, 3 a file could not be restored.`;
 
 export function parseArgs(args) {
   const options = {timeoutMs: DEFAULT_TIMEOUT_MS, allowLiveCheckout: false};
@@ -107,6 +117,12 @@ export async function checkMutation(raw, index, root) {
   usage(/\.test\.(mjs|js|cjs|ts|mts)$/.test(test), `${where}: "test" must be a *.test.* file.`);
   return {file, from: raw.from, to: raw.to, test, name: raw.name, occurrences};
 }
+
+/** A test file of a suite whose every test starts Chrome (tests/integration); mutate skips the [browser] web tests. */
+export const opensChrome = test => Object.values(SUITES).some(suite => suite.browser && !suite.tagged && test.startsWith(`${suite.dir}/`));
+
+/** The test runner's gate for a browser suite: the render slot, taken without waiting, then the machine check. */
+const machineGate = () => gate({take: () => takeBrowserSlot({command: `node scripts/mutate.mjs ${process.argv.slice(2).join(' ')}`.trim().slice(0, 200)})});
 
 /** The spec reporter's totals and the names of the tests that failed. */
 export function summarize(output) {
@@ -208,9 +224,11 @@ function describe(result) {
 /**
  * Runs each mutation in turn: every `from` is found and every named test is green before any file
  * changes; each file is backed up under .cache/mutate/, mutated, tested, and restored before the next.
- * Returns {code, results}; throws UsageError for a setup problem and RestoreError when a file stays changed.
+ * When a test starts Chrome, nothing runs until `machine()` allows it, and what it returns is held
+ * until the last test ends. Returns {code, results}; throws UsageError for a setup problem or a refusal
+ * and RestoreError when a file stays changed.
  */
-export async function mutate(mutations, {root = ROOT, build = buildEngine, allowLiveCheckout = false, timeoutMs = DEFAULT_TIMEOUT_MS, log = console.log} = {}) {
+export async function mutate(mutations, {root = ROOT, build = buildEngine, allowLiveCheckout = false, timeoutMs = DEFAULT_TIMEOUT_MS, log = console.log, machine = machineGate} = {}) {
   usage(Array.isArray(mutations) && mutations.length > 0, 'There are no mutations to run.');
   const checked = [];
   for (const [index, raw] of mutations.entries()) checked.push(await checkMutation(raw, index, root));
@@ -229,10 +247,17 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
     catch (error) {throw new UsageError(`${file}: ${error.message}`);}
   }
   const diff = gitDiff(root);
+  const chrome = checked.find(mutation => opensChrome(mutation.test));
   let distChanged = false;
+  let slot;
   const results = [];
   try {
     if (rebuilds) await build(root);
+    if (chrome) {
+      const allowed = await machine();
+      usage(allowed.ok, `${chrome.test} starts Chrome, and the machine is not free for it: ${allowed.reason}\nNo test ran and nothing was mutated. Wait for the machine (npm run wait-free) and run mutate again.`);
+      slot = allowed;
+    }
     const baselines = new Set();
     for (const {test, name} of checked) {
       const key = `${test}\0${name ?? ''}`;
@@ -263,6 +288,8 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
       }
     }
   } finally {
+    // The rebuild below starts no Chrome.
+    slot?.release();
     // dist/ goes back to the restored sources even when a step failed.
     if (distChanged) await build(root);
   }
