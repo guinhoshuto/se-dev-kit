@@ -9,7 +9,7 @@ import test from "node:test";
 import {fileURLToPath} from "node:url";
 
 import {BROWSER_MARKER as ENGINE_MARKER} from "../../dist/capture/browser.js";
-import {BROWSER_MARKER, browserGate, checkoutOrphans, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseVerdict} from "../../scripts/lib/machine.mjs";
+import {BROWSER_MARKER, browserGate, checkoutOrphans, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseVerdict} from "../../scripts/lib/machine.mjs";
 import {killStale} from "../../scripts/kill-stale.mjs";
 
 const ROOT = "/work/se-dev-kit";
@@ -63,8 +63,46 @@ test("another session's work is any headless or piped Chrome, Remotion or local 
   assert.deepEqual(busy, [10, 11, 21, 31, 50]);
 });
 
+test("Remotion is another session's render only while its CLI renders or its compositor runs, never for naming the word", () => {
+  // HAR-32, 2026-10-06: the bare `remotion` pattern reported a wrapper in a remotion-mock folder as a render.
+  for (const command of [
+    "node /x/node_modules/.bin/remotion render src/index.ts Comp out/a.mp4",
+    "node /opt/homebrew/bin/npx remotion still src/index.ts RegistroDemo out/f30.png --frame=30",
+    // The same npx once npm sets its process title: ps shows this, padded with the spaces left over.
+    "npm exec remotion still src/index.ts RegistroDemo out/f30.png --frame=30    ",
+    "/opt/homebrew/bin/node /x/node_modules/@remotion/cli/remotion-cli.js benchmark src/index.ts",
+    '/x/node_modules/@remotion/compositor-darwin-arm64/remotion {"type":"x"}'
+  ]) assert.equal(isHeavy(command), true, command);
+  for (const command of [
+    "node .cache/remotion-mock/slot-run.mts .cache/remotion-mock/all.sh",
+    "tail -f /x/remotion-mock/progress.log",
+    "vim remotion.config.ts",
+    "node /x/node_modules/.bin/remotion studio",
+    "node /x/node_modules/.bin/remotion compositions src/index.ts",
+    "npm exec remotion bundle src/index.ts"
+  ]) assert.equal(isHeavy(command), false, command);
+});
+
+test("Blender is another session's render only when its executable runs in the background (-b or --background)", () => {
+  // HAR-32: a 511 s Blender render in a Codex session went unseen by the machine check.
+  for (const command of [
+    "/Applications/Blender.app/Contents/MacOS/Blender -b scene.blend -a",
+    "/x/.cache/birthday-balloons/runtime/Blender.app/Contents/MacOS/Blender --background --factory-startup --python scripts/blender/birthday_balloons.py -- --output-dir out/review/2026-10-06-birthday-balloons",
+    "blender -b scene.blend -f 1"
+  ]) assert.equal(isHeavy(command), true, command);
+  for (const command of [
+    "/Applications/Blender.app/Contents/MacOS/Blender",
+    "/Applications/Blender.app/Contents/MacOS/Blender scene.blend",
+    // The Quick Look thumbnailer that ships inside Blender.app.
+    "/Volumes/Sandisk/Applications/Blender.app/Contents/PlugIns/blender-thumbnailer.appex/Contents/MacOS/blender-thumbnailer -BSServiceDomains {}",
+    // A command that only names it, like a request to an agent.
+    "claude -p render it with blender -b scene.blend -a"
+  ]) assert.equal(isHeavy(command), false, command);
+});
+
 test("the caller's ancestors, and a shell or pgrep that only mentions a pattern, are not another session's render", () => {
-  const check = "pgrep -fl 'Chrome.*headless|remotion|dist/cli/index.js'";
+  // The check names a heavy pattern (Chrome.*--headless), so only the wrapper rule keeps 700 and 710 out.
+  const check = "pgrep -fl 'Chrome.*--headless|remotion|dist/cli/index.js'";
   const list = [
     // An agent whose prompt names a render, the shell that chains the machine check before npm test, npm, the runner.
     {pid: 100, ppid: 1, command: '/opt/homebrew/bin/node /opt/homebrew/bin/codex exec "run node dist/cli/index.js render . --recipe listing"'},
@@ -73,7 +111,7 @@ test("the caller's ancestors, and a shell or pgrep that only mentions a pattern,
     {pid: 900, ppid: 300, command: "/opt/homebrew/bin/node scripts/run-tests.mjs unit integration"},
     // Another session runs the same check before a typecheck.
     {pid: 700, ppid: 1, command: `-zsh -c ${check}; npm run typecheck`},
-    {pid: 710, ppid: 700, command: "pgrep -fl Chrome.*headless|remotion|dist/cli/index.js"},
+    {pid: 710, ppid: 700, command: "pgrep -fl Chrome.*--headless|remotion|dist/cli/index.js"},
     // Another session's render, started through sh by npm.
     {pid: 800, ppid: 1, command: "sh -c node dist/cli/index.js render . --recipe listing"},
     {pid: 810, ppid: 800, command: "/opt/homebrew/bin/node /work/se-windows/node_modules/se-widget-studio/dist/cli/index.js render . --recipe listing"}

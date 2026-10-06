@@ -17,13 +17,23 @@ export const BROWSER_MARKER = '--se-widget-studio';
 /** Free space a browser suite needs before it starts: the machine rule is "no render below 3 GB free". */
 export const MIN_FREE_BYTES = 3 * 1024 ** 3;
 
-// A render or an automated browser from any session: the same patterns the machine rule greps for.
+// A render or an automated browser from any session: the same patterns as the machine check every repo
+// shares (PESADO in ~/obsidian/AI/scripts/maquina_livre.py).
+// Remotion counts while its CLI renders (the render, still and benchmark commands), called through
+// node_modules/.bin, remotion-cli.js, npx or npm exec (the title npx shows in ps), and while its compositor
+// runs; the Chrome it opens matches the headless patterns. Studio, compositions, bundle and any command
+// that only names the word (a folder, a config file, a log) do not count: on 2026-10-06 the bare `remotion`
+// pattern reported `node .cache/remotion-mock/slot-run.mts`, a wrapper that renders nothing (HAR-32).
+// Blender counts as its executable with -b or --background. A render started from Blender's UI stays
+// invisible to this check; before this rule, a 511 s Blender render in a Codex session went unseen.
 const HEAVY = [
   /\bChrom(e|ium)\b.*--headless/,
   /headless[_-]shell/,
   /--remote-debugging-pipe/,
-  /remotion/,
-  /dist\/cli\/index\.js\s+(render|record|capture)\b/
+  /(?:node_modules\/\.bin\/remotion|@remotion\/cli\/remotion-cli\.js|(?:^|[\s/])(?:npx|npm\s+exec)\s+remotion)\s+(?:render|still|benchmark)(?:\s|$)/,
+  /@remotion\/compositor-[^/\s]+\/remotion(?:\s|$)/,
+  /dist\/cli\/index\.js\s+(render|record|capture)\b/,
+  /^(?:\S*\/)?[Bb]lender\s(?:.*\s)?(?:-b|--background)(?:\s|$)/
 ];
 
 // A shell or a search tool whose command line only mentions a pattern (the machine check's own
