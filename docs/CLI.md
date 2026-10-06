@@ -128,6 +128,7 @@ Run `se-widget-studio <command> --help` for the installed contract.
 | `capture [root]` | Capture one scene. |
 | `record [root]` | Record one scene to video; PNG frames are removed after a validated encode unless `--keep-frames` is passed. |
 | `render [root] --recipe <id>` | Expand and render a recipe matrix. |
+| `review <page.html> <folder>...` | Write one HTML page over render folders, each image and video under its review code (`LT-03`); see [Review codes](CAPTURE.md#review-codes). Replacing the page takes `--force`. |
 
 Every command supports `--json` at the program level. Matrix rendering should begin with a dry run:
 

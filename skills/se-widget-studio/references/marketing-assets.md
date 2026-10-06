@@ -33,3 +33,4 @@ How to make store-listing media (cover images, field images, demo and tutorial v
 
 - Review in two rounds: a measured visual review (contrast, clipping, font, letterbox, edge alpha), the catalog fixes, then an independent check of the fixed media. Report each defect with the file and what was measured.
 - The owner approves listing media; an automated review does not.
+- Show the owner one page per widget: `se-widget-studio review <review-folder>/index.html <render-output>` (`--force` to rewrite it). Every image and video is under its review code (`LT-03`), the contact sheet cells too, and the owner quotes those codes; use the same codes in your report.

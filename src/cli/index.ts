@@ -14,6 +14,7 @@ import {createDefaultScene} from "../scenarios/state.js";
 import {startStudioServer} from "../server/server.js";
 import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser} from "../capture/browser.js";
 import {planRecipe, renderRecipe, singleSceneRecipe, type RenderResult, type RenderTraceEvent} from "../capture/renderer.js";
+import {reviewSummary, writeReviewPage} from "../capture/review.js";
 import {assertSupportedNode} from "../shared/node-support.js";
 import {RenderSlotError, withRenderSlot} from "../shared/render-slot.js";
 import {STUDIO_VERSION} from "../version.js";
@@ -449,6 +450,19 @@ program
     });
     report();
     if (results.some((result) => result.status === "intermediate") && !options.allowIntermediate) process.exitCode = 3;
+  });
+
+program
+  .command("review")
+  .description("Write one HTML page over render folders, each image and video under a short code (LT-03) to quote in a review.")
+  .argument("<page>", "Page to write, ending in .html")
+  .argument("<folders...>", "Recipe folders (with manifest.json), or output roots that hold them")
+  .option("--title <text>", "Page title", "Review")
+  .option("--force", "Replace an existing page")
+  .action(async (page: string, folders: string[], options: {title: string; force?: boolean}, command: Command) => {
+    const result = await writeReviewPage({page, folders, title: options.title, ...(options.force ? {force: true} : {})});
+    const json = globals(command).json;
+    print(json ? result : reviewSummary(result), json);
   });
 
 /** A finished command exits even if a stray handle, such as a browser that never exited, keeps the loop alive. */

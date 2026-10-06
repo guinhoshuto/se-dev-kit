@@ -38,6 +38,7 @@ import {closeStudioBrowser, launchStudioBrowser, type BrowserDetection, type Fon
 import {FontsMissingError, type FontResolver} from "../fonts/resolver.js";
 import {hashFile, hashJson, sha256} from "./hash.js";
 import {assertRecipeMatrixCardinality, expandRecipe} from "./matrix.js";
+import {reviewItems, reviewTags, type ReviewItem} from "./review.js";
 import {detectMediaTooling, encodeFrameSequence, type MediaTooling} from "./media.js";
 import {
   atomicWriteFile,
@@ -508,9 +509,25 @@ async function renderThumbnail(
   }
 }
 
+/** The contact sheet page: one cell per screenshot, captioned with the screenshot's review code and its variant id. */
+export function contactSheetHtml(cells: {id: string; src: string}[], review: readonly ReviewItem[]): string {
+  const codes = new Map(review.filter((item) => item.kind === "screenshot").map((item) => [item.variant, item.code]));
+  const columns = Math.min(3, Math.max(1, cells.length));
+  const figures = cells.map((cell) =>
+    `<figure><div><img alt="" src="${cell.src}"></div><figcaption><b>${escapeHtml(codes.get(cell.id) ?? "")}</b> · ${escapeHtml(cell.id)}</figcaption></figure>`);
+  return `<!doctype html><style>
+      *{box-sizing:border-box}html,body{margin:0;background:#0b0d12;color:#e9edf5;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
+      main{padding:32px;display:grid;grid-template-columns:repeat(${columns},1fr);gap:24px}
+      figure{margin:0;min-width:0}figure>div{height:326px;display:grid;place-items:center;overflow:hidden;background:#171b23;border:1px solid #2c3340}
+      img{display:block;width:100%;height:100%;object-fit:contain}figcaption{padding:12px 2px 0;color:#aeb8c8;overflow-wrap:anywhere}
+      figcaption b{color:#fff}
+    </style><main>${figures.join("")}</main>`;
+}
+
 async function renderContactSheet(
   browser: Browser,
   items: {id: string; path: string}[],
+  review: readonly ReviewItem[],
   outputRoot: string,
   target: string,
   temporaryFiles: TemporaryFiles
@@ -525,15 +542,10 @@ async function renderContactSheet(
       items.map(async (item) => {
         const mime = item.path.endsWith(".jpg") ? "jpeg" : "png";
         const data = (await readFile(item.path)).toString("base64");
-        return `<figure><div><img alt="" src="data:image/${mime};base64,${data}"></div><figcaption>${escapeHtml(item.id)}</figcaption></figure>`;
+        return {id: item.id, src: `data:image/${mime};base64,${data}`};
       })
     );
-    await page.setContent(`<!doctype html><style>
-      *{box-sizing:border-box}html,body{margin:0;background:#0b0d12;color:#e9edf5;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
-      main{padding:32px;display:grid;grid-template-columns:repeat(${columns},1fr);gap:24px}
-      figure{margin:0;min-width:0}figure>div{height:326px;display:grid;place-items:center;overflow:hidden;background:#171b23;border:1px solid #2c3340}
-      img{display:block;width:100%;height:100%;object-fit:contain}figcaption{padding:12px 2px 0;color:#aeb8c8;overflow-wrap:anywhere}
-    </style><main>${cells.join("")}</main>`);
+    await page.setContent(contactSheetHtml(cells, review));
     await Promise.all(await page.locator("img").evaluateAll((images) => images.map((image) => (image as HTMLImageElement).decode())));
     const atomic = await createAtomicTarget(outputRoot, target, temporaryFiles);
     await page.screenshot({path: atomic.temporaryPath, type: "png", fullPage: true});
@@ -1147,10 +1159,14 @@ export async function renderRecipe(
     delete progress.framesDirectory;
     progress.framesPlanned = 0;
 
-    if (recipe.outputs?.contactSheet && contactItems.length > 0) {
+    // The widget's recipe order fixes the tag; a recipe outside it (capture, record) is tagged after them.
+    const reviewTag = reviewTags([...project.recipes.map((item) => item.id), recipe.id]).get(recipe.id)!;
+    const sheetPlanned = recipe.outputs?.contactSheet === true && contactItems.length > 0;
+    const review = reviewItems(reviewTag, entries, sheetPlanned ? portable(outputRoot, resolve(recipeDirectory, "contact-sheet.png")) : null);
+    if (sheetPlanned) {
       step("contact sheet");
       contactSheetPath = resolve(recipeDirectory, "contact-sheet.png");
-      await renderContactSheet(browser, contactItems, outputRoot, contactSheetPath, temporaryFiles);
+      await renderContactSheet(browser, contactItems, review, outputRoot, contactSheetPath, temporaryFiles);
       artifacts.push(contactSheetPath);
     }
     step("manifest");
@@ -1186,6 +1202,7 @@ export async function renderRecipe(
       contactSheet: contactSheetPath
         ? await describeArtifact(outputRoot, contactSheetPath)
         : null,
+      review: {tag: reviewTag, items: review},
       artifacts: entries
     };
     await atomicWriteFile(

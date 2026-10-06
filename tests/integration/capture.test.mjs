@@ -91,7 +91,7 @@ test("capture writes deterministic images, thumbnail, contact sheet, and provena
   });
   const recipe = {
     schemaVersion: 1,
-    id: "integration-media",
+    id: "listing-mockups",
     name: "Integration media",
     scenes: ["hero"],
     outputs: {
@@ -134,6 +134,16 @@ test("capture writes deterministic images, thumbnail, contact sheet, and provena
     pngDimensions(await readFile(join(outputRoot, firstManifest.contactSheet.file))),
     {width: firstManifest.contactSheet.width, height: firstManifest.contactSheet.height}
   );
+  // Review codes: a recipe outside the widget's recipes is tagged after them, so it does not take the example's
+  // listing-media tag (LM); the screenshot comes first, as on the contact sheet.
+  assert.deepEqual(firstManifest.review, {
+    tag: "LM2",
+    items: [
+      {code: "LM2-01", kind: "screenshot", file: firstEntry.files.screenshot.file, variant: firstEntry.id},
+      {code: "LM2-02", kind: "thumbnail", file: firstEntry.files.thumbnail.file, variant: firstEntry.id},
+      {code: "LM2-03", kind: "contactSheet", file: firstManifest.contactSheet.file}
+    ]
+  });
 
   await assert.rejects(
     renderRecipe(project, recipe, {outputRoot, browserPath: detection.executablePath}),
