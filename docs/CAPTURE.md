@@ -49,9 +49,20 @@ Every render writes a versioned `manifest.json` with:
 - Hashes for the adapter and every allowlisted local asset, including widget images, fonts, and media.
 - `widget.sampleMediaHashes`: the SHA-256 of every built-in `sws-sample:` image that FIELDS defaults, channel, or any catalog uses, computed from the verified bytes the server serves. They join the input digest only when a sample is used, so digests of sample-free projects are unchanged.
 - Contact sheet path, hash, byte count, MIME type, and dimensions when one is produced.
+- `review`: the recipe's review `tag` and every file under its code (`items`: `code`, `kind`, `file`, `variant`, and a still's `name`); see [Review codes](#review-codes).
 - Final, unvalidated, or intermediate status.
 
 Absolute widget paths, tokens, cookies, and real user data do not belong in the manifest.
+
+## Review codes
+
+Every file a render writes gets a short code to quote in a review (“LT-03 is too dark”), so nobody has to describe or screenshot the image they mean.
+
+- **Tag.** The initials of the recipe id: `listing-tutorial` is `LT`, `etsy-listing-images` is `ELI`. Recipes of one widget whose initials repeat get a digit in their order (`C`, `C2`); a `capture` or `record` scene is tagged after the widget's recipes.
+- **Number.** The file's place in the render, in two digits (three past 99 files): every screenshot first, in variant order, then the videos, the stills in step order, the thumbnails, and the contact sheet.
+- **Stable.** Rendering the same recipe again gives every file the same code, so a code quoted in one round still points at the same variant in the next. Adding or reordering variants, recipes, or stills renumbers what comes after.
+- **Contact sheet.** Each cell is captioned with its screenshot's code before the variant id.
+- **Review page.** `se-widget-studio review <page.html> <folder>...` writes one page over recipe folders (a folder with `manifest.json`, or an output root that holds them): one section per folder, each image and video under its code, linked relative to the page. Codes come from the manifest; a manifest written before review codes gets the same codes from its recipe id. Two folders of the same recipe (two rounds) keep their codes on one page; two recipes with the same tag are refused (`REVIEW_TAG_COLLISION`), so write one page per widget. Files the manifest lists but the disk lacks keep their codes and are reported. An existing page is replaced only with `--force`.
 
 ## Video
 
@@ -83,4 +94,6 @@ Marketplace requirements change independently of Studio releases. Profiles live 
 
 Each preset may include a generic `validation` block. `validate` and recipe dry runs load the preset before any output is written and check matrix counts, formats, dimensions, opacity, duration, aspect ratio, audio, and declared file-size limits. `recipeDefaults` are published authoring defaults; they do not mutate an explicit recipe. A render manifest embeds the exact preset used.
 
-The bundled Etsy profile was verified on 2026-08-05 and records the current maximum of 20 images and 2 videos. Etsy's dedicated video guide says 3–15 seconds while its listing guide says 5–15 seconds, so the operational profile uses the safer 5–15 second intersection. The official wording is “100 MB”; the preset records a decimal 100,000,000-byte interpretation explicitly. Recheck the linked official sources before a future listing campaign.
+Two Etsy profiles are bundled. `etsy-listing-2026-09`, verified on 2026-09-28 and used by the example recipes, reads Etsy's “2:1 or 1:2” video rule as the range from 2:1 to 1:2, square included; `etsy-listing-2026-08`, verified on 2026-08-05, accepts only those two shapes and stays for the recipes that pin it. Both record the maximum of 20 images and 2 videos. Etsy's dedicated video guide says 3–15 seconds while its listing guide says 5–15 seconds, so the profiles use the safer 5–15 second intersection. The official wording is “100 MB”; the presets record a decimal 100,000,000-byte interpretation explicitly. Recheck the linked official sources before a future listing campaign.
+
+A preset checks only what the Studio renders. The files that go to Etsy are composed afterwards by the etsy-thumb-generator, so the final check of a listing is `npm run check -- <slug>` in that repository: it reads the generator's render manifest and probes each file (at most 20 images, each opaque and at least 2000 px on both sides; the video in H.264 `yuv420p`, without audio, 5–15 seconds, at most 100 MB, at least 500 px, from 1:2 to 2:1). Run it before the upload.
