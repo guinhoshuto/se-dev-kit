@@ -122,6 +122,7 @@ test("a suite's processes get its TMPDIR and a render slot inside it, never the 
   assert.deepEqual(suiteEnvironment({PATH: "/bin", NODE_TEST_CONTEXT: "child-v8", RENDER_SLOT_DIR: "/Users/me/.cache/render-slot"}, "/tmp/sws-abc"), {
     PATH: "/bin",
     TMPDIR: "/tmp/sws-abc",
-    RENDER_SLOT_DIR: "/tmp/sws-abc/render-slot"
+    RENDER_SLOT_DIR: "/tmp/sws-abc/render-slot",
+    MACHINE_CHECK: "/tmp/sws-abc/no-machine-check"
   });
 });
