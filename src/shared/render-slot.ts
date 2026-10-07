@@ -15,6 +15,23 @@
 // finds RENDER_SLOT_HELD=<owner pid> in its environment and runs under the parent's slot instead of
 // waiting for it.
 //
+// Queue: the waiters take the slot in the order they came (HAR-61, 2026-10-06: a chain of kits gives
+// way, between one kit and the next, to whoever was already waiting). A waiter that cannot take the
+// slot writes a ticket in <slot>.queue/, named <ms, 15 digits>-<pid, 7 digits>.json so that the names
+// sort in arrival order, through a temporary file and a rename, so a reader never sees half of one.
+// Only the first live ticket may take a free slot, and a newcomer without a ticket never takes a free
+// slot while a live ticket waits. The waiter removes its ticket when it takes the slot, gives up or
+// exits (exit, SIGINT, SIGTERM). Each round of waiting touches the ticket: its mtime is the heartbeat.
+// A ticket is live while its pid runs, it was written after the last boot and it was touched less
+// than a minute ago, so a pid reused after its waiter was killed (SIGKILL) stops holding the queue
+// after a minute. A waiter that finds it was itself asleep for longer than that (a sleep of the Mac)
+// judges no silence for a minute after it wakes, so the others get to touch their tickets first. Any waiter
+// removes the tickets of dead pids, of an earlier boot, or silent for 15 minutes; a waiter whose
+// ticket was removed while it still runs writes it again under the same name and keeps its place.
+// The queue sits next to the slot, never inside it, and only orders the takers: the slot is still
+// taken by the atomic mkdir, so two holders stay impossible, and a copy older than the queue, which
+// ignores the tickets, can only jump it. That is why the queue did not raise PROTOCOL.
+//
 // `protocol` is PROTOCOL below. Raise it whenever a change would let an older copy break the slot of
 // a newer one (a new file in the slot, another way to clear the mutex). An owner.json without it was
 // written by protocol 1 (the copies before 2026-09-30) and is judged as always. A slot written by a
@@ -52,7 +69,7 @@
 // critical section), and the move back can replace a mutex that was just made and is still an empty
 // directory (whose maker then gives up, as above).
 import {randomBytes} from 'node:crypto';
-import {mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync} from 'node:fs';
+import {mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -73,7 +90,13 @@ export const HELD_ENV = 'RENDER_SLOT_HELD';
 /** The protocol this copy writes and understands; see the top of this file. */
 export const PROTOCOL = 2;
 const POLL_MS = 2000;
-const WAIT_LIMIT_MS = 30 * 60 * 1000;
+/** Long enough to wait out a whole kit of a pack chain (about 2.4 hours in 2026-10), which then gives way. */
+const WAIT_LIMIT_MS = 4 * 60 * 60 * 1000;
+/** A ticket not touched for this long stops counting: its waiter is stuck, or its pid was reused. */
+const TICKET_FRESH_MS = 60_000;
+/** A ticket silent for this long is removed; a waiter that still runs writes it again in its place. */
+const TICKET_FORGET_MS = 15 * 60_000;
+const TICKET_NAME = /^(\d{15})-(\d{7})\.json$/;
 /** An owner.json still missing after this long means its writer died between mkdir and write. */
 const UNWRITTEN_GRACE_MS = 10_000;
 const OWNER_FILE = 'owner.json';
@@ -382,73 +405,243 @@ export const renderSlotHolder = (dir = slotDir()): {owner: SlotOwner | null} | u
   return isStale(dir, owner) ? undefined : {owner};
 };
 
+/** The folder of the queue of waiters, next to the slot (see the top of this file). */
+export const queueDir = (dir = slotDir()) => `${dir}.queue`;
+
+/** A waiter in the queue: arrival in ms since the epoch, and how long its ticket has gone untouched. */
+export type QueueTicket = {name: string; pid: number; enqueuedAt: number; repo: string; command: string; silentMs: number};
+
+const ticketName = (at: number, pid: number) => `${String(at).padStart(15, '0')}-${String(pid).padStart(7, '0')}.json`;
+
+const removeQuietly = (file: string) => {
+  try { rmSync(file, {force: true}); } catch { /* left for the next waiter to judge */ }
+};
+
+/** The tickets in arrival order, and the temporary files that dead writers left over 15 minutes ago. */
+const readQueue = (queue: string): {tickets: QueueTicket[]; strays: string[]} => {
+  let names: string[];
+  try { names = readdirSync(queue).sort(); } catch { return {tickets: [], strays: []}; }
+  const tickets: QueueTicket[] = [];
+  const strays: string[] = [];
+  for (const name of names) {
+    let silentMs: number;
+    try { silentMs = Date.now() - statSync(path.join(queue, name)).mtimeMs; } catch { continue; }
+    const match = TICKET_NAME.exec(name);
+    if (!match) {
+      if (name.endsWith('.tmp') && silentMs > TICKET_FORGET_MS) strays.push(name);
+      continue;
+    }
+    let repo = '?';
+    let command = '?';
+    try {
+      const data = JSON.parse(readFileSync(path.join(queue, name), 'utf8')) as {repo?: unknown; command?: unknown};
+      if (typeof data.repo === 'string') repo = data.repo;
+      if (typeof data.command === 'string') command = data.command;
+    } catch { /* the name alone places it */ }
+    tickets.push({name, pid: Number(match[2]), enqueuedAt: Number(match[1]), repo, command, silentMs});
+  }
+  return {tickets, strays};
+};
+
 /**
- * Waits for the machine-wide render slot and takes it. The slot is released by `release()`, on
- * exit, and on SIGINT/SIGTERM. Nested calls in the same process and children of the owner
- * (RENDER_SLOT_HELD) run under the slot they already hold.
+ * 'gone' (any waiter removes it): its pid is dead, it was written before the last boot, or it has been
+ * silent for 15 minutes; 'quiet' (skipped, kept): silent for over a minute; 'live' otherwise. With
+ * `judgeSilence` false (this process woke up less than a minute ago), silence decides nothing.
+ */
+const judgeTicket = (ticket: QueueTicket, judgeSilence: boolean): 'live' | 'quiet' | 'gone' => {
+  if (ticket.enqueuedAt < bootTimeMs() || !alive(ticket.pid)) return 'gone';
+  if (!judgeSilence) return 'live';
+  if (ticket.silentMs > TICKET_FORGET_MS) return 'gone';
+  return ticket.silentMs > TICKET_FRESH_MS ? 'quiet' : 'live';
+};
+
+/** The live waiters, in the order they came. Read only: nothing is removed. */
+export const renderSlotQueue = (dir = slotDir()): QueueTicket[] =>
+  readQueue(queueDir(dir)).tickets.filter((ticket) => judgeTicket(ticket, true) === 'live');
+
+/**
+ * The live tickets ahead of `own`, or all of them when `own` is null, in order. Gone tickets and old
+ * temporary files are removed on the way; quiet tickets are skipped.
+ */
+const ticketsAhead = (queue: string, own: string | null, judgeSilence: boolean): QueueTicket[] => {
+  const {tickets, strays} = readQueue(queue);
+  for (const stray of strays) removeQuietly(path.join(queue, stray));
+  const ahead: QueueTicket[] = [];
+  for (const ticket of tickets) {
+    if (own !== null && ticket.name >= own) break;
+    const verdict = judgeTicket(ticket, judgeSilence);
+    if (verdict === 'gone') removeQuietly(path.join(queue, ticket.name));
+    else if (verdict === 'live') ahead.push(ticket);
+  }
+  return ahead;
+};
+
+/** Writes a ticket through a temporary file and a rename; false when the queue cannot be written. */
+const writeTicket = (queue: string, name: string, body: string) => {
+  const temporary = path.join(queue, `.${name}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`);
+  try {
+    mkdirSync(queue, {recursive: true});
+    writeFileSync(temporary, body);
+    renameSync(temporary, path.join(queue, name));
+    return true;
+  } catch {
+    removeQuietly(temporary);
+    return false;
+  }
+};
+
+/** The heartbeat: touches the ticket, or writes it again under the same name when it was removed. */
+const touchTicket = (queue: string, name: string, body: string) => {
+  const now = new Date();
+  try { utimesSync(path.join(queue, name), now, now); } catch { writeTicket(queue, name, body); }
+};
+
+const describeTicket = (ticket: QueueTicket) => `pid ${ticket.pid} (${ticket.repo}: ${ticket.command}) since ${new Date(ticket.enqueuedAt).toISOString()}`;
+
+/** Takes the slot directory with the atomic mkdir: false when another process has it. */
+const makeSlotDir = (dir: string) => {
+  try {
+    mkdirSync(dir);
+    return true;
+  } catch (error) {
+    if (errorCode(error) !== 'EEXIST') throw error;
+    return false;
+  }
+};
+
+/**
+ * Waits for the machine-wide render slot, in the order of the queue, and takes it. The slot is
+ * released by `release()`, on exit, and on SIGINT/SIGTERM. Nested calls in the same process and
+ * children of the owner (RENDER_SLOT_HELD) run under the slot they already hold.
  */
 export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandle> => {
   const dir = options.dir ?? slotDir();
-  const pollMs = options.pollMs ?? POLL_MS;
+  const queue = queueDir(dir);
+  // The heartbeat beats well inside a minute, whatever pollMs the caller asks for.
+  const roundMs = Math.min(options.pollMs ?? POLL_MS, TICKET_FRESH_MS / 4);
   const waitLimitMs = options.waitLimitMs ?? WAIT_LIMIT_MS;
   const log = options.log ?? ((message: string) => console.log(message));
+  const repo = options.repo ?? defaultRepo();
+  const body = `${JSON.stringify({protocol: PROTOCOL, pid: process.pid, repo, command: options.command})}\n`;
   const started = Date.now();
-  let warned = false;
+  let said = '';
   let warnedBlocked = false;
-  mkdirSync(path.dirname(dir), {recursive: true});
-  for (;;) {
-    const current = readOwner(dir);
-    if (current?.pid === process.pid) return noopHandle();
-    const held = Number(process.env[HELD_ENV]);
-    if (current && current.pid === held && ownerAlive(current)) return noopHandle();
-    try {
-      mkdirSync(dir);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const owner = readOwner(dir);
-      const stale = isStale(dir, owner);
-      if (stale && takeOverStale(dir, owner?.pid ?? null)) continue;
-      // A dead owner's slot whose takeover waits on an old mutex of a pid that still runs.
-      const blocker = stale ? blockingMutexHolder(`${dir}.takeover`) : null;
-      const holder = blocker === null
-        ? describeSlotHolder(owner)
-        : `${describeSlotHolder(owner)}, whose takeover waits on the mutex ${dir}.takeover, held for over 10 seconds by pid ${blocker}, which still runs`;
-      const hint = STUCK_HINT(dir, blocker);
-      if (options.wait === false) throw new RenderSlotError('RENDER_SLOT_BUSY', `Another render holds the render slot (${dir}), ${holder}.`, `Run again when it ends. ${hint}`);
-      if (!warned) { log(`Waiting for the render slot, ${holder}.`); warned = true; }
-      if (blocker !== null && !warnedBlocked) { log(`The takeover of the render slot waits on pid ${blocker}. ${hint}`); warnedBlocked = true; }
-      if (Date.now() - started > waitLimitMs) {
-        // No promise of an automatic takeover while a mutex of a live pid blocks it.
-        const retry = blocker === null ? 'Run again when that render ends; a slot whose pid is gone is taken over automatically. ' : '';
-        throw new RenderSlotError('RENDER_SLOT_TIMEOUT', `Gave up after ${Math.round(waitLimitMs / 60_000)} minutes waiting for the render slot (${dir}), ${holder}.`, `${retry}${hint}`);
-      }
-      await sleep(pollMs);
-      continue;
-    }
-    const owner: SlotOwner = {protocol: PROTOCOL, pid: process.pid, repo: options.repo ?? defaultRepo(), command: options.command, startedAt: new Date().toISOString()};
-    const temporary = path.join(dir, `${OWNER_FILE}.tmp`);
-    writeFileSync(temporary, `${JSON.stringify(owner, null, 2)}\n`);
-    renameSync(temporary, path.join(dir, OWNER_FILE));
-    process.env[HELD_ENV] = String(process.pid);
+  let ticket: string | null = null;
+  let lastRound = started;
+  // A waiter that just started judges silence at once; only one that finds it slept waits a minute.
+  let awakeSince = started - TICKET_FRESH_MS;
 
-    const onExit = () => { releaseRenderSlot(dir); };
-    const onSignal = (signal: NodeJS.Signals) => {
-      releaseRenderSlot(dir);
-      // Without another handler, Node would keep running once this one returns.
-      if (process.listenerCount(signal) === 0) process.exit(signal === 'SIGINT' ? 130 : 143);
-    };
-    process.once('exit', onExit);
-    process.once('SIGINT', onSignal);
-    process.once('SIGTERM', onSignal);
-    return {
-      inherited: false,
-      release: () => {
-        releaseRenderSlot(dir);
-        process.off('exit', onExit);
-        process.off('SIGINT', onSignal);
-        process.off('SIGTERM', onSignal);
-      },
-    };
+  // A new message only when the holder or the place in the queue changes.
+  const say = (status: string, message: string) => {
+    if (status !== said) log(message);
+    said = status;
+  };
+  const dropTicket = () => {
+    if (ticket !== null) removeQuietly(path.join(queue, ticket));
+    ticket = null;
+  };
+  const onQueueExit = () => { dropTicket(); };
+  const onQueueSignal = (signal: NodeJS.Signals) => {
+    dropTicket();
+    // Without another handler, Node would keep running once this one returns.
+    if (process.listenerCount(signal) === 0) process.exit(signal === 'SIGINT' ? 130 : 143);
+  };
+  const joinQueue = () => {
+    if (ticket !== null) return;
+    const name = ticketName(Date.now(), process.pid);
+    // A queue that cannot be written leaves this waiter without a ticket: it waits behind every
+    // live ticket, as before the queue existed.
+    if (!writeTicket(queue, name, body)) return;
+    ticket = name;
+    process.once('exit', onQueueExit);
+    process.once('SIGINT', onQueueSignal);
+    process.once('SIGTERM', onQueueSignal);
+  };
+  const leaveQueue = () => {
+    dropTicket();
+    process.off('exit', onQueueExit);
+    process.off('SIGINT', onQueueSignal);
+    process.off('SIGTERM', onQueueSignal);
+  };
+
+  mkdirSync(path.dirname(dir), {recursive: true});
+  try {
+    for (;;) {
+      const current = readOwner(dir);
+      if (current?.pid === process.pid) return noopHandle();
+      const held = Number(process.env[HELD_ENV]);
+      if (current && current.pid === held && ownerAlive(current)) return noopHandle();
+      const now = Date.now();
+      // A round far later than the last one means this process slept (a sleep of the Mac). So did the
+      // other waiters: their silence means nothing until they have had a minute to touch their tickets.
+      if (now - lastRound > TICKET_FRESH_MS) awakeSince = now;
+      lastRound = now;
+      if (ticket !== null) touchTicket(queue, ticket, body);
+      const ahead = ticketsAhead(queue, ticket, now - awakeSince >= TICKET_FRESH_MS);
+      const next = ahead[0];
+      let waitingFor: string;
+      let wayOut: string;
+      if (next === undefined) {
+        if (makeSlotDir(dir)) {
+          const owner: SlotOwner = {protocol: PROTOCOL, pid: process.pid, repo, command: options.command, startedAt: new Date().toISOString()};
+          const temporary = path.join(dir, `${OWNER_FILE}.tmp`);
+          writeFileSync(temporary, `${JSON.stringify(owner, null, 2)}\n`);
+          renameSync(temporary, path.join(dir, OWNER_FILE));
+          process.env[HELD_ENV] = String(process.pid);
+          // The finally below takes the ticket out.
+          const onExit = () => { releaseRenderSlot(dir); };
+          const onSignal = (signal: NodeJS.Signals) => {
+            releaseRenderSlot(dir);
+            // Without another handler, Node would keep running once this one returns.
+            if (process.listenerCount(signal) === 0) process.exit(signal === 'SIGINT' ? 130 : 143);
+          };
+          process.once('exit', onExit);
+          process.once('SIGINT', onSignal);
+          process.once('SIGTERM', onSignal);
+          return {
+            inherited: false,
+            release: () => {
+              releaseRenderSlot(dir);
+              process.off('exit', onExit);
+              process.off('SIGINT', onSignal);
+              process.off('SIGTERM', onSignal);
+            },
+          };
+        }
+        const owner = readOwner(dir);
+        const stale = isStale(dir, owner);
+        if (stale && takeOverStale(dir, owner?.pid ?? null)) continue;
+        // A dead owner's slot whose takeover waits on an old mutex of a pid that still runs.
+        const blocker = stale ? blockingMutexHolder(`${dir}.takeover`) : null;
+        const holder = blocker === null
+          ? describeSlotHolder(owner)
+          : `${describeSlotHolder(owner)}, whose takeover waits on the mutex ${dir}.takeover, held for over 10 seconds by pid ${blocker}, which still runs`;
+        const hint = STUCK_HINT(dir, blocker);
+        if (options.wait === false) throw new RenderSlotError('RENDER_SLOT_BUSY', `Another render holds the render slot (${dir}), ${holder}.`, `Run again when it ends. ${hint}`);
+        joinQueue();
+        say(`held ${owner?.pid ?? 'unwritten'}`, `Waiting for the render slot, ${holder}.`);
+        if (blocker !== null && !warnedBlocked) { log(`The takeover of the render slot waits on pid ${blocker}. ${hint}`); warnedBlocked = true; }
+        waitingFor = holder;
+        // No promise of an automatic takeover while a mutex of a live pid blocks it.
+        wayOut = `${blocker === null ? 'Run again when that render ends; a slot whose pid is gone is taken over automatically. ' : ''}${hint}`;
+      } else {
+        // Waiters that came first: the first of them takes the slot when it frees.
+        const state = renderSlotHolder(dir);
+        const slot = state === undefined ? 'free for the first in the queue' : describeSlotHolder(state.owner);
+        const queued = `${ahead.length} ahead in the queue, the next ${describeTicket(next)}`;
+        if (options.wait === false) throw new RenderSlotError('RENDER_SLOT_BUSY', `The render slot (${dir}) is ${slot}, and ${queued}.`, 'Run again when they are done.');
+        joinQueue();
+        say(`queue ${ahead.length} ${next.name} ${state?.owner?.pid ?? 'free'}`, `Waiting for the render slot, ${slot}; ${queued}.`);
+        waitingFor = `${slot}, with ${queued}`;
+        wayOut = 'Run again when they are done; a waiter whose pid is gone leaves the queue automatically.';
+      }
+      if (Date.now() - started > waitLimitMs) {
+        throw new RenderSlotError('RENDER_SLOT_TIMEOUT', `Gave up after ${Math.round(waitLimitMs / 60_000)} minutes waiting for the render slot (${dir}), ${waitingFor}.`, wayOut);
+      }
+      await sleep(roundMs);
+    }
+  } finally {
+    leaveQueue();
   }
 };
 

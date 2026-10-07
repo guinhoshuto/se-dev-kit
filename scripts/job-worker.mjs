@@ -44,8 +44,9 @@ const result = {ok: false, artifacts: [], progress: '', error: undefined, pass};
 const needsFonts = urls => { result.needsFonts = urls.slice(0, FONTS_MISSING_MAX_URLS); result.progress = `Fetching Google Fonts (pass ${pass + 1}).`; };
 try {
   // On the owner's machine a job is one more heavy render: it waits for the machine-wide slot like the CLI
-  // does, and holds it until this process exits.
-  if (local) await acquireRenderSlot({command: `studio ${job.kind} job ${job.id} pass ${pass}`, log: message => process.stderr.write(`${message}\n`)});
+  // does, and holds it until this process exits. A job has two hours from its creation, so it waits 30
+  // minutes at most, never the slot's own 4 hours: past its life it would render for a job already failed.
+  if (local) await acquireRenderSlot({command: `studio ${job.kind} job ${job.id} pass ${pass}`, waitLimitMs: 30 * 60_000, log: message => process.stderr.write(`${message}\n`)});
   const fonts = await FontResolver.load(resolve(jobDirectory, 'fonts'), pass);
   // Samples the revision pinned must still have identical bytes in this build (append-only catalog).
   await assertSampleMediaPins(sampleMedia);
