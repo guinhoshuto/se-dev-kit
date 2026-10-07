@@ -100,11 +100,14 @@ export async function gate({
 /**
  * A suite's environment: its own TMPDIR, and a render slot inside it, so a CLI render a test starts
  * neither waits for nor holds the machine-wide slot (the runner holds that one for browser suites).
+ * MACHINE_CHECK names a file that does not exist, so that render does not ask the machine check
+ * either: the runner asked it before a browser suite, the other suites start no Chrome, and a test
+ * that runs the check passes its own.
  */
 export function suiteEnvironment(environment, temporary) {
   // NODE_TEST_CONTEXT would make a runner started from inside a test file act as that file's child.
   const {NODE_TEST_CONTEXT: _context, ...rest} = environment;
-  return {...rest, TMPDIR: temporary, RENDER_SLOT_DIR: join(temporary, 'render-slot')};
+  return {...rest, TMPDIR: temporary, RENDER_SLOT_DIR: join(temporary, 'render-slot'), MACHINE_CHECK: join(temporary, 'no-machine-check')};
 }
 
 export async function execute(label, suite, files, logPath, {echo = true} = {}) {

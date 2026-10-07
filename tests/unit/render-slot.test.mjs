@@ -152,7 +152,8 @@ test("local capture and render wait for the render slot another process holds, a
   const output = await mkdtemp(join(tmpdir(), "sws-slot-cli-"));
   t.after(() => rm(output, {recursive: true, force: true}));
   const {[HELD_ENV]: _held, ...rest} = process.env;
-  const env = {...rest, RENDER_SLOT_DIR: dir};
+  // A missing machine check leaves the slot alone to decide (tests/unit/machine-check.test.mjs covers the check).
+  const env = {...rest, RENDER_SLOT_DIR: dir, MACHINE_CHECK: join(output, "no-machine-check.py")};
   const commands = {
     capture: ["capture", exampleRoot, "--scene", "hero"],
     render: ["render", exampleRoot, "--recipe", "listing-media"]

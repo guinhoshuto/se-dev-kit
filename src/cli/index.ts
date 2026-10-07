@@ -16,7 +16,8 @@ import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser} from "..
 import {planRecipe, renderRecipe, singleSceneRecipe, type RenderResult, type RenderTraceEvent} from "../capture/renderer.js";
 import {reviewSummary, writeReviewPage} from "../capture/review.js";
 import {assertSupportedNode} from "../shared/node-support.js";
-import {RenderSlotError, withRenderSlot} from "../shared/render-slot.js";
+import {acquireRenderSlot, RenderSlotError} from "../shared/render-slot.js";
+import {waitForMachine} from "../shared/machine-check.js";
 import {STUDIO_VERSION} from "../version.js";
 import {cliFlags} from "./flags.js";
 
@@ -82,6 +83,7 @@ function renderTrace(command: Command, label?: string): ((event: RenderTraceEven
   };
 }
 
+const NO_WAIT_HELP = "Fail at once, with the reason, when the render slot is held or the machine check says to wait (default: wait up to 4 hours for each)";
 const UNSUPPORTED_NODE_HELP = "Render even on a Node.js version outside package.json engines (Chrome launch and close have hung on Node 26)";
 
 program
@@ -281,19 +283,27 @@ function sceneProject(project: ResolvedProject, sceneId: string | undefined, the
 
 /**
  * A local render waits for the machine-wide render slot, which other sessions and background-creator
- * share (src/shared/render-slot.ts): one heavy render at a time on this machine. A refusal of the
- * slot becomes a StudioError with the same code.
+ * share (src/shared/render-slot.ts): one heavy render at a time on this machine. Holding it, `task`
+ * calls `machineFree` before each recipe, which waits until the machine check every repo shares says
+ * free (src/shared/machine-check.ts: the game, memory, swap, disk). Under a slot inherited from a
+ * parent (a test runner), the parent already asked, and `machineFree` returns at once. With
+ * `wait: false` (`--no-wait`) a held slot or a busy machine fails at once, with the reason. A refusal
+ * of the slot becomes a StudioError with the same code.
  */
-async function inRenderSlot<T>(task: () => Promise<T>): Promise<T> {
+async function inRenderSlot<T>(task: (machineFree: () => Promise<void>) => Promise<T>, wait: boolean): Promise<T> {
+  const log = (message: string) => process.stderr.write(`${message}\n`);
+  const slot = await acquireRenderSlot({
+    command: `se-widget-studio ${process.argv.slice(2).join(" ")}`.slice(0, 200),
+    repo: "se-dev-kit",
+    wait,
+    log
+  }).catch((error: unknown) => {
+    throw error instanceof RenderSlotError ? new StudioError(error.code, error.detail, error.hint, {cause: error}) : error;
+  });
   try {
-    return await withRenderSlot(task, {
-      command: `se-widget-studio ${process.argv.slice(2).join(" ")}`.slice(0, 200),
-      repo: "se-dev-kit",
-      log: (message) => process.stderr.write(`${message}\n`)
-    });
-  } catch (error) {
-    if (error instanceof RenderSlotError) throw new StudioError(error.code, error.detail, error.hint, {cause: error});
-    throw error;
+    return await task(() => (slot.inherited ? Promise.resolve() : waitForMachine({wait, log})));
+  } finally {
+    slot.release();
   }
 }
 
@@ -326,7 +336,12 @@ async function runSingleMedia(
     ...(typeof options.ffmpegPath === "string" ? {ffmpegPath: options.ffmpegPath} : {}),
     ...(typeof options.ffprobePath === "string" ? {ffprobePath: options.ffprobePath} : {})
   });
-  const result = options.dryRun === true ? await render() : await inRenderSlot(render);
+  const result = options.dryRun === true
+    ? await render()
+    : await inRenderSlot(async (machineFree) => {
+      await machineFree();
+      return render();
+    }, options.wait !== false);
   print(result, globals(command).json);
   if (result.status === "intermediate" && options.allowIntermediate !== true) process.exitCode = 3;
 }
@@ -348,6 +363,7 @@ for (const kind of ["capture", "record"] as const) {
     .option("--dry-run", "Print the output plan and disk estimate without starting a browser")
     .option("--allow-intermediate", "Accept PNG frame output when FFmpeg is unavailable")
     .option("--allow-low-disk", "Render even when the estimated peak exceeds 70% of free disk space")
+    .option("--no-wait", NO_WAIT_HELP)
     .option("--allow-unsupported-node", UNSUPPORTED_NODE_HELP);
   if (kind === "record") {
     media.option("--ffmpeg-path <file>", "Use an explicit FFmpeg executable");
@@ -376,6 +392,7 @@ program
   .option("--allow-intermediate", "Accept PNG frame output when FFmpeg is unavailable")
   .option("--allow-low-disk", "Render even when the estimated peak exceeds 70% of free disk space")
   .option("--keep-frames", "Keep the PNG frames and frames.json after a validated encode (takes precedence over a recipe's keepFrames: false)")
+  .option("--no-wait", NO_WAIT_HELP)
   .option("--allow-unsupported-node", UNSUPPORTED_NODE_HELP)
   .action(async (
     root: string,
@@ -395,6 +412,7 @@ program
       allowIntermediate?: boolean;
       allowLowDisk?: boolean;
       keepFrames?: boolean;
+      wait?: boolean;
     },
     command: Command
   ) => {
@@ -430,10 +448,13 @@ program
       return;
     }
     assertSupportedNode(options.allowUnsupportedNode === true);
-    await inRenderSlot(async () => {
-      const shared = recipes.length > 1 ? await launchStudioBrowser(options.browserPath ? {browserPath: options.browserPath} : {}) : undefined;
+    await inRenderSlot(async (machineFree) => {
+      // Several recipes share one browser, started once the machine is free for the first.
+      let shared: Awaited<ReturnType<typeof launchStudioBrowser>> | undefined;
       try {
         for (const recipe of recipes) {
+          await machineFree();
+          if (recipes.length > 1) shared ??= await launchStudioBrowser(options.browserPath ? {browserPath: options.browserPath} : {});
           const trace = renderTrace(command, recipes.length > 1 ? recipe.id : undefined);
           results.push(await renderRecipe(project, recipe, {...renderOptions, ...(shared ? {browser: shared} : {}), ...(trace ? {trace} : {})}));
         }
@@ -447,7 +468,7 @@ program
           if (!closing.closed) process.stderr.write(`Browser close timed out; killed PID ${closing.killed.join(", ") || "none found"} after ${closing.elapsedMs} ms.\n`);
         }
       }
-    });
+    }, options.wait !== false);
     report();
     if (results.some((result) => result.status === "intermediate") && !options.allowIntermediate) process.exitCode = 3;
   });
