@@ -16,13 +16,15 @@ import {
   isSampleMediaReference,
   parseBackgroundSelectValue,
   parseMediaArrayText,
+  sampleKindsForField,
   sampleMediaDisplayText
 } from "../../dist/studio-ui/sample-media.js";
 import {FRAME_SAMPLE_REFERENCE_PATTERN, mapRuntimeAssets} from "../../dist/runtime/frame.js";
 import {
   assertSampleMediaPins,
   loadSampleMediaCatalog,
-  sampleMediaHashes
+  sampleMediaHashes,
+  sampleMediaReferencesByKind
 } from "../../dist/config/sample-media.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../../dist/config/presets.js";
 import {loadProject} from "../../dist/config/load.js";
@@ -51,6 +53,49 @@ function jpegDimensions(bytes) {
   throw new Error("JPEG has no SOF0-SOF2 marker");
 }
 
+/** Reads the size of a PNG from its IHDR chunk. */
+function pngDimensions(bytes) {
+  assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", "PNG signature expected");
+  assert.equal(bytes.subarray(12, 16).toString("latin1"), "IHDR");
+  return {width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20)};
+}
+
+/** Reads a WebM's codec, frame size, and duration from its EBML header and Segment Info/Tracks, enough for a single-track file. */
+function webmInfo(bytes) {
+  assert.equal(bytes.readUInt32BE(0), 0x1a45dfa3, "EBML header expected");
+  const vint = (offset, keepMarker) => {
+    const first = bytes[offset];
+    let length = 1;
+    while (length <= 8 && !(first & (0x80 >> (length - 1)))) length += 1;
+    let value = keepMarker ? first : first & (0xff >> length);
+    for (let index = 1; index < length; index += 1) value = value * 256 + bytes[offset + index];
+    return {value, length};
+  };
+  const info = {};
+  let timecodeScale = 1_000_000;
+  const walk = (start, end) => {
+    let offset = start;
+    while (offset < end) {
+      const id = vint(offset, true);
+      const size = vint(offset + id.length, false);
+      const body = offset + id.length + size.length;
+      const unknown = size.value === 2 ** (7 * size.length) - 1;
+      const stop = unknown ? end : Math.min(end, body + size.value);
+      // Segment, Info, Tracks, TrackEntry, Video are containers; Cluster ends the walk.
+      if ([0x18538067, 0x1549a966, 0x1654ae6b, 0xae, 0xe0].includes(id.value)) walk(body, stop);
+      else if (id.value === 0x1f43b675) return;
+      else if (id.value === 0x2ad7b1) timecodeScale = bytes.readUIntBE(body, size.value);
+      else if (id.value === 0x4489) info.durationMs = (size.value === 8 ? bytes.readDoubleBE(body) : bytes.readFloatBE(body)) * timecodeScale / 1_000_000;
+      else if (id.value === 0x86) info.codec = bytes.subarray(body, stop).toString("latin1");
+      else if (id.value === 0xb0) info.width = bytes.readUIntBE(body, size.value);
+      else if (id.value === 0xba) info.height = bytes.readUIntBE(body, size.value);
+      offset = stop;
+    }
+  };
+  walk(0 + 4 + vint(4, false).length + vint(4, false).value, bytes.length);
+  return info;
+}
+
 async function filesUnder(directory) {
   const found = [];
   for (const entry of await readdir(directory, {withFileTypes: true})) {
@@ -64,9 +109,11 @@ async function filesUnder(directory) {
 
 test("the sample media manifest matches its files, dimensions, and provenance", async () => {
   const items = manifest.items;
-  assert.equal(items.length, 10);
+  assert.equal(items.length, 17);
   assert.equal(items.filter((item) => item.kind === "gallery").length, 3);
   assert.equal(items.filter((item) => item.kind === "backdrop").length, 7);
+  assert.equal(items.filter((item) => item.kind === "avatar").length, 6);
+  assert.equal(items.filter((item) => item.kind === "clip").length, 1);
   assert.equal(new Set(items.map((item) => item.id)).size, items.length);
   for (const item of items) {
     const bytes = await readFile(join(mediaRoot, item.file));
@@ -74,7 +121,13 @@ test("the sample media manifest matches its files, dimensions, and provenance", 
     assert.ok(isSampleMediaReference(item.reference), item.reference);
     assert.equal(bytes.byteLength, item.bytes, item.file);
     assert.equal(createHash("sha256").update(bytes).digest("hex"), item.sha256, item.file);
-    assert.deepEqual(jpegDimensions(bytes), {width: item.width, height: item.height}, item.file);
+    if (item.contentType === "image/jpeg") assert.deepEqual(jpegDimensions(bytes), {width: item.width, height: item.height}, item.file);
+    else if (item.contentType === "image/png") assert.deepEqual(pngDimensions(bytes), {width: item.width, height: item.height}, item.file);
+    else {
+      assert.equal(item.contentType, "video/webm", item.file);
+      assert.deepEqual(webmInfo(bytes), {codec: "V_VP9", width: item.width, height: item.height, durationMs: item.durationMs}, item.file);
+    }
+    assert.equal(item.kind === "clip", item.durationMs !== undefined, `${item.file}: only clips have a duration`);
     assert.ok(item.alt.trim().length > 20, `${item.file} needs alt text`);
     assert.ok(item.origin.trim().length > 0, `${item.file} needs an origin`);
     assert.match(item.color, /^#[0-9a-f]{6}$/);
@@ -99,6 +152,8 @@ test("published sample references are append-only against the frozen lock", () =
 test("the reference grammar accepts only whole, normalized sample file references", () => {
   assert.equal(isSampleMediaReference("sws-sample:gallery/streamer-1-blur.jpg"), true);
   assert.equal(isSampleMediaReference("sws-sample:backdrops/cute-2.jpg"), true);
+  assert.equal(isSampleMediaReference("sws-sample:avatars/pixel-1.png"), true);
+  assert.equal(isSampleMediaReference("sws-sample:clips/neon-road.webm"), true);
   for (const value of [
     "sws-sample:../package.json",
     "sws-sample:gallery/../../package.json",
@@ -113,6 +168,7 @@ test("the reference grammar accepts only whole, normalized sample file reference
     "sws-sample:gallery/x y.jpg",
     "see sws-sample:gallery/x.jpg",
     "sws-sample:gallery/x.svg",
+    "sws-sample:clips/x.mp4",
     "sws-sample:gallery/.hidden.jpg"
   ]) {
     assert.equal(isSampleMediaReference(value), false, value);
@@ -196,6 +252,9 @@ test("media controls keep arrays and resolve sample URLs only through the served
   assert.equal(sampleMediaDisplayText("sws-sample:gallery/streamer-1-blur.jpg"), "streamer-1-blur.jpg");
   assert.equal(sampleMediaDisplayText('["sws-sample:gallery/streamer-1-blur.jpg","a.png"]'), "streamer-1-blur.jpg, a.png");
   assert.equal(sampleMediaDisplayText("assets/logo.png"), "assets/logo.png");
+  assert.deepEqual(sampleKindsForField("image-input"), ["gallery", "backdrop", "avatar"]);
+  assert.deepEqual(sampleKindsForField("video-input"), ["clip"]);
+  assert.deepEqual(sampleKindsForField("sound-input"), []);
 });
 
 test("frame asset mapping rewrites only plain data and never prototype keys", () => {
@@ -227,7 +286,10 @@ test("frame asset mapping rewrites only plain data and never prototype keys", ()
 
 test("the catalog loader verifies bytes, rejects tampering, and checks revision pins", async (t) => {
   const catalog = await loadSampleMediaCatalog(mediaRoot);
-  assert.equal(catalog.items.length, 10);
+  assert.equal(catalog.items.length, 17);
+  assert.equal(catalog.entry("sws-sample:clips/neon-road.webm").durationMs, 4000);
+  assert.deepEqual(sampleMediaReferencesByKind(catalog).clip, ["sws-sample:clips/neon-road.webm"]);
+  assert.equal(sampleMediaReferencesByKind(catalog).avatar.length, 6);
   assert.equal(catalog.body("sws-sample:backdrops/cute.jpg").byteLength, 47_742);
   assert.deepEqual(await sampleMediaHashes({a: ["sws-sample:backdrops/cute.jpg"]}, mediaRoot), {
     "sws-sample:backdrops/cute.jpg": lock["sws-sample:backdrops/cute.jpg"]
@@ -263,6 +325,25 @@ test("the catalog loader verifies bytes, rejects tampering, and checks revision 
   await mkdir(escaping);
   await writeFile(join(escaping, "manifest.json"), JSON.stringify({schemaVersion: 1, items: [{...item, file: "../backdrops/cute.jpg"}]}));
   await assert.rejects(loadSampleMediaCatalog(escaping), {code: "SAMPLE_MEDIA_CATALOG_INVALID"});
+
+  // A clip must be a video with a duration, and only a clip may be.
+  const clip = manifest.items.find((entry) => entry.kind === "clip");
+  const kinds = join(root, "kinds");
+  await mkdir(join(kinds, "clips"), {recursive: true});
+  await mkdir(join(kinds, "backdrops"));
+  await copyFile(join(mediaRoot, clip.file), join(kinds, clip.file));
+  await copyFile(join(mediaRoot, item.file), join(kinds, item.file));
+  for (const [items, message] of [
+    [[{...clip, durationMs: undefined}], /neon-road must have a durationMs only if it is a clip/],
+    [[{...clip, kind: "gallery", durationMs: undefined}], /neon-road kind gallery does not match video\/webm/],
+    [[{...item, durationMs: 4000}], /cute must have a durationMs only if it is a clip/],
+    [[{...item, kind: "clip", tone: undefined, durationMs: 4000}], /cute kind clip does not match image\/jpeg/]
+  ]) {
+    await writeFile(join(kinds, "manifest.json"), JSON.stringify({schemaVersion: 1, items}));
+    await assert.rejects(loadSampleMediaCatalog(kinds), {code: "SAMPLE_MEDIA_CATALOG_INVALID", message}, String(message));
+  }
+  await writeFile(join(kinds, "manifest.json"), JSON.stringify({schemaVersion: 1, items: [clip, item]}));
+  assert.equal((await loadSampleMediaCatalog(kinds)).items.length, 2);
 
   const reused = join(root, "reused");
   await mkdir(join(reused, "backdrops"), {recursive: true});
@@ -319,6 +400,24 @@ test("validate reports unknown sample references and accepts known ones", async 
   const retiredFailure = (await validateProject(retired)).find((item) => item.code === "SAMPLE_MEDIA_UNKNOWN");
   assert.equal(retiredFailure?.status, "error");
   assert.match(retiredFailure.detail, /scene "old" uses sws-sample:backdrops\/aurora-mesh\.jpg \(retired on 2026-09-29\)/);
+});
+
+test("validate rejects a clip as a background and warns about a sample of the wrong kind for its field", async (t) => {
+  const project = await mediaWidget(t, {
+    schemaVersion: 1,
+    id: "clip",
+    name: "Clip",
+    fieldData: {image: "sws-sample:clips/neon-road.webm", gallery: ["sws-sample:avatars/pixel-1.png"]},
+    background: {id: "road", image: "sws-sample:clips/neon-road.webm"}
+  });
+  project.recipes.push({id: "matrix", filePath: "", value: {schemaVersion: 1, id: "matrix", name: "Matrix", scenes: ["clip"], matrix: {backgrounds: [{id: "road", image: "sws-sample:clips/neon-road.webm"}, {id: "pixel", image: "sws-sample:avatars/pixel-2.png"}]}}});
+  const kinds = (await validateProject(project)).filter((item) => item.code === "SAMPLE_MEDIA_KIND");
+  assert.deepEqual(kinds.map((item) => item.status), ["error", "warning"]);
+  assert.equal(kinds[0].detail, 'Video clips cannot be stage backgrounds: scene "clip" uses sws-sample:clips/neon-road.webm; recipe "matrix" uses sws-sample:clips/neon-road.webm.');
+  assert.equal(kinds[1].detail, 'Sample media of the wrong kind for its field: scene "clip" sets image-input field "image" to the clip sample sws-sample:clips/neon-road.webm.');
+
+  const fine = await mediaWidget(t, {schemaVersion: 1, id: "ok", name: "Ok", fieldData: {image: "sws-sample:avatars/pixel-3.png"}, background: {id: "a", image: "sws-sample:backdrops/aero.jpg"}});
+  assert.equal((await validateProject(fine)).some((item) => item.code === "SAMPLE_MEDIA_KIND"), false);
 });
 
 test("a JPEG sample backdrop satisfies marketplace opacity without a paired color", async (t) => {

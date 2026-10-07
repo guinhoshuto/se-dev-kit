@@ -6,6 +6,7 @@ import {z} from "zod";
 import {StudioError, toErrorMessage} from "../shared/errors.js";
 import {isInside} from "../shared/paths.js";
 import {
+  SAMPLE_MEDIA_KINDS,
   SAMPLE_MEDIA_SCHEME,
   SAMPLE_REFERENCE_PATTERN,
   claimsSampleMediaScheme,
@@ -29,6 +30,7 @@ export interface SampleMediaEntry {
   alt: string;
   color: string;
   tone?: SampleMediaTone;
+  durationMs?: number;
   origin: string;
 }
 
@@ -43,7 +45,7 @@ export interface SampleMediaCatalog {
   body(reference: string): Buffer;
 }
 
-const CONTENT_TYPES: Record<string, string> = {jpg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif"};
+const CONTENT_TYPES: Record<string, string> = {jpg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif", webm: "video/webm"};
 const MAX_SAMPLE_BYTES = 3 * 1024 * 1024;
 
 const manifestSchema = z
@@ -56,8 +58,8 @@ const manifestSchema = z
             id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
             reference: z.string().regex(SAMPLE_REFERENCE_PATTERN),
             file: z.string().min(1),
-            kind: z.enum(["gallery", "backdrop"]),
-            contentType: z.enum(["image/jpeg", "image/png", "image/webp", "image/gif"]),
+            kind: z.enum(["gallery", "backdrop", "avatar", "clip"]),
+            contentType: z.enum(["image/jpeg", "image/png", "image/webp", "image/gif", "video/webm"]),
             width: z.number().int().min(1).max(8192),
             height: z.number().int().min(1).max(8192),
             bytes: z.number().int().min(1).max(MAX_SAMPLE_BYTES),
@@ -66,6 +68,7 @@ const manifestSchema = z
             alt: z.string().trim().min(1).max(400),
             color: z.string().regex(/^#[0-9a-f]{6}$/),
             tone: z.enum(["dark", "medium", "light"]).optional(),
+            durationMs: z.number().int().min(1).max(60_000).optional(),
             origin: z.string().trim().min(1).max(400)
           })
           .strict()
@@ -125,6 +128,9 @@ async function readCatalog(root: string): Promise<SampleMediaCatalog> {
     const extension = item.file.split(".").at(-1) ?? "";
     if (CONTENT_TYPES[extension] !== item.contentType) throw invalid(root, `${item.id} content type does not match ${item.file}.`);
     if (item.kind === "backdrop" && !item.tone) throw invalid(root, `${item.id} is a backdrop without a tone.`);
+    // A clip is the only video, and only a video has a duration.
+    if ((item.kind === "clip") !== item.contentType.startsWith("video/")) throw invalid(root, `${item.id} kind ${item.kind} does not match ${item.contentType}.`);
+    if ((item.kind === "clip") !== (item.durationMs !== undefined)) throw invalid(root, `${item.id} must have a durationMs only if it is a clip.`);
     if (ids.has(item.id) || byReference.has(item.reference)) throw invalid(root, `duplicate sample ${item.id}.`);
     ids.add(item.id);
     let body: Buffer;
@@ -138,8 +144,8 @@ async function readCatalog(root: string): Promise<SampleMediaCatalog> {
     if (body.byteLength !== item.bytes || createHash("sha256").update(body).digest("hex") !== item.sha256) {
       throw invalid(root, `${item.file} does not match its recorded size and SHA-256.`);
     }
-    const {tone, ...required} = item;
-    const entry: SampleMediaEntry = {...required, ...(tone ? {tone} : {})};
+    const {tone, durationMs, ...required} = item;
+    const entry: SampleMediaEntry = {...required, ...(tone ? {tone} : {}), ...(durationMs ? {durationMs} : {})};
     byReference.set(entry.reference, entry);
     byFile.set(entry.file, entry);
     bodies.set(entry.reference, body);
@@ -231,6 +237,14 @@ export function sampleMediaSummaries(catalog: SampleMediaCatalog, frameOrigin?: 
     height: item.height,
     color: item.color,
     ...(item.tone ? {tone: item.tone} : {}),
+    ...(item.durationMs ? {durationMs: item.durationMs} : {}),
     ...(frameOrigin ? {url: `${frameOrigin}/__sws/sample/${item.file}`} : {})
   }));
+}
+
+/** Every shipped reference grouped by kind, in manifest order; `init` prints it as placeholders to start from. */
+export function sampleMediaReferencesByKind(catalog: SampleMediaCatalog): Record<SampleMediaKind, string[]> {
+  const grouped = Object.fromEntries(SAMPLE_MEDIA_KINDS.map((kind) => [kind, [] as string[]])) as Record<SampleMediaKind, string[]>;
+  for (const item of catalog.items) grouped[item.kind].push(item.reference);
+  return grouped;
 }

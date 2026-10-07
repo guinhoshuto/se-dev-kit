@@ -23,5 +23,12 @@
   "sws-sample:backdrops/plants.jpg": "c438dc44beee915b78d2e60328ae01f8105699e59ea30e60bb71c9bfa34c112d",
   "sws-sample:backdrops/plants-2.jpg": "eb0e9f5b419eccda3b222c7b260eb5c39dd89883f4e12f3df61c3179c0b109d0",
   "sws-sample:gallery/streamer-1-blur.jpg": "99d4058ce88611664583b2fdc583909791dda1b8386012057d4179ecac193bc6",
-  "sws-sample:gallery/streamer-2-blur.jpg": "e4f9ebf2d90abee82a8294410ee741ad2742367b90f3d04ec50825110461a962"
+  "sws-sample:gallery/streamer-2-blur.jpg": "e4f9ebf2d90abee82a8294410ee741ad2742367b90f3d04ec50825110461a962",
+  "sws-sample:avatars/pixel-1.png": "55afd8d11db7b75c04333ae28638da5959160c8e0febfe6cd00bdefadba2f4f0",
+  "sws-sample:avatars/pixel-2.png": "877804607cf4f7de58d96009f50dfb14ddd1ee6ed6715a146765640c4b946bf5",
+  "sws-sample:avatars/pixel-3.png": "7e4573d2f8a482e749e99a62877fdd08994fbd7c34dae1de301f877300354c5b",
+  "sws-sample:avatars/pixel-4.png": "c5534b97907f5bfdb93e51ddade9b582f6f478d42b2f975639e7861eac93c00b",
+  "sws-sample:avatars/pixel-5.png": "d98b870a52e3672512197a1d94e98d33025920aa77c1d47ea74ed8f7098c0093",
+  "sws-sample:avatars/pixel-6.png": "b49fd1221797f1f72a47aa9e53905a957e72bc051e3e41f00008de5fe9dddc15",
+  "sws-sample:clips/neon-road.webm": "02a95ea0556a9cc8ebcd629aaf088a2358afb18bbf726355caddd87f0959c078"
 }

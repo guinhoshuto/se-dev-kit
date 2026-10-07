@@ -37,7 +37,7 @@ interface FrameRuntimeOptions {
  * Mirrors SAMPLE_REFERENCE_PATTERN in studio-ui/sample-media.ts. The runtime is served on its own,
  * so it cannot import that module; a unit test keeps both sources identical.
  */
-export const FRAME_SAMPLE_REFERENCE_PATTERN = /^sws-sample:([a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*\.(?:jpg|png|webp|gif))$/;
+export const FRAME_SAMPLE_REFERENCE_PATTERN = /^sws-sample:([a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*\.(?:jpg|png|webp|gif|webm))$/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;

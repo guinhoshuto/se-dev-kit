@@ -5,7 +5,7 @@ import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.
 import {expandRecipe} from "../capture/matrix.js";
 import {findSensitiveTestData} from "./privacy.js";
 import {loadSampleMediaCatalog, type SampleMediaCatalog} from "../config/sample-media.js";
-import {collectSampleMediaReferences} from "../studio-ui/sample-media.js";
+import {collectSampleMediaReferences, sampleKindsForField} from "../studio-ui/sample-media.js";
 
 const RECOGNIZED_FIELD_TYPES = new Set([
   "text",
@@ -233,8 +233,53 @@ async function sampleMediaDiagnostics(project: ResolvedProject): Promise<Diagnos
       )
     ];
   }
+  const diagnostics: Diagnostic[] = [];
+  // A clip is a video: CSS cannot draw it as a stage background.
+  const backgrounds = [
+    ...project.scenes.map((item) => ({label: `scene "${item.id}"`, image: item.value.background?.image})),
+    ...project.recipes.flatMap((item) => (item.value.matrix?.backgrounds ?? []).map((background) => ({label: `recipe "${item.id}"`, image: background.image})))
+  ].filter(({image}) => image !== undefined && catalog.entry(image)?.kind === "clip");
+  if (backgrounds.length > 0) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "SAMPLE_MEDIA_KIND",
+        `Video clips cannot be stage backgrounds: ${backgrounds.map(({label, image}) => `${label} uses ${image}`).join("; ")}.`,
+        "Use a gallery or backdrop sample as the background, and a clip only as a video-input value."
+      )
+    );
+  }
+  // A sample of the wrong kind still loads, but not as the field's element would load it on StreamElements.
+  const fieldTypes = new Map(project.fields.map((field) => [field.id, field.type]));
+  const mismatched: string[] = [];
+  const catalogs: [string, {fieldData?: Record<string, unknown>} | undefined][] = [
+    ...project.themes.map((item): [string, {fieldData?: Record<string, unknown>}] => [`theme "${item.id}"`, item.value]),
+    ...project.scenes.map((item): [string, {fieldData?: Record<string, unknown>}] => [`scene "${item.id}"`, item.value])
+  ];
+  for (const [label, value] of catalogs) {
+    for (const [fieldId, fieldValue] of Object.entries(value?.fieldData ?? {})) {
+      const type = fieldTypes.get(fieldId);
+      if (!type) continue;
+      const kinds = sampleKindsForField(type);
+      for (const reference of collectSampleMediaReferences(fieldValue)) {
+        const kind = catalog.entry(reference)?.kind;
+        if (kind && !kinds.includes(kind)) mismatched.push(`${label} sets ${type} field "${fieldId}" to the ${kind} sample ${reference}`);
+      }
+    }
+  }
+  if (mismatched.length > 0) {
+    diagnostics.push(
+      diagnostic(
+        "warning",
+        "SAMPLE_MEDIA_KIND",
+        `Sample media of the wrong kind for its field: ${mismatched.join("; ")}.`,
+        "Give image-input fields gallery, backdrop, or avatar samples, and video-input fields clip samples."
+      )
+    );
+  }
   const distinct = new Set(used.map(({reference}) => reference)).size;
-  return [diagnostic("ok", "SAMPLE_MEDIA", `${distinct} built-in sample media reference${distinct === 1 ? "" : "s"} resolved.`)];
+  diagnostics.push(diagnostic("ok", "SAMPLE_MEDIA", `${distinct} built-in sample media reference${distinct === 1 ? "" : "s"} resolved.`));
+  return diagnostics;
 }
 
 export function hasValidationErrors(diagnostics: Diagnostic[]): boolean {

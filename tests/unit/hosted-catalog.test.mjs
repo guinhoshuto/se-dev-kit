@@ -161,12 +161,14 @@ test("a widget image that copies a built-in sample becomes its sws-sample: refer
   assert.deepEqual(catalog.assets.map((asset) => asset.path), ["studio/media/a.png", "studio/media/b c.png", "studio/media/logo.jpg"], "no sample copy is uploaded, except the one the widget source loads");
 });
 
-test("the PNG originals that sample-media/ was converted from stand for every sample", async () => {
+test("the PNG originals that sample-media/ was converted from stand for every converted sample", async () => {
   const manifest = JSON.parse(await readFile(new URL("manifest.json", SAMPLES), "utf8"));
   const originals = Object.entries(SAMPLE_MEDIA_ORIGINALS);
-  // Every sample was converted from a PNG original, on 2026-09-29 or 2026-10-02 (sample-media/README.md).
+  // Every gallery and backdrop sample was converted from a PNG original, on 2026-09-29 or 2026-10-02; the
+  // avatars and the clip were drawn in code on 2026-10-07 and have none (sample-media/README.md).
   assert.equal(originals.length, 10);
-  assert.deepEqual(originals.map(([, reference]) => reference).sort(), manifest.items.map((item) => item.reference).sort(), "one original per sample");
+  const converted = manifest.items.filter((item) => item.kind === "gallery" || item.kind === "backdrop");
+  assert.deepEqual(originals.map(([, reference]) => reference).sort(), converted.map((item) => item.reference).sort(), "one original per converted sample");
   for (const [sha256, reference] of originals) {
     assert.match(sha256, /^[a-f0-9]{64}$/);
     assert.ok(!manifest.items.some((item) => item.sha256 === sha256), `${reference}: an original is not the sample's own bytes`);
