@@ -34,7 +34,7 @@ Use `scripts/studio-client.mjs`; it defaults to the local Studio, `http://127.0.
 - A `blocked` import already created the project and prints its diagnostics. Fix them with `pull`/`push` on that project; never import again.
 - `pull` produces a capability-free draft with an opaque `etag`. Edit the complete `snapshot`, then `push`. A conflict must stop for reconciliation; never refetch and overwrite silently.
 - `run` requires a new output directory, polls one accepted job on its own route, downloads authorized artifacts, and verifies byte counts and SHA-256.
-- A local job is a heavy render: it waits for the machine-wide render slot, as the CLI does, and is refused by the disk guard when its frames would not fit. Run one job at a time.
+- A local job is a heavy render: it waits for the machine-wide render slot and then for the machine check, as the CLI does, and is refused by the disk guard when its frames would not fit. Run one job at a time.
 - Open the private editor only when the user requests it, using `open-editor`; do not expose the fragment URL in a response or tool argument. If `open-editor` fails, stop and report its error: never assemble the URL yourself, and never open it through a browser automation tool, whose results repeat the address.
 - Google Fonts work as in StreamElements, in preview and in jobs (see "Fonts" in [references/studio-workflow.md](references/studio-workflow.md#fonts)); never vendor fonts or edit the widget for them. Other runtime network requests stay blocked.
 - Do not retry a mutation automatically after an uncertain response. Resume or inspect the accepted project or job instead.

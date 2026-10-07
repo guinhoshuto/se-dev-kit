@@ -1,8 +1,9 @@
 // The machine check every repo on this Mac shares (~/obsidian/AI/scripts/maquina_livre.py, in the
-// owner's vault), asked by local capture, record and render before each recipe. The render slot keeps
-// two renders apart; this check also sees what holds no slot: the game, low memory, swap, disk, and a
-// render from a tool that does not use the slot. scripts/lib/machine.mjs asks the same check for the
-// test runner. MACHINE_CHECK overrides its path (the tests use a fake one).
+// owner's vault), asked by local capture, record and render before each recipe, and by a local Studio
+// job before it starts (scripts/job-worker.mjs). The render slot keeps two renders apart; this check
+// also sees what holds no slot: the game, low memory, swap, disk, and a render from a tool that does
+// not use the slot. scripts/lib/machine.mjs asks the same check for the test runner. MACHINE_CHECK
+// overrides its path (the tests use a fake one).
 import {execFile} from "node:child_process";
 import {existsSync} from "node:fs";
 import {homedir} from "node:os";
@@ -56,6 +57,8 @@ export type MachineWaitOptions = {
   wait?: boolean;
   pollMs?: number;
   waitLimitMs?: number;
+  /** When the wait began, if before this call (a Studio job's wait for the render slot): the limit counts from it. */
+  startedAt?: number;
   log?: (message: string) => void;
   check?: () => Promise<MachineVerdict | null>;
   sleep?: (ms: number) => Promise<void>;
@@ -70,7 +73,7 @@ export async function waitForMachine(options: MachineWaitOptions = {}): Promise<
   const log = options.log ?? ((message: string) => process.stderr.write(`${message}\n`));
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
   const now = options.now ?? Date.now;
-  const started = now();
+  const started = options.startedAt ?? now();
   let said = "";
   for (;;) {
     const verdict = await check();

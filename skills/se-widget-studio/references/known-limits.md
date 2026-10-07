@@ -17,6 +17,6 @@ What the Studio does not do yet, or does differently from StreamElements, and wh
 
 ## Machine
 
-- **One render at a time.** Studio jobs and CLI renders wait for the machine-wide render slot (`~/.cache/render-slot`). CLI renders also wait, before each recipe, for the machine check (the game, memory, a Remotion render from another tool); a Studio job does not ask it yet: `npm run wait-free` in the Studio checkout waits for it before you submit one.
+- **One render at a time.** Studio jobs and CLI renders wait for the machine-wide render slot (`~/.cache/render-slot`), and then for the machine check (the game, memory, a Remotion render from another tool): a CLI render before each recipe, a Studio job before it starts, 30 minutes at most for the slot and the check together.
 - **Disk.** A 1080p PNG frame weighs 2 to 3 MB before encoding: 15 videos of 14 seconds peaked near 10 GB on 2026-09-26. Check the dry run's `plan.disk.summary` (CLI) or the estimate in [studio-workflow.md](studio-workflow.md#plan-a-large-batch) (Studio), and free space overall, before a batch.
 - **Node 24.** Renders on Node 26 have hung while Chrome launched or closed; the CLI refuses it, and the local Studio runs on the Node that started it, so start it with Node 24.
