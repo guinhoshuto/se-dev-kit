@@ -137,6 +137,8 @@ se-widget-studio render examples/basic-chat --recipe etsy-listing-images --dry-r
 se-widget-studio render examples/basic-chat --recipe etsy-listing-video --dry-run --json
 ```
 
+For a recipe with video, `--fps <count>` and `--duration <ms>` replace `outputs.video.fps` and `durationMs` for one run; the manifest records the replaced recipe. For a tutorial video, `--plan-only` prints each variant's measured layout and camera plan from one browser, without frames or files. See [Tutorial videos](TUTORIAL.md#iterating-on-a-script).
+
 Matrix cardinality is calculated with integer-safe arithmetic before variants are expanded. The default matrix limit is 48 variants; a larger matrix requires `--allow-large-matrix`.
 
 An independent render-workload guard counts video frames and every planned file before frame paths are created. The default limit is 10,000 planned files. A reviewed dry run or render can opt in with `--allow-large-render`; neither large-render flag can bypass the safe-integer boundary.

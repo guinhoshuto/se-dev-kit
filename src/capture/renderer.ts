@@ -18,6 +18,7 @@ import {stableStringify} from "../shared/json.js";
 import {buildInfo} from "../build-info.js";
 import {STUDIO_VERSION} from "../version.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
+import {recipeSchema} from "../config/schemas.js";
 import {startStudioServer} from "../server/server.js";
 import {buildAssetMap} from "../server/assets.js";
 import {
@@ -103,6 +104,68 @@ export interface RenderOptions {
   trace?: (event: RenderTraceEvent) => void;
   /** The CLI options of this render, recorded as `studio.cliFlags` in the manifest; hosted jobs have none. */
   cliFlags?: string[];
+}
+
+/** Per-run replacements for a recipe's `outputs.video` timing, from `render --fps` and `--duration`. */
+export interface VideoOverrides {
+  fps?: number;
+  durationMs?: number;
+}
+
+/**
+ * The recipe with its video timing replaced, validated as a recipe. The result is what renders and what
+ * the manifest records; a recipe without an enabled video cannot take an override.
+ */
+export function withVideoOverrides(recipe: RecipeDefinition, overrides: VideoOverrides): RecipeDefinition {
+  if (overrides.fps === undefined && overrides.durationMs === undefined) return recipe;
+  const video = recipe.outputs?.video;
+  if (!video?.enabled) {
+    throw new StudioError("VIDEO_OVERRIDE_INVALID", `Recipe "${recipe.id}" has no enabled video, so --fps and --duration do not apply.`);
+  }
+  const next: RecipeDefinition = {
+    ...recipe,
+    outputs: {
+      ...recipe.outputs,
+      video: {
+        ...video,
+        ...(overrides.fps !== undefined ? {fps: overrides.fps} : {}),
+        ...(overrides.durationMs !== undefined ? {durationMs: overrides.durationMs} : {})
+      }
+    }
+  };
+  const parsed = recipeSchema.safeParse(next);
+  if (!parsed.success) {
+    throw new StudioError(
+      "VIDEO_OVERRIDE_INVALID",
+      `Recipe "${recipe.id}" with the override is invalid: ${parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}.`,
+      "--fps takes an integer from 1 to 120, and --duration milliseconds from 100 to 600000."
+    );
+  }
+  return next;
+}
+
+/** What the tutorial host measured in setup and the camera plan it made; mirrors TutorialPlanRecord in tutorial-host.ts. */
+export interface TutorialPlanRecord extends JsonObject {
+  endMs: number;
+  layout: JsonObject;
+  camera: JsonObject;
+}
+
+/** Lays out the editor replica for the timeline and plans the camera; nothing is drawn. */
+async function setupTutorial(opened: OpenSceneResult, tutorial: TutorialTimeline, variant: CaptureVariant): Promise<TutorialPlanRecord> {
+  const setup: unknown = {
+    timeline: tutorial,
+    menu: EMULATE_MENU,
+    viewport: {width: opened.resolved.viewport.width, height: opened.resolved.viewport.height},
+    output: {width: opened.resolved.output.width, height: opened.resolved.output.height},
+    // Frames are clipped to the scene crop, so the tutorial camera frames the crop.
+    crop: variant.scene.crop ?? null
+  };
+  const record = await opened.page.evaluate(
+    (value) => (window as unknown as {__SWS_TUTORIAL__: {setup: (options: unknown) => Promise<unknown>}}).__SWS_TUTORIAL__.setup(value),
+    setup
+  );
+  return JSON.parse(JSON.stringify(record)) as TutorialPlanRecord;
 }
 
 export interface RenderTraceEvent {
@@ -588,6 +651,8 @@ async function renderVideoFrames(options: {
   fonts: ArtifactFonts;
   /** How the tutorial's field changes reached the widget, for the manifest; absent without any. */
   fieldUpdate?: JsonObject;
+  /** Tutorial videos only: the setup's layout and camera plan, for the manifest. */
+  tutorialPlan?: TutorialPlanRecord;
   framesDirectory: string;
   framesManifest: string;
   frameFiles: string[];
@@ -637,24 +702,12 @@ async function renderVideoFrames(options: {
     })),
     ...(tutorial?.widget ?? [])
   ].sort((left, right) => left.atMs - right.atMs);
+  let tutorialPlan: TutorialPlanRecord | undefined;
   // Where the recording is, for the message of a FONT_SETTLE_TIMEOUT.
   let step = tutorial ? "the first settle, before the tutorial setup" : "the first settle";
   try {
     noteFonts(await captureHostSettle(opened.page), true);
-    if (tutorial) {
-      const setup: unknown = {
-        timeline: tutorial,
-        menu: EMULATE_MENU,
-        viewport: {width: opened.resolved.viewport.width, height: opened.resolved.viewport.height},
-        output: {width: opened.resolved.output.width, height: opened.resolved.output.height},
-        // Frames are clipped to the scene crop, so the tutorial camera frames the crop.
-        crop: options.variant.scene.crop ?? null
-      };
-      await opened.page.evaluate(
-        (value) => (window as unknown as {__SWS_TUTORIAL__: {setup: (options: unknown) => Promise<void>}}).__SWS_TUTORIAL__.setup(value),
-        setup
-      );
-    }
+    if (tutorial) tutorialPlan = await setupTutorial(opened, tutorial, options.variant);
     for (let index = 0; index < frameCount; index += 1) {
       const timestampMs = Math.round((index * 1000) / options.video.fps);
       while (events[eventIndex] && events[eventIndex]!.atMs <= timestampMs) {
@@ -753,6 +806,7 @@ async function renderVideoFrames(options: {
     ...(fieldUpdates.length > 0
       ? {fieldUpdate: JSON.parse(JSON.stringify({mode: opened.fieldUpdate, updates: fieldUpdates})) as JsonObject}
       : {}),
+    ...(tutorialPlan ? {tutorialPlan} : {}),
     framesDirectory,
     framesManifest,
     frameFiles: frames.map((frame) => frame.file),
@@ -997,6 +1051,7 @@ export async function renderRecipe(
       let stillFonts: ArtifactFonts | undefined;
       let videoFonts: ArtifactFonts | undefined;
       let videoFieldUpdate: JsonObject | undefined;
+      let videoTutorialPlan: TutorialPlanRecord | undefined;
       if (recipe.outputs?.screenshots !== false) {
         step("screenshot");
         const resolvedScene = await openScene(renderProject, server, activeBrowser, variant.scene, sceneFonts);
@@ -1058,6 +1113,7 @@ export async function renderRecipe(
         if (renderedFrames.discovery) return;
         videoFonts = renderedFrames.fonts;
         videoFieldUpdate = renderedFrames.fieldUpdate;
+        videoTutorialPlan = renderedFrames.tutorialPlan;
         videoStills = renderedFrames.stills;
         for (const still of videoStills) artifacts.push(still.path);
         framesPath = renderedFrames.framesDirectory;
@@ -1154,6 +1210,7 @@ export async function renderRecipe(
         ...(manifestFonts(stillFonts) ? {fonts: manifestFonts(stillFonts)!} : {}),
         ...(manifestFonts(videoFonts) ? {videoFonts: manifestFonts(videoFonts)!} : {}),
         ...(videoFieldUpdate ? {fieldUpdate: videoFieldUpdate} : {}),
+        ...(videoTutorialPlan ? {tutorialPlan: videoTutorialPlan} : {}),
         ...(stillEntries.length > 0 ? {stills: stillEntries} : {}),
         parameters: JSON.parse(JSON.stringify({
           background: variant.background,
@@ -1260,6 +1317,69 @@ export async function renderRecipe(
     trace("server close");
     await server.close();
     trace("server closed");
+  }
+}
+
+/** `render --plan-only`: each variant's tutorial layout and camera plan, from one browser and no frames. */
+export interface TutorialPlanResult {
+  recipe: string;
+  status: "plan-only";
+  /** The output plan's warnings; its targets and disk estimate belong to `--dry-run`. */
+  warnings?: string[];
+  variants: {id: string; tutorialPlan: TutorialPlanRecord; fontWarnings?: string[]}[];
+}
+
+/** The recipe's enabled tutorial video; any other recipe has no camera to plan. */
+export function tutorialVideo(recipe: RecipeDefinition): VideoDefinition {
+  const video = recipe.outputs?.video;
+  if (!video?.enabled || video.mode !== "tutorial") {
+    throw new StudioError("PLAN_ONLY_NEEDS_TUTORIAL", `Recipe "${recipe.id}" has no tutorial video; --plan-only plans the tutorial camera.`, "Use --dry-run for the output plan of any recipe.");
+  }
+  return video;
+}
+
+/**
+ * Opens each variant's tutorial in the editor replica and runs only its setup: the layout is measured
+ * and the camera planned, as the render would, but no frame is drawn and no file is written.
+ */
+export async function planTutorialRecipe(
+  project: ResolvedProject,
+  recipe: RecipeDefinition,
+  options: RenderOptions = {}
+): Promise<TutorialPlanResult> {
+  const video = tutorialVideo(recipe);
+  const {plan, variants, outputRoot} = await planRecipe(project, recipe, options);
+  const renderProject: ResolvedProject = outputRoot === project.outputRoot ? project : {...project, outputRoot};
+  const sceneFonts = options.fonts ? {fonts: options.fonts} : options.fontRoute ? {fontRoute: options.fontRoute} : {};
+  const server = await startStudioServer(renderProject, {port: 0, watch: false});
+  let launched: Awaited<ReturnType<typeof launchStudioBrowser>> | undefined;
+  try {
+    launched = options.browser ? undefined : await launchStudioBrowser({
+      ...(options.browserPath ? {browserPath: options.browserPath} : {}),
+      ...(options.headed !== undefined ? {headed: options.headed} : {})
+    });
+    const browser = options.browser?.browser ?? launched!.browser;
+    const results: TutorialPlanResult["variants"] = [];
+    for (const variant of variants) {
+      const tutorial = compileVariantTutorial(renderProject, variant, video);
+      const opened = await openScene(renderProject, server, browser, variant.scene, {
+        host: "tutorial" as const,
+        camera: tutorialCamera(tutorial),
+        background: {id: "tutorial-editor", color: "transparent"},
+        ...sceneFonts
+      });
+      try {
+        const fontWarnings = checkOpenedFonts(opened, await captureHostSettle(opened.page)).warnings;
+        const tutorialPlan = await setupTutorial(opened, tutorial, variant);
+        results.push({id: variant.id, tutorialPlan, ...(fontWarnings.length > 0 ? {fontWarnings} : {})});
+      } finally {
+        await opened.context.close();
+      }
+    }
+    return {recipe: recipe.id, status: "plan-only", ...(plan.warnings ? {warnings: plan.warnings} : {}), variants: results};
+  } finally {
+    if (launched) await closeStudioBrowser(launched.browser);
+    await server.close();
   }
 }
 

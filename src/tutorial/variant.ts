@@ -29,7 +29,7 @@ export function compileVariantTutorial(
     throw new StudioError(
       "TUTORIAL_TOO_LONG",
       `Tutorial for variant "${variant.id}" needs ${timeline.endMs}ms but the video lasts ${video.durationMs}ms.`,
-      `Set outputs.video.durationMs to at least ${Math.ceil(timeline.endMs / 500) * 500}.`
+      `Set outputs.video.durationMs (or render --duration) to at least ${Math.ceil(timeline.endMs / 500) * 500}.`
     );
   }
   return timeline;

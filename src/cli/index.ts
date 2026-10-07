@@ -14,7 +14,17 @@ import {runBrowserSmoke, runScenarios} from "../scenarios/runner.js";
 import {createDefaultScene} from "../scenarios/state.js";
 import {startStudioServer} from "../server/server.js";
 import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser} from "../capture/browser.js";
-import {planRecipe, renderRecipe, singleSceneRecipe, type RenderResult, type RenderTraceEvent} from "../capture/renderer.js";
+import {
+  planRecipe,
+  planTutorialRecipe,
+  renderRecipe,
+  singleSceneRecipe,
+  tutorialVideo,
+  withVideoOverrides,
+  type RenderResult,
+  type RenderTraceEvent,
+  type TutorialPlanResult
+} from "../capture/renderer.js";
 import {reviewSummary, writeReviewPage} from "../capture/review.js";
 import {assertSupportedNode} from "../shared/node-support.js";
 import {acquireRenderSlot, RenderSlotError} from "../shared/render-slot.js";
@@ -402,6 +412,9 @@ program
   .option("--allow-intermediate", "Accept PNG frame output when FFmpeg is unavailable")
   .option("--allow-low-disk", "Render even when the estimated peak exceeds 70% of free disk space")
   .option("--keep-frames", "Keep the PNG frames and frames.json after a validated encode (takes precedence over a recipe's keepFrames: false)")
+  .option("--fps <count>", "Replace outputs.video.fps for this run; the manifest records the replaced recipe", (value) => Number(value))
+  .option("--duration <ms>", "Replace outputs.video.durationMs for this run; the manifest records the replaced recipe", (value) => Number(value))
+  .option("--plan-only", "Open Chrome once and print each tutorial variant's measured layout and camera plan, without frames or files")
   .option("--no-wait", NO_WAIT_HELP)
   .option("--allow-unsupported-node", UNSUPPORTED_NODE_HELP)
   .action(async (
@@ -422,6 +435,9 @@ program
       allowIntermediate?: boolean;
       allowLowDisk?: boolean;
       keepFrames?: boolean;
+      fps?: number;
+      duration?: number;
+      planOnly?: boolean;
       wait?: boolean;
     },
     command: Command
@@ -433,8 +449,12 @@ program
     const recipes = ids.map((id) => {
       const recipe = project.recipes.find((item) => item.id === id)?.value;
       if (!recipe) throw new StudioError("RECIPE_NOT_FOUND", `Recipe not found: ${id}`);
-      return recipe;
+      return withVideoOverrides(recipe, {
+        ...(options.fps !== undefined ? {fps: options.fps} : {}),
+        ...(options.duration !== undefined ? {durationMs: options.duration} : {})
+      });
     });
+    if (options.planOnly && options.dryRun) throw new StudioError("RENDER_MODE", "Pass --plan-only or --dry-run, not both.");
     const renderOptions = {
       cliFlags: cliFlags(command),
       ...(options.output ? {outputRoot: resolve(options.output)} : {}),
@@ -455,6 +475,28 @@ program
       for (const result of results) for (const warning of result.plan.warnings ?? []) process.stderr.write(`Warning ${warning}\n`);
       print(results.length === 1 ? results[0] : results, globals(command).json);
     };
+    if (options.planOnly) {
+      // Every recipe is checked before the render slot, so a wrong one never waits for the machine.
+      recipes.forEach(tutorialVideo);
+      assertSupportedNode(options.allowUnsupportedNode === true);
+      const plans: TutorialPlanResult[] = [];
+      await inRenderSlot(async (machineFree) => {
+        let shared: Awaited<ReturnType<typeof launchStudioBrowser>> | undefined;
+        try {
+          for (const recipe of recipes) {
+            await machineFree();
+            if (recipes.length > 1) shared ??= await launchStudioBrowser(options.browserPath ? {browserPath: options.browserPath} : {});
+            plans.push(await planTutorialRecipe(project, recipe, {...renderOptions, ...(shared ? {browser: shared} : {})}));
+          }
+        } finally {
+          if (shared) await closeStudioBrowser(shared.browser);
+        }
+      }, options.wait !== false);
+      for (const result of plans) for (const warning of result.warnings ?? []) process.stderr.write(`Warning ${warning}\n`);
+      const json = globals(command).json;
+      print(json ? (plans.length === 1 ? plans[0] : plans) : tutorialPlanSummary(plans), json);
+      return;
+    }
     if (options.dryRun) {
       for (const recipe of recipes) results.push(await planRecipe(project, recipe, renderOptions).then(({plan}) => ({plan, status: "dry-run" as const, artifacts: []})));
       report();
@@ -498,6 +540,30 @@ program
     const json = globals(command).json;
     print(json ? result : reviewSummary(result), json);
   });
+
+/** One block per tutorial variant: its length and every camera key, for reading a plan without --json. */
+function tutorialPlanSummary(plans: TutorialPlanResult[]): string {
+  const lines: string[] = [];
+  for (const result of plans) {
+    for (const variant of result.variants) {
+      const camera = variant.tutorialPlan.camera as unknown as {
+        frame: {width: number};
+        keys: {t: number; kind: string; view: {x: number; y: number; w: number}}[];
+        holds: unknown[];
+        repairedMoves: number[];
+        fallback: boolean;
+      };
+      lines.push(`${result.recipe}/${variant.id}: ${variant.tutorialPlan.endMs} ms, ${camera.keys.length} camera keys, ${camera.holds.length} holds, ${camera.repairedMoves.length} repaired moves${camera.fallback ? ", strict fallback" : ""}`);
+      for (const key of camera.keys) {
+        const zoom = camera.frame.width / key.view.w;
+        lines.push(`  ${String(Math.round(key.t)).padStart(7)} ms  ${key.kind.padEnd(8)} ${zoom.toFixed(2)}x at (${Math.round(key.view.x)}, ${Math.round(key.view.y)})`);
+      }
+      for (const warning of variant.fontWarnings ?? []) lines.push(`  Warning ${warning}`);
+    }
+  }
+  lines.push("Pass --json for the measured layout and the full camera plan.");
+  return lines.join("\n");
+}
 
 /** A finished command exits even if a stray handle, such as a browser that never exited, keeps the loop alive. */
 function exitWhenIdle(): void {

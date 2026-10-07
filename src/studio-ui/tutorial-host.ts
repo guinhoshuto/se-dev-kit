@@ -131,6 +131,23 @@ interface SetupOptions {
   crop?: Frame | null;
 }
 
+/**
+ * What setup measured and planned, returned to Node for `render --plan-only` and the manifest.
+ * Mirrors TutorialPlanRecord in src/capture/renderer.ts.
+ */
+interface TutorialPlanRecord {
+  endMs: number;
+  /** The pre-pass measurements the camera plans from, in stage px with the camera at identity. */
+  layout: {
+    home: Point;
+    scrolls: {startMs: number; endMs: number; from: number; to: number}[];
+    moves: CameraInput["moves"];
+    cues: CameraCue[];
+    captions: CameraInput["captions"];
+  };
+  camera: CameraPlan;
+}
+
 interface UiState {
   selected: boolean;
   settingsOpen: boolean;
@@ -333,7 +350,7 @@ class TutorialController {
   /** The sidebar scrolls, resolved in setup: offsets in editor px, in time order. */
   #scrolls: {startMs: number; endMs: number; from: number; to: number}[] = [];
 
-  async setup(options: SetupOptions): Promise<void> {
+  async setup(options: SetupOptions): Promise<TutorialPlanRecord> {
     await loadEditorFonts();
     this.timeline = options.timeline;
     this.menu = options.menu;
@@ -385,6 +402,12 @@ class TutorialController {
     const cues = this.#measureCues();
     const captions = this.#measureCaptions();
     const timeline = options.timeline;
+    const moves = timeline.moves.map((move, index) => ({
+      startMs: move.startMs,
+      endMs: move.endMs,
+      workEndMs: move.workEndMs,
+      ...this.#anchors[index]!
+    }));
     this.#plan = planCamera({
       width: options.output.width,
       height: options.output.height,
@@ -393,17 +416,17 @@ class TutorialController {
       zoom: timeline.autoZoom?.zoom ?? null,
       endMs: timeline.endMs,
       home: this.#home,
-      moves: timeline.moves.map((move, index) => ({
-        startMs: move.startMs,
-        endMs: move.endMs,
-        workEndMs: move.workEndMs,
-        ...this.#anchors[index]!
-      })),
+      moves,
       cues,
       captions
     });
     // The first frame rewrites every slot the pre-pass left behind.
     this.#rendered = {};
+    return {
+      endMs: timeline.endMs,
+      layout: {home: {...this.#home}, scrolls: this.#scrolls.map((scroll) => ({...scroll})), moves, cues, captions},
+      camera: this.#plan
+    };
   }
 
   /** Lays the editor out as it is at `timeMs`, with the camera at identity. */
