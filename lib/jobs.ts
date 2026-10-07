@@ -192,25 +192,52 @@ function discoveredFonts(result: WorkerResult): string[] {
 
 // Local worker -------------------------------------------------------------------------------
 
-/** STUDIO_EXECUTION=local tells the worker to take the render slot, keep the disk guard, and skip the hosted limits. */
+/**
+ * STUDIO_EXECUTION=local tells the worker to take the render slot, ask the machine check, keep the disk
+ * guard, and skip the hosted limits. RENDER_SLOT_DIR and MACHINE_CHECK pass through, so a test's own
+ * slot and machine check reach its workers (scripts/run-tests.mjs gives every suite both).
+ */
 export function localWorkerEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {PATH: process.env.PATH, TMPDIR: tmpdir(), NODE_ENV: 'production', STUDIO_EXECUTION: 'local'};
-  for (const name of ['SE_WIDGET_STUDIO_BROWSER', 'STUDIO_FFMPEG_PATH', 'STUDIO_FFPROBE_PATH', 'RENDER_SLOT_DIR']) if (process.env[name]) environment[name] = process.env[name];
+  for (const name of ['SE_WIDGET_STUDIO_BROWSER', 'STUDIO_FFMPEG_PATH', 'STUDIO_FFPROBE_PATH', 'RENDER_SLOT_DIR', 'MACHINE_CHECK']) if (process.env[name]) environment[name] = process.env[name];
   return environment;
 }
-async function runLocalWorker(input: string, pass: number, timeoutMs: number): Promise<void> {
+/** A worker's stdout line {"progress": "…"}, such as why it waits for the machine; anything else is no progress. */
+function workerProgress(line: string): string | undefined {
+  let value: unknown;
+  try {value = JSON.parse(line);} catch {return undefined;}
+  const progress = (value as {progress?: unknown} | null)?.progress;
+  return typeof progress === 'string' && progress.trim() ? progress.trim().slice(0, 1000) : undefined;
+}
+async function runLocalWorker(input: string, pass: number, timeoutMs: number, onProgress: (progress: string) => Promise<unknown>): Promise<void> {
   const environment = localWorkerEnvironment();
-  await new Promise<void>((done, reject) => {
-    const child = spawn(process.execPath, [resolve(process.cwd(), 'scripts/job-worker.mjs'), input, String(pass)], {env: environment, cwd: process.cwd(), detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe']});
-    let errors = '';
-    child.stderr?.on('data', chunk => { errors = `${errors}${String(chunk)}`.slice(-4000); });
-    const timer = setTimeout(() => {
-      if (child.pid) {try {process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL');} catch {child.kill('SIGKILL');}}
-      reject(new Error(`Job exceeded its ${Math.round(jobBudgetMs() / 60_000)} minute execution limit.`));
-    }, timeoutMs);
-    child.once('error', error => {clearTimeout(timer); reject(error);});
-    child.once('close', code => {clearTimeout(timer); code === 0 ? done() : reject(new Error(`Worker exited with code ${code}. ${errors}`));});
-  });
+  // One progress write at a time, all of them done before the pass ends; a failed one is only cosmetic.
+  let reported: Promise<unknown> = Promise.resolve();
+  try {
+    await new Promise<void>((done, reject) => {
+      const child = spawn(process.execPath, [resolve(process.cwd(), 'scripts/job-worker.mjs'), input, String(pass)], {env: environment, cwd: process.cwd(), detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe']});
+      let errors = '';
+      let partial = '';
+      child.stderr?.on('data', chunk => { errors = `${errors}${String(chunk)}`.slice(-4000); });
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => {
+        const lines = `${partial}${chunk}`.split('\n');
+        partial = lines.pop()!.slice(-4000);
+        for (const line of lines) {
+          const progress = workerProgress(line);
+          if (progress) reported = reported.then(() => onProgress(progress)).catch(() => {});
+        }
+      });
+      const timer = setTimeout(() => {
+        if (child.pid) {try {process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL');} catch {child.kill('SIGKILL');}}
+        reject(new Error(`Job exceeded its ${Math.round(jobBudgetMs() / 60_000)} minute execution limit.`));
+      }, timeoutMs);
+      child.once('error', error => {clearTimeout(timer); reject(error);});
+      child.once('close', code => {clearTimeout(timer); code === 0 ? done() : reject(new Error(`Worker exited with code ${code}. ${errors}`));});
+    });
+  } finally {
+    await reported;
+  }
 }
 
 /** Local mode: the same pass loop as the hosted workflow, with a subprocess instead of a Sandbox. */
@@ -227,7 +254,7 @@ export async function runJob(job: Job, revision: Revision, store: ObjectStore, d
     await writeFile(input, JSON.stringify({job, project, sampleMedia: revision.prepared!.sampleMedia ?? {}}), {flag: 'wx'});
     await writeFontPackage(directory, await jobFontPackage(store, revision, deps.fonts), 1);
     for (let pass = 1; ; pass++) {
-      await runLocalWorker(input, pass, remainingJobTime(current));
+      await runLocalWorker(input, pass, remainingJobTime(current), progress => patchJob(store, current, {progress}));
       const result = JSON.parse(await readFile(resolve(directory, `result-${pass}.json`), 'utf8')) as WorkerResult;
       if (result.needsFonts === undefined) {
         current = await publish(store, current, result, name => readFile(resolve(project.outputRoot, `pass-${pass}`, name)));

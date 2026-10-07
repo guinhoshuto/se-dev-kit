@@ -6,6 +6,7 @@ import {runScenarios, runBrowserSmoke} from '../dist/scenarios/runner.js';
 import {assertSampleMediaPins} from '../dist/config/sample-media.js';
 import {FontResolver, FONTS_MISSING_MAX_URLS, isFontsMissing} from '../dist/fonts/resolver.js';
 import {acquireRenderSlot} from '../dist/shared/render-slot.js';
+import {waitForMachine} from '../dist/shared/machine-check.js';
 
 // Trusted process entry point. Input is data; no submitted Node module is imported.
 // argv: <input.json> <pass>. Everything else derives from the input's directory, so the host never
@@ -44,9 +45,18 @@ const result = {ok: false, artifacts: [], progress: '', error: undefined, pass};
 const needsFonts = urls => { result.needsFonts = urls.slice(0, FONTS_MISSING_MAX_URLS); result.progress = `Fetching Google Fonts (pass ${pass + 1}).`; };
 try {
   // On the owner's machine a job is one more heavy render: it waits for the machine-wide slot like the CLI
-  // does, and holds it until this process exits. A job has two hours from its creation, so it waits 30
-  // minutes at most, never the slot's own 4 hours: past its life it would render for a job already failed.
-  if (local) await acquireRenderSlot({command: `studio ${job.kind} job ${job.id} pass ${pass}`, waitLimitMs: 30 * 60_000, log: message => process.stderr.write(`${message}\n`)});
+  // does, and holds it until this process exits. Holding it, it waits while the machine check every repo
+  // shares says busy (the game, memory, swap, disk), and each line of that wait is also a stdout line
+  // {"progress": …}, which the host shows on the job (lib/jobs.ts). A job has two hours from its creation,
+  // so it waits 30 minutes at most for the two together, never the CLI's 4 hours: past its life it would
+  // render for a job already failed.
+  if (local) {
+    const waitStarted = Date.now();
+    const waitLimitMs = 30 * 60_000;
+    const log = message => process.stderr.write(`${message}\n`);
+    await acquireRenderSlot({command: `studio ${job.kind} job ${job.id} pass ${pass}`, waitLimitMs, log});
+    await waitForMachine({startedAt: waitStarted, waitLimitMs, log: message => { log(message); process.stdout.write(`${JSON.stringify({progress: message})}\n`); }});
+  }
   const fonts = await FontResolver.load(resolve(jobDirectory, 'fonts'), pass);
   // Samples the revision pinned must still have identical bytes in this build (append-only catalog).
   await assertSampleMediaPins(sampleMedia);

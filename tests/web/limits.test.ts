@@ -11,6 +11,7 @@ import {randomBytes} from 'node:crypto';
 import {parseSnapshot} from '../../lib/schema';
 import {LocalStore} from '../../lib/storage';
 import {temporaryDirectory} from './temporary';
+import {fakeMachineCheck} from './fake-machine-check';
 
 /** Runs `task` as the hosted deployment (STUDIO_EXECUTION=vercel) or as a local Studio, and restores the environment. */
 async function as<T>(mode: 'hosted' | 'local', task: () => T | Promise<T>): Promise<T> {
@@ -79,13 +80,15 @@ async function worker(root: string, environment: NodeJS.ProcessEnv) {
   await mkdir(directory, {recursive: true});
   const input = join(directory, 'input.json');
   await writeFile(input, JSON.stringify({job: {id: 'slot-test', kind: 'unknown'}, project: {outputRoot: join(directory, 'output')}, sampleMedia: {}}));
-  const child = spawn(process.execPath, [resolve('scripts/job-worker.mjs'), input, '1'], {env: {PATH: process.env.PATH, ...environment}, stdio: ['ignore', 'ignore', 'pipe']});
+  const child = spawn(process.execPath, [resolve('scripts/job-worker.mjs'), input, '1'], {env: {PATH: process.env.PATH, ...environment}, stdio: ['ignore', 'pipe', 'pipe']});
+  let stdout = '';
   let stderr = '';
+  child.stdout.on('data', chunk => {stdout += String(chunk);});
   child.stderr.on('data', chunk => {stderr += String(chunk);});
   const exited = new Promise<number | null>(done => child.once('close', done));
   const result = join(directory, 'result-1.json');
   const written = async () => {try {await stat(result); return true;} catch {return false;}};
-  return {exited, written, stderr: () => stderr, result: async () => JSON.parse(await readFile(result, 'utf8')) as {error?: string}};
+  return {exited, written, stdout: () => stdout, stderr: () => stderr, result: async () => JSON.parse(await readFile(result, 'utf8')) as {error?: string}};
 }
 
 async function holdSlot(dir: string) {
@@ -97,7 +100,8 @@ test('a local Studio job waits for the machine render slot and releases it', asy
   const root = await temporaryDirectory('sws-limits-slot-');
   const slot = join(root, 'render-slot');
   await holdSlot(slot);
-  const job = await worker(root, {STUDIO_EXECUTION: 'local', RENDER_SLOT_DIR: slot});
+  // A missing machine check leaves the slot alone to decide (the next test covers the check).
+  const job = await worker(root, {STUDIO_EXECUTION: 'local', RENDER_SLOT_DIR: slot, MACHINE_CHECK: join(root, 'no-machine-check.py')});
   await new Promise(done => setTimeout(done, 2500));
   assert.equal(await job.written(), false, 'the worker must not run while another render holds the slot');
   assert.match(job.stderr(), /Waiting for the render slot, held by .*limits-test/);
@@ -108,14 +112,41 @@ test('a local Studio job waits for the machine render slot and releases it', asy
   await assert.rejects(stat(slot), {code: 'ENOENT'}, 'the worker releases the slot when it ends');
 });
 
-test('the local Studio starts its workers in local execution, with the slot directory it was given', () => {
-  const saved = process.env.RENDER_SLOT_DIR;
+// SDK-42: holding the slot, a local job also waits for the machine check, as a CLI render does since SDK-41.
+test('a local Studio job holding the slot waits while the machine check says busy, and gives the reason as its progress', {timeout: 90_000}, async () => {
+  const root = await temporaryDirectory('sws-limits-machine-');
+  const check = await fakeMachineCheck(root, 'the game (Client-Mac-Shipping) is open');
+  const job = await worker(root, {STUDIO_EXECUTION: 'local', RENDER_SLOT_DIR: join(root, 'render-slot'), MACHINE_CHECK: check.script});
+  const progress = () => job.stdout().split('\n').filter(Boolean).map(line => (JSON.parse(line) as {progress: string}).progress);
+  for (const deadline = Date.now() + 30_000; Date.now() < deadline && !progress().length;) await new Promise(done => setTimeout(done, 100));
+  assert.deepEqual(progress(), ['Waiting for the machine: the game (Client-Mac-Shipping) is open']);
+  assert.match(job.stderr(), /Waiting for the machine: the game \(Client-Mac-Shipping\) is open/);
+  await new Promise(done => setTimeout(done, 1500));
+  assert.equal(await job.written(), false, 'the worker must not run while the machine check says busy');
+  // The worker asks again 20 seconds after its first answer, and then goes on.
+  const {rm} = await import('node:fs/promises');
+  await rm(check.busy);
+  assert.equal(await job.exited, 0);
+  assert.match((await job.result()).error ?? '', /Unknown job kind/);
+  assert.deepEqual(progress(), ['Waiting for the machine: the game (Client-Mac-Shipping) is open', 'The machine is free; rendering.']);
+  const [first] = (await readFile(check.calls, 'utf8')).trim().split('\n');
+  const [, family, holder] = /^--json --familia (\d+) slot=(\S+)$/.exec(first ?? '') ?? [];
+  assert.ok(Number(family) > 1, `the worker asks for its own family: ${first}`);
+  assert.equal(holder, family, 'the worker asks while it holds the render slot');
+});
+
+test('the local Studio starts its workers in local execution, with the slot directory and the machine check it was given', () => {
+  const saved = {RENDER_SLOT_DIR: process.env.RENDER_SLOT_DIR, MACHINE_CHECK: process.env.MACHINE_CHECK};
   process.env.RENDER_SLOT_DIR = '/tmp/slot-for-test';
+  process.env.MACHINE_CHECK = '/tmp/machine-check-for-test.py';
   try {
     const environment = localWorkerEnvironment();
     assert.equal(environment.STUDIO_EXECUTION, 'local');
     assert.equal(environment.RENDER_SLOT_DIR, '/tmp/slot-for-test');
-  } finally {if (saved === undefined) delete process.env.RENDER_SLOT_DIR; else process.env.RENDER_SLOT_DIR = saved;}
+    assert.equal(environment.MACHINE_CHECK, '/tmp/machine-check-for-test.py');
+  } finally {
+    for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
 });
 
 test('a hosted job does not take the render slot', async () => {

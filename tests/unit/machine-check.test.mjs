@@ -93,6 +93,25 @@ test("waitForMachine gives up with MACHINE_BUSY_TIMEOUT at its limit, not before
   assert.equal(checks, 4, "checked at 0, 1, 2 and 3 minutes");
 });
 
+test("waitForMachine counts its limit from startedAt: a Studio job's 20 minutes for the render slot leave 10 of its 30", async () => {
+  let clock = 20 * 60_000;
+  let checks = 0;
+  await assert.rejects(
+    waitForMachine({
+      check: async () => { checks += 1; return {free: false, reasons: ["the game is open"]}; },
+      startedAt: 0,
+      pollMs: 60_000,
+      waitLimitMs: 30 * 60_000,
+      now: () => clock,
+      // A ceiling, so a wait that ignored its limit fails here instead of spinning.
+      sleep: async (ms) => { clock += ms; if (clock > 120 * 60_000) throw new Error("waited past any limit"); },
+      log: () => {}
+    }),
+    (error) => error.code === "MACHINE_BUSY_TIMEOUT" && error.message === "The machine was still busy after 30 min: the game is open"
+  );
+  assert.equal(checks, 11, "checked at 20, 21, … and 30 minutes after the job began to wait");
+});
+
 test("machineVerdict asks the check for this process's family and reads its busy answer", async (t) => {
   const dir = await folder(t);
   const script = await fakeCheck(dir, "the game is open", 1);

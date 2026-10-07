@@ -223,6 +223,7 @@ import type {PublicLookup, PublicTransport} from '../../lib/importer';
 import {GOOGLE_FONTS_UA} from '../../src/runtime/google-fonts-url';
 import {spawn} from 'node:child_process';
 import {writeFile} from 'node:fs/promises';
+import {fakeMachineCheck} from './fake-machine-check';
 
 const FONT_FIXTURES = join(process.cwd(), 'tests/fixtures/fonts');
 const gfCss = (family: string) => `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, '+')}`;
@@ -523,6 +524,43 @@ test('a second worker for the same pass waits for the first one\'s result instea
     assert.equal(await exited, 0);
     assert.equal(await readFile(join(directory, 'result-1.json'), 'utf8'), first, 'the first result stays');
   } finally {await rm(directory, {recursive: true, force: true});}
+});
+
+// SDK-42: the job shows why its worker waits (limits.test.ts covers the worker's wait itself). The render
+// job names no recipe, so once the machine is free the worker stops at that, before any browser starts.
+test('[browser] a local job waits while the machine check says busy, with the reason as its progress, and runs once it is free', {timeout: 90_000}, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'sws-machine-job-')));
+  const saved = {MACHINE_CHECK: process.env.MACHINE_CHECK, RENDER_SLOT_DIR: process.env.RENDER_SLOT_DIR};
+  let running: Promise<Job> | undefined;
+  const check = await fakeMachineCheck(root, 'the game (Client-Mac-Shipping) is open');
+  try {
+    process.env.MACHINE_CHECK = check.script;
+    process.env.RENDER_SLOT_DIR = join(root, 'render-slot');
+    const store = new LocalStore(join(root, 'store'));
+    const created = job('render', 'no-such-recipe');
+    const key = `projects/${created.projectId}/jobs/${created.id}.json`;
+    running = runJob(created, revision(), store);
+    // The editor and the client poll the job record for its progress.
+    let seen: Job | null = null;
+    for (const deadline = Date.now() + 30_000; Date.now() < deadline; await new Promise(done => setTimeout(done, 200))) {
+      seen = await readJson<Job>(store, key);
+      if (seen && (seen.progress.startsWith('Waiting for the machine') || seen.status !== 'running')) break;
+    }
+    assert.equal(seen?.status, 'running', seen?.error);
+    assert.equal(seen?.progress, 'Waiting for the machine: the game (Client-Mac-Shipping) is open');
+    await new Promise(done => setTimeout(done, 1500));
+    assert.equal((await readJson<Job>(store, key))?.status, 'running', 'the busy machine holds the job back');
+    // The worker asks again 20 seconds after its first answer, and then goes on.
+    await rm(check.busy);
+    const done = await running;
+    assert.equal(done.status, 'failed');
+    assert.equal(done.error, 'Select an existing recipe or scene.', 'the job ran once the machine was free');
+  } finally {
+    await rm(check.busy, {force: true});
+    await running?.catch(() => {});
+    for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    await rm(root, {recursive: true, force: true});
+  }
 });
 
 function googleFontRevision(id: string): Revision {
