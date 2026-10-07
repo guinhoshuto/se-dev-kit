@@ -12,7 +12,8 @@ import type {
 import {StudioError} from "../shared/errors.js";
 import {DEFAULT_FIXED_TIME} from "../scenarios/state.js";
 import {cssColor, formatColor, hsvToRgb, needsDarkText, parseColor, rgbToHsv, type Rgba} from "./color.js";
-import {sampleMediaDisplayText} from "../studio-ui/sample-media.js";
+import {isMultipleMediaField, sampleKindsForField, sampleMediaDisplayText, sampleMediaFile, type SampleMediaKind} from "../studio-ui/sample-media.js";
+import {widgetButtonEvent, widgetButtonOpenUrl, widgetButtonValue} from "../studio-ui/widget-button.js";
 
 /** Internal cursor targets extend the author-facing ones with transient menu entries. */
 export type TimelineTarget =
@@ -22,7 +23,11 @@ export type TimelineTarget =
   | `menu-option:${string}:${number}`
   | `option:${string}:${number}`
   | `swatch:${string}`
-  | `picker:${TutorialPickerTarget}`;
+  | `picker:${TutorialPickerTarget}`
+  | `media-set:${string}`
+  | `media-clear:${string}`
+  | `asset-tile:${number}`
+  | `asset-submit:${number}`;
 
 /** Parts of the md-color-picker dialog the cursor can reach; `grab` is where a spectrum drag starts. */
 export type TutorialPickerTarget = "hue" | "spectrum" | "alpha" | "grab" | "select";
@@ -51,6 +56,29 @@ export interface TutorialUiPatch {
   pressed?: string | null;
   toast?: string | null;
   colorPicker?: TutorialColorPicker | null;
+  assetDialog?: TutorialAssetDialog | null;
+}
+
+/**
+ * The StreamElements asset manager dialog, opened from a media field's Set/Change button. `tiles`
+ * are values of the field's type, in the order shown; hovering a tile fades its name out and its
+ * Submit and Delete buttons in.
+ */
+export interface TutorialAssetDialog {
+  field: string;
+  mode: "images" | "videos" | "sounds";
+  tiles: string[];
+  hover: number | null;
+  hoverAtMs: number | null;
+  submitAtMs: number | null;
+  openedAtMs: number;
+  closedAtMs: number | null;
+}
+
+/** How the replica shows a media value: its file name, and the sample file it previews (inside sample-media/), if any. */
+export interface TutorialMediaInfo {
+  name: string;
+  sample: string | null;
 }
 
 /**
@@ -104,6 +132,8 @@ export interface TutorialPress {
 export type TutorialCue =
   /** Color picker dialog, drawn on [startMs, endMs). */
   | {kind: "picker"; field: string; startMs: number; endMs: number}
+  /** Asset manager dialog of a media field, drawn on [startMs, endMs). */
+  | {kind: "assets"; field: string; startMs: number; endMs: number}
   /** Emulate menu; probeMs is its fullest state (submenu and hovered option). */
   | {kind: "menu"; startMs: number; endMs: number; probeMs: number}
   /** Dropdown option list. */
@@ -125,6 +155,8 @@ export interface TutorialPanelField {
   min?: number;
   max?: number;
   step?: number;
+  /** A media field that holds a list (FIELDS `multiple: true`). */
+  multiple?: true;
   options: {label: string; value: JsonPrimitive}[];
 }
 
@@ -152,6 +184,8 @@ export interface TutorialTimeline {
   fields: TutorialPanelField[];
   groups: string[];
   initialValues: Record<string, JsonPrimitive>;
+  /** Every media value the replica shows (field previews and dialog tiles), by value. */
+  media: Record<string, TutorialMediaInfo>;
   patches: {atMs: number; patch: TutorialUiPatch}[];
   moves: TutorialCursorMove[];
   /** One per move to a named target, inside the move's first SCROLL_MS; sorted by startMs. */
@@ -202,6 +236,13 @@ const PICKER_DRAG_MS_PER_PX = 3.5;
 const PICKER_APPROACH_PX = 36;
 /** Canvas size of md-color-picker's spectrum, hue, and alpha strips. */
 const PICKER_SIZE = 255;
+/* Asset manager: $mdDialog opens and closes in 400ms, the tile actions fade in 0.2s; the rest paces a person. */
+const ASSET_OPEN_MS = 400;
+const ASSET_READ_MS = 500;
+const ASSET_TILE_MOVE_MS = 550;
+const ASSET_HOVER_MS = 350;
+const ASSET_SUBMIT_MOVE_MS = 300;
+const ASSET_CLOSE_MS = 400;
 
 export interface EmulateMenuEntry {
   kind: TutorialEmulateKind | "emote" | "charity" | "other";
@@ -225,20 +266,13 @@ export const EMULATE_MENU: EmulateMenuEntry[] = [
   {kind: "other", label: "Other", icon: "dots", options: ["Custom..."], emulatable: false}
 ];
 
-const MEDIA_TYPES = new Set(["image-input", "video-input", "sound-input"]);
+const MEDIA_MODES: Record<string, TutorialAssetDialog["mode"]> = {"image-input": "images", "video-input": "videos", "sound-input": "sounds"};
+
+const isMediaType = (type: string) => Object.hasOwn(MEDIA_MODES, type);
 
 // Field types arrive lowercased from normalizeFields, so FIELDS' "googleFont" is "googlefont" here.
-const TEXT_TYPES = new Set([
-  "text",
-  "textfield",
-  "textarea",
-  "number",
-  "googlefont",
-  "fontpicker",
-  "image-input",
-  "video-input",
-  "sound-input"
-]);
+// A media value is never typed: StreamElements sets it from the asset manager.
+const TEXT_TYPES = new Set(["text", "textfield", "textarea", "number", "googlefont", "fontpicker"]);
 
 function fixedEpoch(): number {
   return Date.parse(DEFAULT_FIXED_TIME);
@@ -427,6 +461,7 @@ function panelFields(fields: NormalizedField[]): TutorialPanelField[] {
       if (field.min !== undefined) entry.min = field.min;
       if (field.max !== undefined) entry.max = field.max;
       if (field.step !== undefined) entry.step = field.step;
+      if (isMediaType(field.type) && isMultipleMediaField(field)) entry.multiple = true;
       return entry;
     });
 }
@@ -447,16 +482,22 @@ export function compileTutorial(options: {
   fieldData: JsonObject;
   channel: string;
   fixture?: FixtureDefinition;
+  /** The built-in samples the asset manager lists, in manifest order; without them it lists only the tutorial's own values. */
+  samples?: readonly {reference: string; kind: SampleMediaKind}[];
 }): TutorialTimeline {
   const {tutorial} = options;
   const fields = panelFields(options.fields);
   const groups = [...new Set(fields.map((field) => field.group))];
   const values: Record<string, JsonPrimitive> = {};
   for (const field of fields) values[field.id] = asPrimitive(options.fieldData[field.id]);
+  const initialValues = {...values};
   // The editor replica shows a sample's file name, never the internal sws-sample: reference.
-  const shownValue = (field: {type: string}, value: JsonPrimitive): JsonPrimitive =>
-    MEDIA_TYPES.has(field.type) && typeof value === "string" ? sampleMediaDisplayText(value) : value;
-  const initialValues = Object.fromEntries(fields.map((field) => [field.id, shownValue(field, values[field.id] ?? null)]));
+  const media: Record<string, TutorialMediaInfo> = {};
+  const noteMedia = (value: JsonPrimitive) => {
+    if (typeof value !== "string" || value === "" || media[value]) return;
+    media[value] = {name: sampleMediaDisplayText(value).split("/").at(-1) || value, sample: sampleMediaFile(value) ?? null};
+  };
+  for (const field of fields) if (isMediaType(field.type) && !field.multiple) noteMedia(values[field.id] ?? null);
   const typingMs = tutorial.typingMsPerChar ?? DEFAULT_TYPING_MS;
   const hasChatStep = tutorial.steps.some((step) => step.action === "chat");
   const channel = tutorial.chat?.channel ?? options.channel;
@@ -656,6 +697,62 @@ export function compileTutorial(options: {
     patch(t, {colorPicker: null, fieldValue: {id: field.id, value}});
     cues.push({kind: "picker", field: field.id, startMs: openedAtMs, endMs: t});
   };
+  /**
+   * Sets a single media field the way StreamElements does: press Set/Change under the preview,
+   * hover the asset in the asset manager until its actions fade in, and press Submit. The dialog
+   * closes and the value is committed (the widget then reloads). An empty value presses the
+   * preview's clear button instead.
+   */
+  const pickAsset = (field: TutorialPanelField, value: string) => {
+    const current = values[field.id];
+    if (value === "") {
+      if (typeof current === "string" && current !== "") {
+        const clear = `media-clear:${field.id}` as const;
+        click(clear, clear);
+      }
+      patch(t, {fieldValue: {id: field.id, value: ""}});
+      return;
+    }
+    const kinds = sampleKindsForField(field.type);
+    const own = [value, ...(typeof current === "string" && current !== "" ? [current] : [])].filter((item) => !sampleMediaFile(item));
+    const library = (options.samples ?? []).filter((item) => kinds.includes(item.kind)).map((item) => item.reference);
+    // Newest first: the asset being set leads the grid, so it is always in view without scrolling the dialog.
+    const tiles = [...new Set([value, ...own, ...library])];
+    for (const tile of tiles) noteMedia(tile);
+    const index = 0;
+    let state: TutorialAssetDialog = {
+      field: field.id,
+      mode: MEDIA_MODES[field.type]!,
+      tiles,
+      hover: null,
+      hoverAtMs: null,
+      submitAtMs: null,
+      openedAtMs: 0,
+      closedAtMs: null
+    };
+    const emit = (atMs: number, changes: Partial<TutorialAssetDialog>) => {
+      state = {...state, ...changes};
+      patch(atMs, {assetDialog: state});
+    };
+    const set = `media-set:${field.id}` as const;
+    click(set, set);
+    t += PICKER_CLICK_MS;
+    const openedAtMs = t;
+    emit(t, {openedAtMs: t});
+    t += ASSET_OPEN_MS + ASSET_READ_MS;
+    move(`asset-tile:${index}`, ASSET_TILE_MOVE_MS);
+    emit(t, {hover: index, hoverAtMs: t});
+    t += ASSET_HOVER_MS;
+    move(`asset-submit:${index}`, ASSET_SUBMIT_MOVE_MS);
+    press(`asset-submit:${index}`);
+    emit(t, {submitAtMs: t});
+    t += PICKER_CLICK_MS;
+    emit(t, {closedAtMs: t});
+    // $mdDialog.hide resolves when the close animation ends; the editor then saves the value and reloads the widget.
+    t += ASSET_CLOSE_MS;
+    patch(t, {assetDialog: null, fieldValue: {id: field.id, value}});
+    cues.push({kind: "assets", field: field.id, startMs: openedAtMs, endMs: t});
+  };
   const lookupField = (id: string) => {
     const field = fields.find((candidate) => candidate.id === id);
     if (!field) {
@@ -728,24 +825,60 @@ export function compileTutorial(options: {
           patch(t, {fieldValue: {id: field.id, value}});
         } else if (field.type === "colorpicker") {
           pickColor(field, value as string);
+        } else if (isMediaType(field.type)) {
+          if (field.multiple) {
+            throw new StudioError(
+              "TUTORIAL_FIELD_UNSUPPORTED",
+              `Field "${field.id}" holds a list of media (multiple: true), which the tutorial editor cannot animate.`,
+              "Set its value in the scene's fieldData instead."
+            );
+          }
+          pickAsset(field, value as string);
         } else if (TEXT_TYPES.has(field.type)) {
           const typingAtMs = presses[click(target, target)]!.downMs;
           patch(t, {focusField: field.id, selectAll: field.id});
           t += 320;
           patch(t, {selectAll: null, fieldValue: {id: field.id, value: ""}});
-          const shown = shownValue(field, value);
-          typeInto((partial) => ({fieldValue: {id: field.id, value: partial}}), String(shown));
+          typeInto((partial) => ({fieldValue: {id: field.id, value: partial}}), String(value));
           t += 220;
-          patch(t, {focusField: null, fieldValue: {id: field.id, value: shown}});
+          patch(t, {focusField: null, fieldValue: {id: field.id, value}});
           cues.push({kind: "typing", region: target, startMs: typingAtMs, endMs: t});
         } else {
           throw new StudioError(
             "TUTORIAL_FIELD_UNSUPPORTED",
-            `Field "${field.id}" has type "${field.type}", which the tutorial editor cannot animate.`
+            `Field "${field.id}" has type "${field.type}", which the tutorial editor cannot animate.`,
+            field.type === "button" ? `Press it with {"action": "pressButton", "field": "${field.id}"}.` : undefined
           );
         }
         values[field.id] = value;
         widget.push({atMs: t, kind: "fields", fieldData: {[field.id]: value}});
+        cues.push({kind: "reveal", site: target, atMs: t});
+        t += AFTER_CLICK_MS;
+        break;
+      }
+      case "pressButton": {
+        const field = lookupField(step.field);
+        const definition = options.fields.find((candidate) => candidate.id === field.id)!;
+        if (field.type !== "button") {
+          throw new StudioError(
+            "TUTORIAL_FIELD_NOT_BUTTON",
+            `Field "${field.id}" has type "${field.type}"; pressButton presses a "button" field.`,
+            `Change it with {"action": "setField", "field": "${field.id}", "value": ...}.`
+          );
+        }
+        const openUrl = widgetButtonOpenUrl(definition.definition);
+        if (openUrl) {
+          throw new StudioError(
+            "TUTORIAL_BUTTON_OPENS_URL",
+            `Button "${field.id}" has openUrl, so StreamElements opens ${openUrl} instead of sending an event to the widget.`,
+            "Press a button without openUrl, or show the page another way."
+          );
+        }
+        ensureGroup(field.group);
+        const target = `field:${field.id}` as const;
+        click(target, target);
+        const {listener, event} = widgetButtonEvent(field.id, widgetButtonValue(options.fieldData, definition));
+        widget.push({atMs: t, kind: "dispatch", listener, event});
         cues.push({kind: "reveal", site: target, atMs: t});
         t += AFTER_CLICK_MS;
         break;
@@ -890,6 +1023,7 @@ export function compileTutorial(options: {
     fields,
     groups,
     initialValues,
+    media,
     patches: ordered,
     moves,
     scrolls,

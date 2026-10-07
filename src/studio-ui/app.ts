@@ -1,4 +1,5 @@
 import {FrameBridge, type FrameEvent} from "./bridge.js";
+import {widgetButtonEvent, widgetButtonOpenUrl} from "./widget-button.js";
 import {
   applySampleChoice,
   backgroundSelectValue,
@@ -748,7 +749,13 @@ function createButtonControl(field: NormalizedField): HTMLButtonElement {
   button.textContent = "Trigger";
   button.addEventListener("click", () => {
     if (!state.bridge) return;
-    void state.bridge.dispatch("widget-button", {field: field.id, value: structuredClone(fieldValue(field))}).catch((error) => {
+    const openUrl = widgetButtonOpenUrl(field.definition);
+    if (openUrl) {
+      logEvent("info", `In StreamElements, button “${field.id}” opens ${openUrl} and sends no event.`);
+      return;
+    }
+    const {listener, event} = widgetButtonEvent(field.id, structuredClone(fieldValue(field)));
+    void state.bridge.dispatch(listener, event).catch((error) => {
       logEvent("error", `Widget button failed: ${safeMessage(error)}`);
     });
     logEvent("info", `Triggered widget button “${field.id}”.`);

@@ -33,6 +33,18 @@ In captures, tutorial videos, and scenarios, a field change follows `widget.fiel
 
 The hosted editor preview always recreates the iframe when a field changes. The local development UI dispatches `onWidgetUpdate` for field edits in both modes, and its frames substitute placeholders with the FIELDS defaults. Theme, fixture, or scene changes recreate the iframe everywhere, to prevent duplicate listeners and stale DOM.
 
+## Button fields
+
+A FIELDS entry with `"type": "button"` is a button in the StreamElements editor. Pressing it sends no field change: the widget receives `onEventReceived` with `detail.listener` `"event:test"` and `detail.event` `{field, value, listener: "widget-button"}`, where `field` is the field id and `value` its saved value (the FIELDS `value` when none is saved). Listen for it this way:
+
+```js
+window.addEventListener("onEventReceived", (obj) => {
+  if (obj.detail.event?.listener === "widget-button" && obj.detail.event.field === "resetButton") reset();
+});
+```
+
+This shape was confirmed on a test overlay on 2026-10-05. StreamElements' own documentation disagrees: the 2022 example checks `obj.detail.event.listener`, which matches, while the current example checks `obj.detail.listener === "widget-button"`, which never fires in the editor. A button with `openUrl` opens that page and sends no event. The local development UI's **Trigger** button and the tutorial's `pressButton` step send the same event, from one builder (`src/studio-ui/widget-button.ts`).
+
 ## Placeholders
 
 As in StreamElements, a `{{name}}` in the widget's HTML, CSS, or JavaScript becomes the raw value of field `name` before the document loads: strings as written, numbers and booleans as text, `null` as nothing, and objects and arrays as JSON. Inner spaces are allowed (`{{ name }}`). Substitution happens in memory, in one pass, so a value that contains `{{…}}` is never expanded again, and the widget's files are never rewritten. A placeholder with no matching field stays as written and produces a warning. Because values are substituted raw, a value with quotes can break the CSS or JavaScript around it, as it would in StreamElements; the checks that refuse unsafe HTML at import run again on the substituted document.
