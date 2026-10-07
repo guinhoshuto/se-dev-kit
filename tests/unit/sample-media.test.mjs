@@ -447,10 +447,18 @@ test("the tutorial editor replica shows sample file names, never the internal sc
     fieldData: {image: "sws-sample:gallery/streamer-2.jpg"},
     channel: "synthetic"
   });
-  assert.equal(timeline.initialValues.image, "streamer-2.jpg");
-  const shown = JSON.stringify(timeline.patches);
-  assert.equal(shown.includes("sws-sample:"), false);
-  assert.ok(shown.includes("streamer-1-blur.jpg"));
+  // The replica keeps the reference as the value and shows it through `media`: a file name and the sample to preview.
+  const shown = [
+    timeline.initialValues.image,
+    ...timeline.patches.flatMap(({patch}) => [patch.fieldValue?.value, ...(patch.assetDialog?.tiles ?? [])])
+  ].filter((value) => typeof value === "string" && value !== "");
+  assert.ok(shown.includes("sws-sample:gallery/streamer-1-blur.jpg"));
+  for (const value of shown) {
+    assert.ok(timeline.media[value], `the replica knows how to show ${value}`);
+    assert.equal(timeline.media[value].name.includes("sws-sample:"), false, timeline.media[value].name);
+  }
+  assert.deepEqual(timeline.media["sws-sample:gallery/streamer-2.jpg"], {name: "streamer-2.jpg", sample: "gallery/streamer-2.jpg"});
+  assert.deepEqual(timeline.media["sws-sample:gallery/streamer-1-blur.jpg"], {name: "streamer-1-blur.jpg", sample: "gallery/streamer-1-blur.jpg"});
   assert.ok(timeline.widget.some((action) => action.fieldData?.image === "sws-sample:gallery/streamer-1-blur.jpg"));
 });
 

@@ -334,3 +334,136 @@ test("the plan lists one PNG per still next to the video and counts its bytes", 
   assert.equal(plan.estimate.variants[0].persistentBytes, before.estimate.variants[0].persistentBytes + 2 * still);
   assert.equal(plan.estimate.finalBytes, before.estimate.finalBytes + 2 * still);
 });
+
+// SDK-23: button fields and media fields as the StreamElements editor has them.
+const { widgetButtonEvent, widgetButtonValue } = await import("../../dist/studio-ui/widget-button.js");
+const { tutorialSchema } = await import("../../dist/config/schemas.js");
+
+const buttonFields = [
+  {id: "spin", label: "Spin the wheel", type: "button", group: "Actions", value: "go", options: [], definition: {type: "button", value: "go"}, editable: true},
+  {id: "docs", label: "Docs", type: "button", group: "Actions", value: "", options: [], definition: {type: "button", openUrl: "https://example.test/docs"}, editable: true},
+  {id: "note", label: "Note", type: "text", group: "Actions", value: "x", options: [], definition: {}, editable: true}
+];
+
+function compileButtons(steps, data = {}) {
+  return compileTutorial({tutorial: {steps}, fields: buttonFields, fieldData: data, channel: "streamer"});
+}
+
+test("the button event has the StreamElements editor's shape: event:test carrying field, value, and widget-button", () => {
+  // Captured on a test overlay on 2026-10-05: the widget's onEventReceived detail.
+  assert.deepEqual(widgetButtonEvent("probe", "probe-value"), {
+    listener: "event:test",
+    event: {field: "probe", value: "probe-value", listener: "widget-button"}
+  });
+  assert.equal(widgetButtonValue({spin: ""}, {id: "spin", value: "go"}), "", "a saved value wins, even when empty");
+  assert.equal(widgetButtonValue({spin: false}, {id: "spin", value: "go"}), false);
+  assert.equal(widgetButtonValue({}, {id: "spin", value: "go"}), "go", "without a saved value, the FIELDS value");
+  assert.equal(widgetButtonValue({}, {id: "spin", value: undefined}), null);
+});
+
+test("pressButton opens the group, presses the button, and sends the button event at the press", () => {
+  const timeline = compileButtons([{action: "pressButton", field: "spin"}], {spin: "saved"});
+  assert.ok(timeline.patches.some(({patch}) => patch.openGroup === "Actions"), "the Actions group opens first");
+  const move = timeline.moves.at(-1);
+  assert.equal(move.to, "field:spin");
+  const press = timeline.presses.at(-1);
+  assert.equal(press.downMs, move.endMs);
+  assert.ok(timeline.patches.some(({atMs, patch}) => atMs === press.downMs && patch.pressed === "field:spin"));
+  assert.deepEqual(timeline.widget, [{
+    atMs: press.downMs,
+    kind: "dispatch",
+    listener: "event:test",
+    event: {field: "spin", value: "saved", listener: "widget-button"}
+  }]);
+  assert.deepEqual(timeline.cues.at(-1), {kind: "reveal", site: "field:spin", atMs: press.downMs});
+  assert.equal(compileButtons([{action: "pressButton", field: "spin"}]).widget[0].event.value, "go");
+});
+
+test("pressButton refuses a non-button field and an openUrl button, and setField on a button points to pressButton", () => {
+  assert.throws(() => compileButtons([{action: "pressButton", field: "note"}]), (error) => error.code === "TUTORIAL_FIELD_NOT_BUTTON");
+  assert.throws(() => compileButtons([{action: "pressButton", field: "docs"}]), (error) => error.code === "TUTORIAL_BUTTON_OPENS_URL" && error.message.includes("https://example.test/docs"));
+  assert.throws(() => compileButtons([{action: "pressButton", field: "missing"}]), (error) => error.code === "TUTORIAL_FIELD_NOT_FOUND");
+  assert.throws(
+    () => compileButtons([{action: "setField", field: "spin", value: "x"}]),
+    (error) => error.code === "TUTORIAL_FIELD_UNSUPPORTED" && /pressButton/.test(error.hint ?? "")
+  );
+  assert.equal(tutorialSchema.safeParse({steps: [{action: "pressButton", field: "spin"}]}).success, true);
+  assert.equal(tutorialSchema.safeParse({steps: [{action: "pressButton", field: "spin", value: 1}]}).success, false);
+});
+
+const mediaFields = [
+  {id: "avatar", label: "Avatar", type: "image-input", group: "Media", value: "", options: [], definition: {type: "image-input"}, editable: true},
+  {id: "clip", label: "Clip", type: "video-input", group: "Media", value: "", options: [], definition: {type: "video-input"}, editable: true},
+  {id: "gallery", label: "Gallery", type: "image-input", group: "Media", value: [], options: [], definition: {type: "image-input", multiple: true}, editable: true}
+];
+const samples = [
+  {reference: "sws-sample:gallery/streamer-1.jpg", kind: "gallery"},
+  {reference: "sws-sample:avatars/pixel-1.png", kind: "avatar"},
+  {reference: "sws-sample:avatars/pixel-2.png", kind: "avatar"},
+  {reference: "sws-sample:clips/neon-road.webm", kind: "clip"}
+];
+
+function compileMedia(steps, data = {avatar: "sws-sample:avatars/pixel-1.png", clip: "", gallery: []}) {
+  return compileTutorial({tutorial: {steps}, fields: mediaFields, fieldData: data, channel: "streamer", samples});
+}
+
+test("setField on a media field sets it from the asset manager: Change, hover the asset, Submit, then the value", () => {
+  const value = "sws-sample:avatars/pixel-2.png";
+  const timeline = compileMedia([{action: "setField", field: "avatar", value}]);
+  const targets = timeline.moves.map((move) => move.to);
+  assert.deepEqual(targets.slice(-3), ["media-set:avatar", "asset-tile:0", "asset-submit:0"]);
+  assert.equal(targets.includes("field:avatar"), false, "a media value is never typed");
+  assert.equal(timeline.patches.some(({patch}) => patch.focusField === "avatar"), false);
+  assert.equal(timeline.cues.some((cue) => cue.kind === "typing"), false);
+
+  const setPress = timeline.presses.at(-2);
+  const submitPress = timeline.presses.at(-1);
+  const dialogs = timeline.patches.filter(({patch}) => "assetDialog" in patch);
+  const opened = dialogs[0];
+  // The dialog opens from the click and closes in $mdDialog's 400ms; the value commits when it is gone.
+  assert.equal(opened.patch.assetDialog.openedAtMs, setPress.downMs + 90);
+  assert.equal(opened.patch.assetDialog.mode, "images");
+  assert.equal(opened.patch.assetDialog.tiles[0], value, "the asset being set leads the grid");
+  assert.deepEqual(
+    [...opened.patch.assetDialog.tiles].sort(),
+    ["sws-sample:avatars/pixel-1.png", "sws-sample:avatars/pixel-2.png", "sws-sample:gallery/streamer-1.jpg"],
+    "an image field lists the image samples, never the clips"
+  );
+  const hovered = dialogs.find(({patch}) => patch.assetDialog?.hover === 0);
+  assert.ok(hovered && hovered.atMs < submitPress.downMs, "the tile is hovered before Submit is pressed");
+  const submitted = dialogs.find(({patch}) => patch.assetDialog?.submitAtMs !== null && patch.assetDialog?.submitAtMs !== undefined);
+  assert.equal(submitted.patch.assetDialog.submitAtMs, submitPress.downMs);
+  const closing = dialogs.find(({patch}) => patch.assetDialog?.closedAtMs !== null && patch.assetDialog?.closedAtMs !== undefined);
+  const closed = dialogs.at(-1);
+  assert.equal(closed.patch.assetDialog, null);
+  assert.equal(closed.atMs, closing.patch.assetDialog.closedAtMs + 400);
+  assert.deepEqual(closed.patch.fieldValue, {id: "avatar", value});
+  assert.deepEqual(timeline.widget, [{atMs: closed.atMs, kind: "fields", fieldData: {avatar: value}}]);
+  assert.ok(timeline.cues.some((cue) => cue.kind === "assets" && cue.field === "avatar" && cue.startMs === opened.atMs && cue.endMs === closed.atMs));
+  assert.deepEqual(timeline.media[value], {name: "pixel-2.png", sample: "avatars/pixel-2.png"});
+});
+
+test("a video field lists the clips, a value of the widget's own joins the grid, and an empty value presses Clear", () => {
+  const clip = compileMedia([{action: "setField", field: "clip", value: "sws-sample:clips/neon-road.webm"}]);
+  const clipDialog = clip.patches.find(({patch}) => patch.assetDialog).patch.assetDialog;
+  assert.equal(clipDialog.mode, "videos");
+  assert.deepEqual(clipDialog.tiles, ["sws-sample:clips/neon-road.webm"]);
+
+  const own = compileMedia([{action: "setField", field: "avatar", value: "assets/me.png"}]);
+  const ownDialog = own.patches.find(({patch}) => patch.assetDialog).patch.assetDialog;
+  assert.equal(ownDialog.tiles[0], "assets/me.png");
+  assert.equal(ownDialog.tiles.length, 4);
+  assert.deepEqual(own.media["assets/me.png"], {name: "me.png", sample: null});
+
+  const cleared = compileMedia([{action: "setField", field: "avatar", value: ""}]);
+  assert.equal(cleared.moves.at(-1).to, "media-clear:avatar");
+  assert.equal(cleared.patches.some(({patch}) => "assetDialog" in patch), false);
+  assert.deepEqual(cleared.widget.at(-1).fieldData, {avatar: ""});
+});
+
+test("setField refuses a media field that holds a list", () => {
+  assert.throws(
+    () => compileMedia([{action: "setField", field: "gallery", value: "sws-sample:avatars/pixel-1.png"}]),
+    (error) => error.code === "TUTORIAL_FIELD_UNSUPPORTED" && /multiple/.test(error.message)
+  );
+});

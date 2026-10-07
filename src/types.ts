@@ -201,6 +201,7 @@ export type TutorialStep =
   | {action: "selectLayer"}
   | {action: "openGroup"; group: string}
   | {action: "setField"; field: string; value: JsonPrimitive}
+  | {action: "pressButton"; field: string}
   | {
       action: "emulate";
       event: TutorialEmulateKind;

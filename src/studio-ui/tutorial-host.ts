@@ -41,6 +41,25 @@ interface UiPatch {
   pressed?: string | null;
   toast?: string | null;
   colorPicker?: ColorPicker | null;
+  assetDialog?: AssetDialog | null;
+}
+
+/** Mirrors TutorialAssetDialog in src/tutorial/timeline.ts. */
+interface AssetDialog {
+  field: string;
+  mode: "images" | "videos" | "sounds";
+  tiles: string[];
+  hover: number | null;
+  hoverAtMs: number | null;
+  submitAtMs: number | null;
+  openedAtMs: number;
+  closedAtMs: number | null;
+}
+
+/** Mirrors TutorialMediaInfo in src/tutorial/timeline.ts. */
+interface MediaInfo {
+  name: string;
+  sample: string | null;
 }
 
 /** Mirrors TutorialColorPicker in src/tutorial/timeline.ts. */
@@ -72,6 +91,7 @@ interface PanelField {
   min?: number;
   max?: number;
   step?: number;
+  multiple?: true;
   options: {label: string; value: Primitive}[];
 }
 
@@ -85,6 +105,7 @@ interface MenuEntry {
 /** Mirrors TutorialCue in src/tutorial/timeline.ts. */
 type Cue =
   | {kind: "picker"; field: string; startMs: number; endMs: number}
+  | {kind: "assets"; field: string; startMs: number; endMs: number}
   | {kind: "menu"; startMs: number; endMs: number; probeMs: number}
   | {kind: "select"; field: string; startMs: number; endMs: number}
   | {kind: "toast"; startMs: number; endMs: number}
@@ -113,6 +134,7 @@ interface Timeline {
   fields: PanelField[];
   groups: string[];
   initialValues: Record<string, Primitive>;
+  media: Record<string, MediaInfo>;
   patches: {atMs: number; patch: UiPatch}[];
   moves: {startMs: number; endMs: number; to: Target; workEndMs: number}[];
   scrolls: {target: string; startMs: number; endMs: number}[];
@@ -148,6 +170,7 @@ interface UiState {
   pressed: string | null;
   toast: string | null;
   colorPicker: ColorPicker | null;
+  assetDialog: AssetDialog | null;
 }
 
 declare global {
@@ -205,6 +228,13 @@ const ICONS: Record<string, string> = {
   tune: "M13 21v-2h8v-2h-8v-2h-2v6h2zM3 17v2h6v-2H3zM21 13v-2H11v2h10zM7 9v2H3v2h4v2h2V9H7zM15 9h2V7h4V5h-4V3h-2v6zM3 5v2h10V5H3z",
   view_module: "M4 11h5V5H4v6zM4 18h5v-6H4v6zM10 18h5v-6h-5v6zM16 18h5v-6h-5v6zM10 11h5V5h-5v6zM16 5v6h5V5h-5z",
   view_headline: "M4 15h17v-2H4v2zM4 19h17v-2H4v2zM4 11h17V9H4v2zM4 5v2h17V5H4z",
+  /* Media fields and the asset manager. */
+  close: "M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z",
+  image: "M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z",
+  videocam: "M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z",
+  audiotrack: "M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z",
+  music_note: "M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z",
+  cloud_upload: "M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z",
   history: "M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zM12 8v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"
 };
 
@@ -272,6 +302,25 @@ const PICKER_TYPES = [
 const PICKER_PANES = ["gradient", "tune", "view_module", "view_headline", "history"];
 /** Select button box inside the md-dialog (md-actions row at y 397, 6px inset). */
 const SELECT_BUTTON = {x: 181.5, y: 403, width: 157.5, height: 36};
+/* Asset manager dialog (md-dialog.asset-dialog, max-width 71.5%, md-dialog height capped at 80%; .am-pages 630px). */
+const ASSETS_WIDTH_FRACTION = 0.715;
+const ASSETS_HEIGHT_FRACTION = 0.8;
+const ASSETS_NAV = 64;
+const ASSETS_GRID = 630;
+const ASSETS_FOOT = 56;
+const ASSETS_COLUMNS = 5;
+const ASSETS_GUTTER = 4;
+const ASSETS_PADDING = 8;
+/** The tile's name fades out and its Submit and Delete buttons fade in over 0.2s ease-out on hover. */
+const ASSETS_HOVER_MS = 200;
+/** Submit and Delete on a hovered tile: fixed widths, centered in the 48px name bar, so Submit's place is known without layout. */
+const ASSETS_ACTION = {width: 84, height: 36, gap: 6, bar: 48};
+const MEDIA_LABELS: Record<string, {icon: string; set: string; change: string}> = {
+  "image-input": {icon: "image", set: "Set image", change: "Change image"},
+  "video-input": {icon: "videocam", set: "Set video", change: "Change video"},
+  "sound-input": {icon: "audiotrack", set: "Upload Sound", change: "Upload Sound"}
+};
+const MEDIA_ADD: Record<string, string> = {"image-input": "Add image", "video-input": "Add video", "sound-input": "Add sound"};
 const CURSOR_HOTSPOTS = {arrow: {x: 5, y: 2.5}, crosshair: {x: 12, y: 12}} as const;
 /** Cursor sizes in editor pixels; the crosshair is smaller, and its open center keeps the 11px spectrum marker visible. */
 const CURSOR_SIZES: Record<keyof typeof CURSOR_HOTSPOTS, number> = {arrow: 28, crosshair: 24};
@@ -335,6 +384,7 @@ class TutorialController {
 
   async setup(options: SetupOptions): Promise<void> {
     await loadEditorFonts();
+    await this.#loadSampleImages(options.timeline);
     this.timeline = options.timeline;
     this.menu = options.menu;
     this.viewport = options.viewport;
@@ -404,6 +454,29 @@ class TutorialController {
     });
     // The first frame rewrites every slot the pre-pass left behind.
     this.#rendered = {};
+  }
+
+  /** A sample's URL on the frame origin, which serves sample media (the control origin does not). */
+  #sampleUrl(file: string): string {
+    return `${document.body.dataset.frameOrigin ?? ""}/__sws/sample/${file.split("/").map(encodeURIComponent).join("/")}`;
+  }
+
+  /** Decodes every sample image a preview or a dialog tile shows, so no frame draws one half loaded. */
+  async #loadSampleImages(timeline: Timeline): Promise<void> {
+    const files = Object.values(timeline.media ?? {}).flatMap((info) => (info.sample && !info.sample.endsWith(".webm") ? [info.sample] : []));
+    await Promise.all([...new Set(files)].map(async (file) => {
+      const image = new Image();
+      image.src = this.#sampleUrl(file);
+      await image.decode().catch(() => {
+        throw new Error(`The sample image ${file} failed to load from the frame origin.`);
+      });
+    }));
+  }
+
+  /** Background of a media preview or tile: the sample image, or nothing for videos, sounds, and the widget's own files. */
+  #mediaBackground(value: string): string {
+    const sample = this.timeline!.media[value]?.sample;
+    return sample && !sample.endsWith(".webm") ? `background-image:url(&quot;${attr(this.#sampleUrl(sample))}&quot;)` : "";
   }
 
   /** Lays the editor out as it is at `timeMs`, with the camera at identity. */
@@ -546,6 +619,14 @@ class TutorialController {
           [kind, startMs, endMs] = ["popup", cue.startMs, cue.endMs];
           break;
         }
+        case "assets": {
+          this.#measureAt(cue.startMs);
+          const dialog = this.#assetsFrame();
+          add({x0: dialog.left * u, y0: dialog.top * u, x1: dialog.right * u, y1: dialog.bottom * u}, true);
+          add(this.#rectOf(this.#row(cue.field)), false);
+          [kind, startMs, endMs] = ["popup", cue.startMs, cue.endMs];
+          break;
+        }
         case "menu":
           this.#measureAt(cue.probeMs);
           add(this.#hullOf([
@@ -635,7 +716,8 @@ class TutorialController {
       chat: [],
       pressed: null,
       toast: null,
-      colorPicker: null
+      colorPicker: null,
+      assetDialog: null
     };
     for (const field of timeline.fields) {
       const value = state.values[field.id];
@@ -662,7 +744,8 @@ class TutorialController {
         "chatFocus",
         "pressed",
         "toast",
-        "colorPicker"
+        "colorPicker",
+        "assetDialog"
       ] as const) {
         if (key in patch) (state as unknown as Record<string, unknown>)[key] = patch[key];
       }
@@ -713,15 +796,60 @@ class TutorialController {
         return `<div class="se-field color${focused ? " focused" : ""}"><div class="swatch-wrap" data-target="swatch:${attr(field.id)}"><div class="swatch" style="background:${attr(swatch)}"></div></div>`
           + `<div class="col"><div class="flabel">${escapeHtml(field.label)}</div><div class="value" ${target}>${shown}${caret}</div></div></div>`;
       }
+      case "button":
+        // md-raised md-primary inside an md-input-container; the button shows the field label.
+        return `<div class="se-field button"><span class="se-raised${pressed}" ${target}>${escapeHtml(field.label)}</span></div>`;
       case "image-input":
       case "video-input":
       case "sound-input":
-        return `<div class="se-field media${focused ? " focused" : ""}"><div class="flabel">${escapeHtml(field.label)}</div>`
-          + `<div class="value" ${target}>${shown}${caret}</div>${icon("upload")}</div>`;
+        return field.multiple ? this.#mediaListHtml(field, text) : this.#mediaHtml(field, state, text);
       default:
         return `<div class="se-field${focused ? " focused" : ""}"><div class="flabel">${escapeHtml(field.label)}</div>`
           + `<div class="value" ${target}>${shown}${caret}</div></div>`;
     }
+  }
+
+  /**
+   * A single media field as StreamElements draws it: the label, a preview with a clear button once
+   * a value is set (never a text input), and the Set/Change button that opens the asset manager.
+   */
+  #mediaHtml(field: PanelField, state: UiState, value: string): string {
+    const labels = MEDIA_LABELS[field.type]!;
+    const kind = field.type === "sound-input" ? "audio" : "graphics";
+    const info = value ? this.timeline!.media[value] : undefined;
+    const background = value ? this.#mediaBackground(value) : "";
+    const inner = !value
+      ? ""
+      : field.type === "sound-input"
+        ? `<div class="se-audio">${icon("music_note")}<span>${escapeHtml(info?.name ?? value)}</span></div>`
+        : background
+          ? ""
+          : `<div class="se-media-name">${field.type === "video-input" ? icon("videocam") : ""}<span>${escapeHtml(info?.name ?? value)}</span></div>`;
+    const preview = value
+      ? `<div class="se-media-preview ${kind}" style="${background}">${inner}`
+        + `<span class="se-media-clear${this.#pressed(state, `media-clear:${field.id}`)}" data-target="media-clear:${attr(field.id)}">${icon("close")}</span></div>`
+      : "";
+    return `<div class="se-field media" data-target="field:${attr(field.id)}"><div class="flabel">${escapeHtml(field.label)}</div>${preview}`
+      + `<div class="se-media-controls"><span class="se-flat${this.#pressed(state, `media-set:${field.id}`)}" data-target="media-set:${attr(field.id)}">`
+      + `${icon(labels.icon)}<span>${value ? labels.change : labels.set}</span></span></div></div>`;
+  }
+
+  /** A `multiple` media field: a 3-column grid that starts with the Add tile. */
+  #mediaListHtml(field: PanelField, text: string): string {
+    let items: string[] = [];
+    try {
+      const parsed: unknown = text ? JSON.parse(text) : [];
+      if (Array.isArray(parsed)) items = parsed.filter((item): item is string => typeof item === "string" && item !== "");
+    } catch {
+      items = text ? [text] : [];
+    }
+    const tiles = items.map((item) => {
+      const background = this.#mediaBackground(item);
+      const name = this.timeline!.media[item]?.name ?? item.split("/").at(-1) ?? item;
+      return `<div class="tile" style="${background}">${background ? "" : `<span>${escapeHtml(name)}</span>`}${icon("close", "rm")}</div>`;
+    });
+    return `<div class="se-field media list" data-target="field:${attr(field.id)}"><div class="flabel">${escapeHtml(field.label)}</div>`
+      + `<div class="se-media-grid"><div class="tile add">${icon("add")}<span>${MEDIA_ADD[field.type]}</span></div>${tiles.join("")}</div></div>`;
   }
 
   #sidebarHtml(state: UiState, timeMs: number): string {
@@ -907,6 +1035,89 @@ class TutorialController {
     return {backdrop, dialog};
   }
 
+  /** Open fraction of the asset manager dialog: grows from the Set/Change button and shrinks back into it. */
+  #assetsOpen(dialog: AssetDialog, timeMs: number): number {
+    const opening = MD_EASE(clamp((timeMs - dialog.openedAtMs) / PICKER_ANIMATION_MS, 0, 1));
+    const closing = dialog.closedAtMs === null ? 1 : 1 - MD_EASE(clamp((timeMs - dialog.closedAtMs) / PICKER_ANIMATION_MS, 0, 1));
+    return Math.min(opening, closing);
+  }
+
+  /** The open asset manager in editor px: centered, 71.5% of the window wide, at most 80% of it tall. */
+  #assetsFrame(): {left: number; top: number; right: number; bottom: number; width: number; height: number; tile: number} {
+    const {width: editorWidth, height: editorHeight} = this.#editorSize;
+    const width = Math.min(editorWidth * ASSETS_WIDTH_FRACTION, editorWidth - 2 * PICKER_MARGIN);
+    const height = Math.min(editorHeight * ASSETS_HEIGHT_FRACTION, ASSETS_NAV + ASSETS_GRID + ASSETS_FOOT);
+    const tile = (width - 2 * ASSETS_PADDING - (ASSETS_COLUMNS - 1) * ASSETS_GUTTER) / ASSETS_COLUMNS;
+    const left = (editorWidth - width) / 2;
+    const top = (editorHeight - height) / 2;
+    return {left, top, right: left + width, bottom: top + height, width, height, tile};
+  }
+
+  /**
+   * Draws the StreamElements asset manager (md-dialog.asset-dialog) on the page of the field's media
+   * type: the nav bar, a 5-column grid of square tiles with the name bar on top, and the pagination
+   * footer. Hovering a tile fades its name out and its Submit and Delete buttons in.
+   */
+  #assetsHtml(state: UiState, timeMs: number): {backdrop: string; dialog: string} {
+    const dialog = state.assetDialog;
+    if (!dialog) return {backdrop: "", dialog: ""};
+    const {width: editorWidth, height: editorHeight} = this.#editorSize;
+    const frame = this.#assetsFrame();
+    const center = {x: frame.left + frame.width / 2, y: frame.top + frame.height / 2};
+    const button = this.#rect(`media-set:${dialog.field}`);
+    const editor = this.editor.getBoundingClientRect();
+    const origin = button
+      ? {x: (button.left + button.width / 2 - editor.left) / this.scale, y: (button.top + button.height / 2 - editor.top) / this.scale}
+      : center;
+    const open = this.#assetsOpen(dialog, timeMs);
+    const backdropIn = CSS_EASE(clamp((timeMs - dialog.openedAtMs) / PICKER_BACKDROP_IN_MS, 0, 1));
+    const backdropOut = dialog.closedAtMs === null ? 1 : 1 - CSS_EASE(clamp((timeMs - dialog.closedAtMs) / PICKER_ANIMATION_MS, 0, 1));
+    const backdrop = `<div class="se-cp-backdrop" style="width:${px(editorWidth)};height:${px(editorHeight)};`
+      + `opacity:${(PICKER_BACKDROP_OPACITY * Math.min(backdropIn, backdropOut)).toFixed(4)}"></div>`;
+    const transform = open === 1
+      ? "none"
+      : `translate(${px((origin.x - center.x) * (1 - open))}, ${px((origin.y - center.y) * (1 - open))}) scale(${(0.07 + 0.93 * open).toFixed(5)}, ${(0.05 + 0.95 * open).toFixed(5)})`;
+    const page = {images: "Images", sounds: "Sounds", videos: "Videos"}[dialog.mode];
+    const tabs = ["All files", "Images", "Sounds", "Videos"].map((label) => `<span class="tab${label === page ? " on" : ""}">${label}</span>`).join("");
+    const nav = `<div class="se-am-nav">${tabs}<span class="grow"></span><span class="usage">0.00 MB of 100.00 (0%) MB used</span>`
+      + `<span class="tab">${icon("cloud_upload")}upload</span><span class="x">${icon("close")}</span></div>`;
+    const hover = dialog.hoverAtMs === null ? 0 : CSS_EASE_OUT(clamp((timeMs - dialog.hoverAtMs) / ASSETS_HOVER_MS, 0, 1));
+    const tiles = dialog.tiles.map((value, index) => {
+      const shown = index === dialog.hover ? hover : 0;
+      const info = this.timeline!.media[value];
+      const background = this.#mediaBackground(value);
+      const placeholder = dialog.mode === "sounds"
+        ? `<div class="glyph">${icon("music_note")}</div>`
+        : background ? "" : `<div class="glyph">${icon(dialog.mode === "videos" ? "videocam" : "image")}</div>`;
+      return `<div class="se-am-tile ${dialog.mode}" data-target="asset-tile:${index}" style="${background}">${placeholder}`
+        + `<div class="info" style="opacity:${(1 - shown).toFixed(4)}"><h3>${escapeHtml(info?.name ?? value)}</h3></div>`
+        + `<div class="actions" style="opacity:${shown.toFixed(4)}">`
+        + `<span class="se-raised${this.#pressed(state, `asset-submit:${index}`)}">Submit</span>`
+        + `<span class="se-raised">Delete</span></div></div>`;
+    });
+    const grid = `<div class="se-am-grid" style="height:${px(frame.height - ASSETS_NAV - ASSETS_FOOT)};`
+      + `grid-template-columns:repeat(${ASSETS_COLUMNS}, ${px(frame.tile)});grid-auto-rows:${px(frame.tile)}">${tiles.join("")}</div>`;
+    const count = dialog.tiles.length;
+    const foot = `<div class="se-am-foot"><span>Rows per page:</span><span>${Math.max(count, 1)}</span><span>1 - ${count} of ${count}</span>`
+      + `${icon("chevron_left", "off")}${icon("chevron_right", "off")}</div>`;
+    // The cursor aims at a fixed anchor over the open dialog's Submit button, so it stays where it
+    // pressed while the dialog shrinks back into the Set/Change button.
+    let anchor = "";
+    if (dialog.hover !== null) {
+      const column = dialog.hover % ASSETS_COLUMNS;
+      const row = Math.floor(dialog.hover / ASSETS_COLUMNS);
+      const tileLeft = frame.left + ASSETS_PADDING + column * (frame.tile + ASSETS_GUTTER);
+      const tileTop = frame.top + ASSETS_NAV + ASSETS_PADDING + row * (frame.tile + ASSETS_GUTTER);
+      const left = tileLeft + (frame.tile - 2 * ASSETS_ACTION.width - ASSETS_ACTION.gap) / 2;
+      const top = tileTop + (ASSETS_ACTION.bar - ASSETS_ACTION.height) / 2;
+      anchor = `<i class="se-cp-anchor" data-target="asset-submit:${dialog.hover}" style="left:${px(left)};top:${px(top)};`
+        + `width:${px(ASSETS_ACTION.width)};height:${px(ASSETS_ACTION.height)}"></i>`;
+    }
+    const html = `<div class="se-am" style="left:${px(frame.left)};top:${px(frame.top)};width:${px(frame.width)};height:${px(frame.height)};`
+      + `transform:${transform};opacity:${open.toFixed(4)}">${nav}${grid}${foot}</div>${anchor}`;
+    return {backdrop, dialog: html};
+  }
+
   /**
    * Keeps the caption readable: it slides clear of open popups, the reacting widget, and the text
    * being typed, as projected through this frame's camera (see captionTop). Layout offsets ignore
@@ -1031,8 +1242,9 @@ class TutorialController {
     if (timeline.chrome.chat.enabled) this.#update("chat", this.chat, this.#chatHtml(state, timeMs));
     this.#update("menu", this.menuLayer, this.#menuHtml(state));
     const picker = this.#pickerHtml(state, timeMs);
-    this.#update("backdrop", this.backdropLayer, picker.backdrop);
-    this.#update("popup", this.popupLayer, this.#selectHtml(state) + picker.dialog);
+    const assets = this.#assetsHtml(state, timeMs);
+    this.#update("backdrop", this.backdropLayer, picker.backdrop + assets.backdrop);
+    this.#update("popup", this.popupLayer, this.#selectHtml(state) + picker.dialog + assets.dialog);
     const box = state.selected
       ? `<span class="dims">${this.#dims()}</span>`
       : `<span class="tag">${escapeHtml(timeline.chrome.layerName)}</span>`;

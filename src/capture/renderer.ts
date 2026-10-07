@@ -31,7 +31,7 @@ import {
   SETTLE_DEADLINE_MS,
   type OpenSceneResult
 } from "../scenarios/runner.js";
-import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, tutorialStillNames} from "../tutorial/variant.js";
+import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, tutorialSamples, tutorialStillNames} from "../tutorial/variant.js";
 import type {TutorialTimeline} from "../tutorial/timeline.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
 import {closeStudioBrowser, launchStudioBrowser, type BrowserDetection, type FontRoute} from "./browser.js";
@@ -598,7 +598,7 @@ async function renderVideoFrames(options: {
   sequenceText: string;
 }> {
   const tutorial: TutorialTimeline | undefined = options.video.mode === "tutorial"
-    ? compileVariantTutorial(options.project, options.variant, options.video)
+    ? compileVariantTutorial(options.project, options.variant, options.video, await tutorialSamples(options.project, options.video))
     : undefined;
   const opened = await openScene(
     options.project,

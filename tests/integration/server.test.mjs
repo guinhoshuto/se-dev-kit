@@ -225,15 +225,20 @@ test("the control server serves exactly the fonts the tutorial page declares, wi
   }
 });
 
-test("the control server serves every module the tutorial host imports", async () => {
-  const host = await readFile(new URL("../../dist/studio-ui/tutorial-host.js", import.meta.url), "utf8");
-  const imports = [...host.matchAll(/from\s+["']\.\/([\w-]+\.js)["']/g)].map((match) => match[1]);
+test("the control server serves every module the tutorial host and the local UI import", async () => {
+  const importsOf = async (file) => {
+    const source = await readFile(new URL(`../../dist/studio-ui/${file}`, import.meta.url), "utf8");
+    return [...source.matchAll(/from\s+["']\.\/([\w-]+\.js)["']/g)].map((match) => match[1]);
+  };
+  const imports = await importsOf("tutorial-host.js");
   assert.ok(imports.includes("tutorial-camera.js"), `the tutorial host imports the camera module: ${imports.join(", ")}`);
+  const appImports = await importsOf("app.js");
+  assert.ok(appImports.includes("widget-button.js"), `the local UI imports the button event builder: ${appImports.join(", ")}`);
   const project = await loadProject({inputDirectory: exampleRoot});
   const server = await startStudioServer(project, {port: 0, watch: false});
   try {
-    // A missing module 404s, __SWS_TUTORIAL__ never exists, and every tutorial render fails.
-    for (const file of ["tutorial-host.js", ...imports]) {
+    // A missing module 404s: __SWS_TUTORIAL__ never exists and every tutorial render fails, or the local UI never starts.
+    for (const file of ["tutorial-host.js", ...imports, "app.js", ...appImports]) {
       const response = await requestBuffer(`${server.origin}/__sws/ui/${file}`);
       assert.equal(response.status, 200, file);
       assert.match(String(response.headers["content-type"]), /javascript/, file);

@@ -18,6 +18,12 @@ Nothing the replica copies changed: every color, font, font size, weight, letter
 
 `tests/unit/tutorial-reference.test.mjs` fails when the replica's toolbar, sidebar, buttons, colors, or checkerboard drift from the reference file it names (`REFERENCE`).
 
+## The editor's public bundle
+
+The overlay editor's code is public: the editor page loads one script and one stylesheet (`/overlay/assets/index-<hash>.js` and `.css`), and its English strings are in `https://streamelements.com/assets/dashboard/i18n/en.json`. They answer questions that measuring the page cannot, without a logged-in session: the AngularJS templates of each field type (search the script for `ng-if="option.type === 'button'"`), what a control does when clicked (a controller such as `triggerEvent`), dialog sizes and animations in the CSS, and the exact button labels ("Set image", "Change image"). The button field, the media fields, and the asset manager of the replica were read from it on 2026-10-05.
+
+It is third-party code: read it for behavior, sizes, and strings, keep the files outside git, and never copy its code or markup into the repository. What the bundle says a control sends is confirmed once on a test overlay before the replica relies on it. The button event in [RUNTIME.md](../RUNTIME.md#button-fields) was, by wrapping `HTMLIFrameElement.prototype.contentWindow` in the editor page to log what it posts to the widget, then restoring it.
+
 ## Measure again
 
 [`scripts/measure-se-editor.js`](../../scripts/measure-se-editor.js) reads computed styles and layout boxes, and never clicks, types, or dispatches events. It refuses any page that is not the editor of the overlay id it is given.

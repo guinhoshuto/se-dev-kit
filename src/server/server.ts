@@ -62,6 +62,7 @@ const uiAssets = new Map([
   ["tutorial-host.js", resolve(distributionRoot, "studio-ui/tutorial-host.js")],
   ["tutorial-camera.js", resolve(distributionRoot, "studio-ui/tutorial-camera.js")],
   ["sample-media.js", resolve(distributionRoot, "studio-ui/sample-media.js")],
+  ["widget-button.js", resolve(distributionRoot, "studio-ui/widget-button.js")],
   ...EDITOR_FONT_FILES.map((file) => [`fonts/${file}`, resolve(distributionRoot, "studio-ui/fonts", file)] as const)
 ]);
 

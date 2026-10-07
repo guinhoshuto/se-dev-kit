@@ -180,8 +180,39 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .se-field.checkbox .box.on { background: var(--se-slider); border-color: var(--se-slider); }
 .se-field.checkbox .box svg.i { width: 16px; height: 16px; color: #fff; }
 .se-field.checkbox .flabel { font-size: 14px; color: var(--se-text); letter-spacing: 1px; }
-.se-field.media .value { padding-right: 28px; }
-.se-field.media svg.i { position: absolute; right: 16px; top: 20px; width: 20px; height: 20px; color: var(--se-muted); }
+/* Button field: md-raised md-primary in an md-input-container, measured on the editor on 2026-10-05. */
+.se-field.button { padding-left: 18px; }
+.se-raised {
+  display: inline-block; height: 36px; line-height: 36px; padding: 0 16px; margin: 6px 8px; border-radius: 20px;
+  background: var(--se-blue); color: rgba(255,255,255,.87); font-size: 12px; font-weight: 600; letter-spacing: 1.2px;
+  text-transform: uppercase; white-space: nowrap;
+}
+.se-raised.pressed { filter: brightness(.86); }
+/* Media fields (.media-wrapper.graphics.large and .controls.graphics in the editor's CSS): a preview, never a text input. */
+.se-media-preview { position: relative; width: 276px; height: 140px; margin-top: 6px; overflow: hidden; background: #fff center / contain no-repeat; }
+.se-media-preview:not([style*="background-image"]) {
+  background-image: linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd),linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd);
+  background-size: 8px 8px; background-position: 0 0,4px 4px; background-repeat: repeat;
+}
+.se-media-preview.audio { height: 54px; }
+.se-media-name, .se-audio { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 0 32px; font-size: 13px; color: rgba(0,0,0,.7); overflow: hidden; white-space: nowrap; }
+.se-media-name span, .se-audio span { overflow: hidden; text-overflow: ellipsis; }
+.se-media-clear { position: absolute; right: 4px; bottom: 4px; width: 24px; height: 24px; border-radius: 50%;
+  background: #ffffff1a; color: #000000ab; display: grid; place-items: center; }
+.se-media-clear svg.i { width: 18px; height: 18px; }
+.se-media-clear.pressed { background: rgba(0,0,0,.12); }
+.se-media-controls { display: flex; }
+.se-flat {
+  display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 6px; margin: 4px 0 4px 6px; border-radius: 2px;
+  color: var(--se-blue); font-size: 12px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; white-space: nowrap;
+}
+.se-flat.pressed { background: rgba(87,135,220,.16); }
+.se-media-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; width: 276px; margin-top: 6px; }
+.se-media-grid .tile { position: relative; height: 92px; background: #eee center / cover no-repeat; display: grid; place-items: center;
+  font-size: 11px; color: rgba(0,0,0,.6); overflow: hidden; text-align: center; }
+.se-media-grid .tile.add { color: var(--se-blue); align-content: center; gap: 2px; }
+.se-media-grid .tile svg.rm { position: absolute; right: 2px; top: 2px; width: 18px; height: 18px; color: #000000ab; }
 .se-select-menu {
   position: absolute; background: #fff; border-radius: 2px; padding: 8px 0; min-width: 276px;
   box-shadow: 0 1px 8px rgba(0,0,0,.2), 0 3px 4px rgba(0,0,0,.14), 0 3px 3px -2px rgba(0,0,0,.12);
@@ -280,6 +311,35 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .se-popup-layer { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
 .se-popup-layer > * { pointer-events: auto; }
 .se-cp-backdrop { position: absolute; left: 0; top: 0; background: #212121; }
+/* Asset manager (md-dialog.asset-dialog and .am-pages in the editor's bundle, read on 2026-10-05). */
+.se-am {
+  position: absolute; background: #fff; border-radius: 4px; overflow: hidden; transform-origin: 50% 50%; display: flex; flex-direction: column;
+  box-shadow: 0 7px 8px -4px rgba(0,0,0,.2), 0 13px 19px 2px rgba(0,0,0,.14), 0 5px 24px 4px rgba(0,0,0,.12);
+}
+.se-am-nav { flex: none; height: 64px; display: flex; align-items: center; gap: 4px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--se-line); }
+.se-am-nav .tab { display: inline-flex; align-items: center; gap: 6px; height: 48px; padding: 0 12px; font-size: 13px; font-weight: 600;
+  letter-spacing: 1px; text-transform: uppercase; color: var(--se-muted); }
+.se-am-nav .tab.on { color: var(--se-blue); box-shadow: inset 0 -2px 0 var(--se-blue); }
+.se-am-nav .grow { flex: 1; }
+.se-am-nav .usage { font-size: 12px; color: var(--se-muted); letter-spacing: .4px; margin-right: 8px; }
+.se-am-nav .x { width: 40px; height: 40px; display: grid; place-items: center; color: var(--se-muted); }
+.se-am-grid { flex: none; display: grid; gap: 4px; padding: 8px; overflow: hidden; align-content: start; }
+.se-am-tile { position: relative; overflow: hidden; background: #eee center / cover no-repeat; }
+.se-am-tile.sounds { background-color: #fff;
+  background-image: linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd),linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%,#ddd);
+  background-size: 8px 8px; background-position: 0 0,4px 4px; }
+.se-am-tile.videos { background-color: #263238; }
+.se-am-tile .glyph { position: absolute; inset: 0; display: grid; place-items: center; color: #444; }
+.se-am-tile.sounds .glyph { opacity: .5; }
+.se-am-tile.videos .glyph { color: rgba(255,255,255,.7); }
+.se-am-tile .glyph svg.i { width: 50px; height: 50px; }
+.se-am-tile .info { position: absolute; left: 0; right: 0; top: 0; height: 48px; background: #0006; color: #fff; display: flex; align-items: center; padding: 0 12px; }
+.se-am-tile .info h3 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.se-am-tile .actions { position: absolute; left: 0; right: 0; top: 0; height: 48px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.se-am-tile .actions .se-raised { width: 84px; margin: 0; padding: 0; text-align: center; flex: none; }
+.se-am-foot { flex: none; height: 56px; margin-top: auto; display: flex; align-items: center; justify-content: flex-end; gap: 24px; padding: 0 16px;
+  border-top: 1px solid var(--se-line); font-size: 12px; color: var(--se-muted); letter-spacing: .4px; }
+.se-am-foot svg.off { color: rgba(0,0,0,.26); }
 .se-cp {
   position: absolute; width: 347px; height: 445px; background: #fff; color: rgba(0,0,0,.87); border-radius: 4px; overflow: hidden;
   transform-origin: 50% 50%;
