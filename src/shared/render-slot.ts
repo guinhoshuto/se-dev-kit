@@ -28,6 +28,10 @@
 // judges no silence for a minute after it wakes, so the others get to touch their tickets first. Any waiter
 // removes the tickets of dead pids, of an earlier boot, or silent for 15 minutes; a waiter whose
 // ticket was removed while it still runs writes it again under the same name and keeps its place.
+// A waiter's place is when it first came: a waiter that gives the slot back right after taking it (the
+// machine got busy meanwhile, as the stills of background-creator checks with the slot in hand, HAR-61)
+// asks again with `since`, that first moment, and its ticket takes that place again. A `since` before
+// the last boot or after now is ignored.
 // The queue sits next to the slot, never inside it, and only orders the takers: the slot is still
 // taken by the atomic mkdir, so two holders stay impossible, and a copy older than the queue, which
 // ignores the tickets, can only jump it. That is why the queue did not raise PROTOCOL.
@@ -84,6 +88,11 @@ export type SlotOptions = {
   /** false: fail at once with RENDER_SLOT_BUSY when another process holds the slot (`--no-wait`). */
   wait?: boolean;
   log?: (message: string) => void;
+  /**
+   * When this waiter first came, in ms since the epoch: its place in the queue, kept by a waiter that
+   * gave the slot back and asks again. Before the last boot or after now, it is ignored. Default: now.
+   */
+  since?: number;
 };
 
 export const HELD_ENV = 'RENDER_SLOT_HELD';
@@ -524,6 +533,9 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
   const repo = options.repo ?? defaultRepo();
   const body = `${JSON.stringify({protocol: PROTOCOL, pid: process.pid, repo, command: options.command})}\n`;
   const started = Date.now();
+  // The place in the queue: when this waiter first came, never before the last boot nor after now.
+  const {since} = options;
+  const arrival = since !== undefined && since >= bootTimeMs() && since <= started ? Math.floor(since) : started;
   let said = '';
   let warnedBlocked = false;
   let ticket: string | null = null;
@@ -548,7 +560,7 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
   };
   const joinQueue = () => {
     if (ticket !== null) return;
-    const name = ticketName(Date.now(), process.pid);
+    const name = ticketName(arrival, process.pid);
     // A queue that cannot be written leaves this waiter without a ticket: it waits behind every
     // live ticket, as before the queue existed.
     if (!writeTicket(queue, name, body)) return;
