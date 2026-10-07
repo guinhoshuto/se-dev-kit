@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "listing-loop-video",
+  "name": "Listing loop video",
+  "description": "The model listing cover video: one scene, one 15-second silent 1920 x 1080 MP4, one Studio job. Cut it to an exact loop with the skill's scripts/cut-loop.mjs.",
+  "marketplacePreset": "etsy-listing-2026-09",
+  "scenes": [
+    "listing-loop-wide"
+  ],
+  "outputs": {
+    "screenshots": false,
+    "video": {
+      "enabled": true,
+      "durationMs": 15000,
+      "fps": 30,
+      "format": "mp4",
+      "codec": "h264",
+      "pixelFormat": "yuv420p",
+      "audio": "none"
+    }
+  },
+  "limit": 1
+}

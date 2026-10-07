@@ -21,9 +21,10 @@ How to make store-listing media (cover images, field images, demo and tutorial v
 
 ## Loops
 
-- Make the video last a whole number of the widget's cycles.
-- Render with frames kept (local CLI, `--keep-frames`), then cut at the first frame that matches frame 0 within 6/255 on all but 0.01% of the pixels; it is never byte-identical.
-- Encode the master from the kept frames (CRF 16 for H.264), with `setparams` for the BT.709 tags; `-color_primaries` alone on the encoder does not tag the stream. The se-windows repository's `studio/tools/cut_loop.py` implements this cut.
+- A listing cover video is one scene and one Studio job: start from the model recipe, `examples/basic-chat/recipes/listing-loop-video.json` (one 1920 × 1080 scene, a 15-second silent MP4, the Etsy maximum). Make one recipe per variant instead of one recipe for every variant: a job renders a single recipe, and six 15-second videos do not fit one.
+- The widget must repeat on a timer (a gallery, a rotating card, an alert queue) with a rest after each change, and the video must end at rest: the last change has to settle before the 15 s end. A change that is still moving at the end is left out of the loop, and a video with fewer than two whole changes has none.
+- Cut the job's MP4 with the skill's `scripts/cut-loop.mjs <video.mp4> [...]`: it writes `<video>-loop.mp4` beside each input and never replaces one. It ends the loop where the last change settles and starts it a whole number of cycles earlier, inside the first rest, after checking that the two pictures match (mean luma difference at most 1/255); the line it prints gives the frames, the cycles, and the offset from the original (`original t = loop t + …`), which a poster time needs. It re-encodes the master (CRF 16, H.264) with `setparams` for the BT.709 tags; `-color_primaries` alone on the encoder does not tag the stream. `NO-LOOP` says why there is no cut: re-render longer or shorter, by whole cycles, within the store's limit. It needs `ffmpeg` and `ffprobe` on PATH.
+- With the local CLI and `--keep-frames`, you can instead cut at the first frame that matches frame 0 within 6/255 on all but 0.01% of the pixels; it is never byte-identical.
 
 ## Tutorial videos
 

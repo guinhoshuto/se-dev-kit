@@ -13,7 +13,7 @@ const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.m
 test("the Etsy recipes satisfy the dated operational profile and unsafe variants fail before rendering", async () => {
   const project = await loadProject({inputDirectory: exampleRoot});
   const preset = await loadMarketplacePreset("etsy-listing-2026-09");
-  for (const id of ["etsy-listing-images", "etsy-listing-video"]) {
+  for (const id of ["etsy-listing-images", "etsy-listing-video", "listing-loop-video"]) {
     const recipe = project.recipes.find((item) => item.id === id)?.value;
     assert.ok(recipe);
     assert.equal(recipe.marketplacePreset, preset.id, `${id} pins the latest Etsy preset`);
@@ -34,6 +34,21 @@ test("the Etsy recipes satisfy the dated operational profile and unsafe variants
   assert.match(marketplaceRecipeIssues(imageRecipe, preset, transparent).join("; "), /opaque background/);
   transparent[0].background = {...transparent[0].background, color: "hsl(0 0% 0% / 100%)"};
   assert.doesNotMatch(marketplaceRecipeIssues(imageRecipe, preset, transparent).join("; "), /opaque background/);
+});
+
+test("listing-loop-video is one Studio job: one 16:9 MP4 of 15 s, the longest Etsy video, for cut-loop.mjs to cut", async () => {
+  const project = await loadProject({inputDirectory: exampleRoot});
+  const recipe = project.recipes.find((item) => item.id === "listing-loop-video")?.value;
+  assert.ok(recipe);
+  const variants = expandRecipe(project, recipe);
+  assert.equal(variants.length, 1);
+  assert.deepEqual([variants[0].output.width, variants[0].output.height], [1920, 1080]);
+  assert.equal(variants[0].background.color, "#10172b", "a listing video is opaque");
+  assert.deepEqual(recipe.outputs.video, {
+    enabled: true, durationMs: 15000, fps: 30, format: "mp4", codec: "h264", pixelFormat: "yuv420p", audio: "none"
+  });
+  assert.equal(recipe.outputs.screenshots, false);
+  assert.match(recipe.description, /cut-loop\.mjs/);
 });
 
 test("etsy-listing-2026-09 takes listing videos from 2:1 to 1:2, square included, and etsy-listing-2026-08 keeps its two exact shapes", async () => {
