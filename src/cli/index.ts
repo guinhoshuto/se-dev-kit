@@ -7,6 +7,7 @@ import {StudioError} from "../shared/errors.js";
 import {loadProject} from "../config/load.js";
 import {initializeWidget} from "../config/init.js";
 import {loadMarketplacePresets} from "../config/presets.js";
+import {loadSampleMediaCatalog, sampleMediaReferencesByKind} from "../config/sample-media.js";
 import {validateProject, hasValidationErrors} from "../validation/project.js";
 import {runDoctor} from "../validation/doctor.js";
 import {runBrowserSmoke, runScenarios} from "../scenarios/runner.js";
@@ -93,12 +94,21 @@ program
   .option("--force", "Replace the exact existing configuration file")
   .action(async (root: string, options: {force?: boolean}, command: Command) => {
     const result = await initializeWidget(resolve(root), options);
+    // Placeholders to start themes and scenes from; a broken sample install never fails init.
+    const samples = await loadSampleMediaCatalog().then(sampleMediaReferencesByKind, () => undefined);
     print(
       {
         status: "ok",
         config: result.configPath,
         directories: result.directories,
-        note: "Production widget files were not modified."
+        note: "Production widget files were not modified.",
+        ...(samples
+          ? {
+              sampleMedia: samples,
+              sampleMediaNote:
+                "Built-in placeholders: use a whole sws-sample: string as an image-input value (gallery, backdrop, avatar), a video-input value (clip), or a scene background image (gallery, backdrop) in themes, fixtures, and scenes. Never in FIELDS defaults or widget files."
+            }
+          : {})
       },
       globals(command).json
     );

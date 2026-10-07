@@ -7,6 +7,7 @@ import {
   isMultipleMediaField,
   parseBackgroundSelectValue,
   parseMediaArrayText,
+  sampleKindsForField,
   type SampleMediaSummary
 } from "./sample-media.js";
 import type {
@@ -755,16 +756,24 @@ function createButtonControl(field: NormalizedField): HTMLButtonElement {
   return button;
 }
 
-function sampleOptionGroups(select: HTMLSelectElement, kinds: SampleMediaSummary["kind"][], valuePrefix = ""): void {
+const SAMPLE_GROUP_LABELS: Record<SampleMediaSummary["kind"], string> = {
+  gallery: "Sample gallery",
+  backdrop: "Sample backdrops",
+  avatar: "Sample avatars",
+  clip: "Sample clips"
+};
+
+function sampleOptionGroups(select: HTMLSelectElement, kinds: readonly SampleMediaSummary["kind"][], valuePrefix = ""): void {
   for (const kind of kinds) {
     const items = sampleMediaList().filter((item) => item.kind === kind);
     if (items.length === 0) continue;
     const group = document.createElement("optgroup");
-    group.label = kind === "gallery" ? "Sample gallery" : "Sample backdrops";
+    group.label = SAMPLE_GROUP_LABELS[kind];
     for (const item of items) {
       const option = document.createElement("option");
       option.value = `${valuePrefix}${item.reference}`;
-      option.textContent = `${item.label}${item.tone ? ` · ${item.tone}` : ""} · ${item.width}×${item.height}`;
+      const duration = item.durationMs ? ` · ${item.durationMs / 1000} s loop` : "";
+      option.textContent = `${item.label}${item.tone ? ` · ${item.tone}` : ""} · ${item.width}×${item.height}${duration}`;
       option.title = item.alt;
       group.append(option);
     }
@@ -772,7 +781,7 @@ function sampleOptionGroups(select: HTMLSelectElement, kinds: SampleMediaSummary
   }
 }
 
-/** Media fields: text for one value, a JSON-array editor for `multiple`, and a sample picker for images. */
+/** Media fields: text for one value, a JSON-array editor for `multiple`, and a sample picker for images and videos. */
 function createMediaControl(field: NormalizedField): HTMLElement {
   const multiple = isMultipleMediaField(field);
   const wrapper = document.createElement("div");
@@ -799,15 +808,17 @@ function createMediaControl(field: NormalizedField): HTMLElement {
   }
   input.id = `field-${field.id}`;
   wrapper.append(input);
-  if (field.type === "image-input" && sampleMediaList().length > 0) {
+  const kinds = sampleKindsForField(field.type);
+  if (sampleMediaList().some((item) => kinds.includes(item.kind))) {
+    const noun = field.type === "video-input" ? "video" : "image";
     const picker = document.createElement("select");
     picker.className = "control-select sample-picker";
-    picker.setAttribute("aria-label", `${field.label} sample image`);
+    picker.setAttribute("aria-label", `${field.label} sample ${noun}`);
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = multiple ? "Add a sample image…" : "Use a sample image…";
+    placeholder.textContent = multiple ? `Add a sample ${noun}…` : `Use a sample ${noun}…`;
     picker.append(placeholder);
-    sampleOptionGroups(picker, ["gallery", "backdrop"]);
+    sampleOptionGroups(picker, kinds);
     picker.addEventListener("change", () => {
       if (!picker.value) return;
       const next = applySampleChoice(fieldValue(field), picker.value, multiple);

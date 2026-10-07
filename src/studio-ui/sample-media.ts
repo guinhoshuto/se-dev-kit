@@ -6,10 +6,18 @@ import type {JsonObject, JsonValue, NormalizedField, StageBackground} from "../t
  */
 export const SAMPLE_MEDIA_SCHEME = "sws-sample:";
 /** A whole JSON string such as `sws-sample:gallery/streamer-1-blur.jpg`. Group 1 is the file inside `sample-media/`. */
-export const SAMPLE_REFERENCE_PATTERN = /^sws-sample:([a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*\.(?:jpg|png|webp|gif))$/;
+export const SAMPLE_REFERENCE_PATTERN = /^sws-sample:([a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*\.(?:jpg|png|webp|gif|webm))$/;
 export const SAMPLE_MEDIA_ROUTE = "/__sws/sample/";
 
-export type SampleMediaKind = "gallery" | "backdrop";
+/** `gallery`, `backdrop`, and `avatar` are images; `clip` is a looping video for `video-input` fields. */
+export type SampleMediaKind = "gallery" | "backdrop" | "avatar" | "clip";
+export const SAMPLE_MEDIA_KINDS: readonly SampleMediaKind[] = ["gallery", "backdrop", "avatar", "clip"];
+/** The kinds a widget field of this type can use; other field types take no sample. */
+export function sampleKindsForField(type: string): readonly SampleMediaKind[] {
+  if (type === "image-input") return ["gallery", "backdrop", "avatar"];
+  if (type === "video-input") return ["clip"];
+  return [];
+}
 export type SampleMediaTone = "dark" | "medium" | "light";
 
 /** Public description of one sample; `url` is present only where the host can serve it. */
@@ -22,6 +30,8 @@ export interface SampleMediaSummary {
   height: number;
   color?: string;
   tone?: SampleMediaTone;
+  /** Clips only: the loop length. */
+  durationMs?: number;
   url?: string;
 }
 

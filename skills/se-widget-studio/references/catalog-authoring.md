@@ -36,7 +36,7 @@ A widget repository keeps each theme in `themes/` as a pair:
 
 ## Sample media
 
-Never generate, download, draw, or upload images just to test a widget. The Studio ships AI-generated sample images, and every mode (Studio preview, Studio jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
+Never generate, download, draw, or upload images or videos just to test a widget. The Studio ships sample photos, backdrops, avatars, and a video clip, and every mode (Studio preview, Studio jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
 
 | Gallery reference (1672x941, landscape) | Shows |
 |---|---|
@@ -54,7 +54,20 @@ Never generate, download, draw, or upload images just to test a widget. The Stud
 | `sws-sample:backdrops/plants.jpg` | light | `#e7dcce` | Watercolor eucalyptus sprigs and blush blotches in the corners of cream paper |
 | `sws-sample:backdrops/plants-2.jpg` | light | `#cbb09d` | Risograph red, blue, and yellow leaves and halftone dots around a cream center |
 
-The people in the streamer photos are synthetic. A streamer photo as a 16:9 `background` shows the widget on a stream, and a blurred one keeps the photo from competing with the widget; the backdrops leave their center open for the widget. Either kind works in an image field or as a background. Pick a backdrop by contrast: a light or white-text widget on a `dark` one (`blueprint`, or `streamer-2` or `streamer-2-blur` at 16:9), a dark-text widget, or one with white cards, on a `light` one. Backdrops are 1254 px square, so a larger stage scales them up (a 2000x2000 still by 1.6x) and softens them. A retired reference fails `validate`, import, and push with the date it was retired; replace it with one from these tables. Alt text and exact metadata are in `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json` from a checkout or linked skill) and in `GET /api/v1/sample-media` on a deployment that supports samples.
+| Avatar reference (300x300 PNG, opaque) | Shows |
+|---|---|
+| `sws-sample:avatars/pixel-1.png` | Pink 5x5 pixel pattern on violet |
+| `sws-sample:avatars/pixel-2.png` | Yellow 5x5 pixel pattern on coral red |
+| `sws-sample:avatars/pixel-3.png` | Mint green 5x5 pixel pattern on blue |
+| `sws-sample:avatars/pixel-4.png` | Light blue 5x5 pixel pattern on deep indigo |
+| `sws-sample:avatars/pixel-5.png` | Orange 5x5 pixel pattern on teal |
+| `sws-sample:avatars/pixel-6.png` | Lavender 5x5 pixel pattern on hot pink |
+
+| Clip reference (1280x720 WebM, VP9, no audio) | Length | Shows |
+|---|---|---|
+| `sws-sample:clips/neon-road.webm` | 4 s seamless loop | Synthwave sunset with pink grid lines scrolling toward the viewer on a dark floor |
+
+The people in the streamer photos are synthetic. A streamer photo as a 16:9 `background` shows the widget on a stream, and a blurred one keeps the photo from competing with the widget; the backdrops leave their center open for the widget. Either kind works in an image field or as a background. Avatars are mirrored pixel patterns like a default profile picture, drawn in code: use them for a chatter, follower, or tipper picture in event data, or for any small square `image-input`; they are too small for a background. The clip is the only `video-input` sample; it cannot be a background (`validate` fails with `SAMPLE_MEDIA_KIND`), and a sample of the wrong kind for its field is a `SAMPLE_MEDIA_KIND` warning. Pick a backdrop by contrast: a light or white-text widget on a `dark` one (`blueprint`, or `streamer-2` or `streamer-2-blur` at 16:9), a dark-text widget, or one with white cards, on a `light` one. Backdrops are 1254 px square, so a larger stage scales them up (a 2000x2000 still by 1.6x) and softens them. A retired reference fails `validate`, import, and push with the date it was retired; replace it with one from these tables. Alt text and exact metadata are in `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json` from a checkout or linked skill) and in `GET /api/v1/sample-media` on a deployment that supports samples.
 
 ```json
 {
@@ -76,12 +89,13 @@ The people in the streamer photos are synthetic. A streamer photo as a 16:9 `bac
 
 Rules:
 
-- Only a whole string counts. It works as a media value in theme, fixture, scene, scenario `updateFields`, channel, and event data; as an array element of an `image-input` with `multiple: true`; and as `background.image` of a scene or a recipe matrix background.
+- Only a whole string counts. It works as a media value in theme, fixture, scene, scenario `updateFields`, channel, and event data; as an array element of an `image-input` with `multiple: true`; as a `video-input` value (the clip); and as `background.image` of a scene or a recipe matrix background.
 - Unknown references fail `validate` (`SAMPLE_MEDIA_UNKNOWN`), block a Studio import, and make the skill client refuse `import`/`push` before any change. Never put references in widget HTML or CSS or in FIELDS `value`/`default`, because StreamElements cannot resolve them. Hosted import rejects them there; local `validate` does not, so do not rely on it to catch this.
 - Do not declare samples under `assets`, and never copy them into the widget directory. They cost no upload or revision asset quota. In the Studio's interactive preview, captured assets and the samples the selected scene shows share one budget (8 MiB in the local Studio, 3 MiB hosted), and the whole response, background image included, must stay under 10 MB as base64 locally (4 MB hosted): plan for well under the budget of raw media per previewed scene.
-- Widgets receive an absolute URL: a same-origin `http:` URL in the local CLI and Studio jobs, a verified `data:image/` URL in the Studio's interactive preview. Code that resolves media with `new URL(value, location.href)` works unchanged when it also accepts `data:image/` URLs; code that keeps only `http:`, `https:`, or `blob:` shows the image in jobs and the local CLI but not in the hosted preview, as with any captured asset.
+- Widgets receive an absolute URL: a same-origin `http:` URL in the local CLI and Studio jobs, a verified `data:image/` URL (`data:video/webm` for the clip) in the Studio's interactive preview. Code that resolves media with `new URL(value, location.href)` works unchanged when it also accepts `data:` URLs; code that keeps only `http:`, `https:`, or `blob:` shows the image in jobs and the local CLI but not in the hosted preview, as with any captured asset.
 - Do not fill empty media fields silently. StreamElements shows an empty field as empty, so keep at least one scene with the media fields empty when the widget has an empty state, and put samples in the scenes that show media. The editors' **Fill empty image fields** button is an explicit, temporary choice.
-- `video-input` and `sound-input` have no samples yet, and there are no avatar, emote, transparent, animated, or portrait samples. Leave those fields empty or ask the user; do not generate replacements.
+- `sound-input` has no samples yet, and there are no emote, transparent, animated-image, or portrait samples. Leave those fields empty or ask the user; do not generate replacements.
+- The clip in a render: a local or Studio job captures what Chrome's video decoder shows at each frame, which follows wall-clock playback rather than the render's virtual clock, so a video frame can differ between two renders of the same recipe. Report it as local simulation.
 
 ## Widget media files
 
