@@ -185,6 +185,21 @@ export interface RenderPlan {
   estimate: RenderByteEstimate;
   /** Free space on the output volume against the estimated peak. */
   disk: DiskBudget;
+  /** Problems that do not stop the render, each starting with its code; absent when there are none. */
+  warnings?: string[];
+}
+
+/**
+ * The warning for a tutorial that changes fields in `event` mode while the widget's script never names
+ * `onWidgetUpdate`: the widget would not react, and StreamElements reloads it instead.
+ */
+export function fieldUpdateWarnings(options: {mode: "reload" | "event"; changesFields: boolean; widgetScript: string}): string[] {
+  if (options.mode !== "event" || !options.changesFields || options.widgetScript.includes("onWidgetUpdate")) return [];
+  return [
+    "FIELD_UPDATE_NO_LISTENER: widget.fieldUpdate is \"event\" and the tutorial changes fields, but the widget's script never " +
+      "listens to onWidgetUpdate, so the video will show the panel change and the widget stay as it was. Remove fieldUpdate " +
+      "(the default \"reload\" reloads the widget, as the StreamElements editor does) or handle onWidgetUpdate."
+  ];
 }
 
 export interface RenderResult {
@@ -869,6 +884,11 @@ export async function planRecipe(
       : {})
   });
   const space = await measureFreeSpace(outputRoot, options.statfs);
+  const warnings = fieldUpdateWarnings({
+    mode: project.config.widget.fieldUpdate ?? "reload",
+    changesFields: video?.mode === "tutorial" && (video.tutorial?.steps ?? []).some((step) => step.action === "setField"),
+    widgetScript: video?.mode === "tutorial" ? await readFile(project.files.js, "utf8") : ""
+  });
   const result = {
     outputRoot,
     variants,
@@ -890,7 +910,8 @@ export async function planRecipe(
       totalFrames: Number(workload.totalFrames),
       totalTargets: Number(workload.totalTargets),
       estimate,
-      disk: diskBudget(space.path, space.freeBytes, estimate.peakBytes)
+      disk: diskBudget(space.path, space.freeBytes, estimate.peakBytes),
+      ...(warnings.length > 0 ? {warnings} : {})
     }
   };
   return marketplacePreset ? {...result, marketplacePreset} : result;

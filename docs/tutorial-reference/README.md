@@ -5,6 +5,16 @@ Measurements of the live StreamElements overlay editor that the tutorial replica
 | File | What it is |
 |---|---|
 | `2026-09-25-recovered.json` | The measurements behind the replica, recovered from the DOM reads of the 2026-09-25 session. They were taken on a sold overlay, before the rule of measuring on a test overlay only; some answers were cut short, and their lost values are `null`. The viewport height (756) is inferred from the sidebar's bottom edge. |
+| `2026-10-07-layers.json`, `2026-10-07-settings.json` | A re-measurement on the test overlay, with "Preview LIVE on stream" off and nothing saved, on an unsaved Custom widget layer with StreamElements' default code and fields. The window was 1864x1033, not 1440x756. |
+
+## 2026-10-07 against the reference
+
+Nothing the replica copies changed: every color, font, font size, weight, letter spacing, border, and radius matches, and so do the toolbar's height, the buttons' sizes, the sidebar's width, the section headers, the layer row, and the Open editor button. Every difference comes from the window size or from the widget, which is not the sold one:
+
+- Window size: the toolbar is as wide as the window (1864), the Preview and Save buttons keep their distance from the right edge (x + 424, the width difference), the sidebar and canvas are taller, and the stage scale is 0.798 instead of 0.577.
+- Widget: the default Custom widget has other fields. Its sliders are wider (298) and lower, its color picker sits further down, the first field at (60, 270) is a number input instead of a dropdown (`INPUT`, not `MD-SELECT-VALUE`), its field rows are taller (96), and it has no visible checkbox (the probe reads a hidden checked one, so its box is 0 and its colors are the checked colors). The group header is 320 wide, not 312, while the Layers section is open (no scrollbar).
+
+`REFERENCE` in the unit test stays on the 2026-09-25 file, which has the 1440x756 point probes.
 
 `tests/unit/tutorial-reference.test.mjs` fails when the replica's toolbar, sidebar, buttons, colors, or checkerboard drift from the reference file it names (`REFERENCE`).
 

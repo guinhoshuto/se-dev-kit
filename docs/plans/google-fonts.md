@@ -788,7 +788,7 @@ By default, Claude Code deletes local transcripts after 30 days. Extract what is
 - Whether `{{field}}` is also substituted in JS, and with what escaping (quotes, spaces).
 - What happens to a placeholder that has no field.
 - Whether StreamElements injects the stylesheet for a `googleFont` field by itself, or only passes the name.
-- Whether changing a field in the editor reloads the widget. This sets the default for `widget.fieldUpdate`. (2026-09-29: the default is `reload`, from the documentation; confirm it live in the stage 8 acceptance.)
+- Whether changing a field in the editor reloads the widget. This sets the default for `widget.fieldUpdate`. (2026-09-29: the default is `reload`, from the documentation. Confirmed live on 2026-10-07 on the test overlay: changing a field gives the widget's iframe a new `blob:` source, which loads again.)
 - Whether OBS shows FOUT.
 - The geometry of se-cloud-chat and se-shaped-marquee, which measure inside `fonts.ready.then` (`se-cloud-chat/script.js:392-393`, `se-shaped-marquee/widget.js:331-337`), with OBS's warm cache against the capture's cold cache.
 

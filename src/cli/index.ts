@@ -441,7 +441,10 @@ program
       ...(options.keepFrames !== undefined ? {keepFrames: options.keepFrames} : {})
     };
     const results: (RenderResult | {plan: RenderResult["plan"]; status: "dry-run"; artifacts: never[]})[] = [];
-    const report = () => print(results.length === 1 ? results[0] : results, globals(command).json);
+    const report = () => {
+      for (const result of results) for (const warning of result.plan.warnings ?? []) process.stderr.write(`Warning ${warning}\n`);
+      print(results.length === 1 ? results[0] : results, globals(command).json);
+    };
     if (options.dryRun) {
       for (const recipe of recipes) results.push(await planRecipe(project, recipe, renderOptions).then(({plan}) => ({plan, status: "dry-run" as const, artifacts: []})));
       report();
