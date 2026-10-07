@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "listing-loop-wide",
+  "name": "Listing loop, 16:9",
+  "description": "The widget on an opaque 16:9 stage for a listing cover video, with the camera's frame inside the 4:5 search crop.",
+  "theme": "midnight",
+  "fixture": "launch-chat",
+  "fieldData": {
+    "welcomeText": "Preview connected. Synthetic events are ready."
+  },
+  "background": {
+    "id": "navy-stage",
+    "label": "Navy stage",
+    "color": "#10172b"
+  },
+  "viewport": {
+    "width": 430,
+    "height": 640,
+    "deviceScaleFactor": 1
+  },
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "format": "png"
+  },
+  "camera": {
+    "id": "listing-wide-camera",
+    "label": "Centered 16:9 view",
+    "scale": 1.45,
+    "x": 0,
+    "y": 0,
+    "origin": "center center"
+  },
+  "captureAtMs": 0
+}
