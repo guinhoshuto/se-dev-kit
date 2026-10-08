@@ -54,7 +54,8 @@ Steps run in order. Each one advances an internal clock, and the whole script mu
 | `still` | Save a PNG of the editor at this point of the script as `<variant>-still-<name>.png`, as the video shows it or, with `camera: "full"`, the whole editor without the pointer (see [Stills](#stills)). Stills do not take time. |
 | `selectLayer` | Click the layer, then the **Settings** section. |
 | `openGroup` | Expand a FIELDS group (ungrouped fields are in `General`). |
-| `setField` | Open the field's group if needed and edit it the way a person would: select and type text and numbers; open the color picker for `colorpicker` fields (see below); drag sliders; open dropdowns and pick an option; toggle checkboxes. When the edit is committed, the widget reloads with the new value, as in StreamElements (`widget.fieldUpdate: "reload"`, the default), or receives `onWidgetUpdate` with `"event"`. |
+| `setField` | Open the field's group if needed and edit it the way a person would: select and type text and numbers; open the color picker for `colorpicker` fields (see below); set image, video, and sound fields from the asset manager (see [Media fields](#media-fields)); drag sliders; open dropdowns and pick an option; toggle checkboxes. When the edit is committed, the widget reloads with the new value, as in StreamElements (`widget.fieldUpdate: "reload"`, the default), or receives `onWidgetUpdate` with `"event"`. |
+| `pressButton` | Open the field's group if needed and press a `button` field, which sends the widget the event StreamElements sends (see [Buttons](#buttons)). |
 | `chat` | Add a message to the chat panel and dispatch a StreamElements-shaped `message` event. With `typed: true`, the cursor types it into the chat box first. `badges` accepts `broadcaster`, `moderator`, `vip`, and `subscriber`; `data` merges extra fields into `event.data`. |
 | `emulate` | Open **Emulate**, hover the category, pick the submenu `option`, and dispatch the matching event: `follower`, `subscriber` (`1`, `Gift`, `Community gift`), `tip` (`$10`, `$50`), `cheer` (`1k`, `5k`), `raid` (`10`, `50`), `redemption`, or `merch`. `name`, `amount`, and `message` adjust the payload; `listener` and `payload` replace it. |
 | `move` / `click` | Move to, or click, `layer`, `save`, `preview`, `emulate`, `open-editor`, `chat-input`, `group:<name>`, `field:<id>`, or an `{x, y}` point in editor pixels. |
@@ -101,6 +102,22 @@ The header and the alpha strip follow every drag live. The field text, its swatc
 - The backdrop dims the whole editor, chat panel included. Captions stay above the backdrop. A caption that would run under the dialog slides just below it (or above it, when only that fits) while the dialog is open. When neither fits (a very wide or short editor, or a long caption), the caption fades out while the dialog is open and back in after it closes. The dialog itself stays centered, as in the real editor.
 - If the editor is shorter than the dialog, the dialog is scaled down so every picker target stays on screen.
 - The header's HEX/RGB tab follows the notation of the requested value.
+
+### Media fields
+
+A single `image-input`, `video-input`, or `sound-input` field looks as it does in StreamElements: its label, a preview with a clear button once a value is set, and a **Set image** / **Change image** button (**Set video** / **Change video**, **Upload Sound**). There is no text input: StreamElements never lets a person type a media value. A `setField` on one:
+
+1. The cursor clicks the Set/Change button. The asset manager grows out of it over a dimmed backdrop, on the page of the field's type (Images, Videos, or Sounds).
+2. The cursor hovers the asset, the first tile of the grid. Its name fades out and its **Submit** and **Delete** buttons fade in.
+3. The cursor presses **Submit**. The dialog shrinks back into the button, and when it is gone the preview shows the new value and the widget reloads.
+
+The grid lists the value being set first, then the widget's own value that was there, then the Studio's built-in samples of the field's type (`sws-sample:` images for image fields, clips for video fields; sound fields have none). An empty `value` presses the preview's clear button instead and opens no dialog. A media edit takes about 3 seconds. A field with `multiple: true` (a list of media) cannot be set by a tutorial: set its value in the scene's `fieldData`, and the replica shows its tiles.
+
+**Fidelity notes.** The dialog follows the editor's public bundle as read on 2026-10-05 (`md-dialog.asset-dialog`, 71.5% of the window wide and at most 80% tall, a 5-column grid of square tiles with the name bar on top, the pagination footer), not a logged-in measurement. Image samples are drawn in the previews and tiles. A video shows a dark tile with a camera icon and a sound a music note, where the editor plays a preview, because the replica's frames must not depend on playback. The storage line in the nav bar is a fixed placeholder.
+
+### Buttons
+
+A `button` field is drawn as the editor's raised blue button with the field label on it. `pressButton` clicks it and, at the click, dispatches what StreamElements dispatches: `listener` `"event:test"`, with `event` `{field, value, listener: "widget-button"}`, where `value` is the field's value (see [Button fields](RUNTIME.md#button-fields)). A button with `openUrl` opens that page in StreamElements and sends no event, so `pressButton` refuses it, as it refuses a field that is not a button. A `setField` on a button fails with a hint to use `pressButton`.
 
 ## Auto zoom and click pulse
 

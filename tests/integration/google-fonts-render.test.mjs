@@ -3,7 +3,6 @@
 // The package is built here from the OFL fixture font (tests/fixtures/fonts/OFL.txt).
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
-import {createServer} from "node:http";
 import {mkdir, mkdtemp, readFile, readdir, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -17,6 +16,7 @@ import {loadProject} from "../../dist/config/load.js";
 import {FontResolver} from "../../dist/fonts/resolver.js";
 import {captureHostSettle, captureHostUpdateFields, openScene, runBrowserSmoke} from "../../dist/scenarios/runner.js";
 import {startStudioServer} from "../../dist/server/server.js";
+import {startSink} from "./sink-proxy.mjs";
 
 const fixtures = fileURLToPath(new URL("../fixtures/fonts/", import.meta.url));
 const FONT_400 = await readFile(join(fixtures, "Unbounded-400.woff2"));
@@ -330,26 +330,6 @@ test("canvas text drawn once in the next frame shows the Google font through the
   const expected = await render(context, reference);
   assert.equal(served.artifacts[0].hashes.screenshot, expected.artifacts[0].hashes.screenshot);
 });
-
-/**
- * Sink proxy (from the 2026-09-25 patch's harness), with the bypass list `<-loopback>,127.0.0.1`:
- * only the Studio servers on 127.0.0.1 are reached directly; every other request and connection
- * goes through the sink. Anything it sees is an external attempt.
- */
-async function startSink() {
-  const seen = [];
-  const server = createServer((request, response) => {
-    seen.push(`${request.method} ${request.url}`);
-    response.writeHead(502);
-    response.end();
-  });
-  server.on("connect", (request, socket) => {
-    seen.push(`CONNECT ${request.url}`);
-    socket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {seen, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => server.close(resolve))};
-}
 
 test("a render served from the package makes zero external attempts, preconnect and misses included", {timeout: 180_000}, async (t) => {
   const context = await browserContext(t);

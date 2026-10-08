@@ -2,6 +2,8 @@ import type {CameraDefinition, CaptureVariant, ResolvedProject, VideoDefinition}
 import {StudioError} from "../shared/errors.js";
 import {assertSafeId} from "../shared/ids.js";
 import {resolveSceneState} from "../scenarios/state.js";
+import {loadSampleMediaCatalog} from "../config/sample-media.js";
+import {sampleKindsForField, type SampleMediaKind} from "../studio-ui/sample-media.js";
 import {compileTutorial, EMULATE_MENU, type TutorialTimeline} from "./timeline.js";
 
 export {EMULATE_MENU};
@@ -10,7 +12,8 @@ export {EMULATE_MENU};
 export function compileVariantTutorial(
   project: ResolvedProject,
   variant: CaptureVariant,
-  video: VideoDefinition
+  video: VideoDefinition,
+  samples?: readonly {reference: string; kind: SampleMediaKind}[]
 ): TutorialTimeline {
   if (!video.tutorial) {
     throw new StudioError("TUTORIAL_MISSING", `Video mode "tutorial" requires a tutorial script.`);
@@ -23,7 +26,8 @@ export function compileVariantTutorial(
     fields: project.fields,
     fieldData: resolved.runtimeState.fieldData,
     channel,
-    ...(variant.fixture ? {fixture: variant.fixture} : {})
+    ...(variant.fixture ? {fixture: variant.fixture} : {}),
+    ...(samples ? {samples} : {})
   });
   if (timeline.endMs > video.durationMs) {
     throw new StudioError(
@@ -33,6 +37,16 @@ export function compileVariantTutorial(
     );
   }
   return timeline;
+}
+
+/**
+ * The built-in samples the tutorial's asset manager lists, loaded only when a `setField` step sets an
+ * image or video field (a tutorial without one never depends on sample-media/).
+ */
+export async function tutorialSamples(project: ResolvedProject, video: VideoDefinition): Promise<{reference: string; kind: SampleMediaKind}[] | undefined> {
+  const media = new Set(project.fields.filter((field) => sampleKindsForField(field.type).length > 0).map((field) => field.id));
+  if (!(video.tutorial?.steps ?? []).some((step) => step.action === "setField" && media.has(step.field))) return undefined;
+  return (await loadSampleMediaCatalog()).items.map((item) => ({reference: item.reference, kind: item.kind}));
 }
 
 /** Places the widget inside the overlay canvas; the capture host centers #widget-wrap before the camera offset. */

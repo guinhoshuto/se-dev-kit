@@ -10,7 +10,7 @@ import {planTutorialRecipe, renderRecipe} from "../../dist/capture/renderer.js";
 import {loadProject} from "../../dist/config/load.js";
 import {captureHostUpdateFields, openScene} from "../../dist/scenarios/runner.js";
 import {startStudioServer} from "../../dist/server/server.js";
-import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera} from "../../dist/tutorial/variant.js";
+import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, tutorialSamples} from "../../dist/tutorial/variant.js";
 import {createHash} from "node:crypto";
 
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
@@ -752,4 +752,144 @@ test("auto zoom frames are a function of time and keep popups, captions, and the
     assert.ok(widget && widget.left >= crop.x - 1 && widget.right <= crop.x + crop.width + 1 && widget.top >= crop.y - 1 && widget.bottom <= crop.y + crop.height + 1,
       `the widget ${JSON.stringify(widget)} leaves the crop at ${time} ms (camera ${camera})`);
   }
+});
+
+test("a button field and the asset manager of an image field are drawn on stage, and the pointer reaches Submit", {timeout: 180_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const project = await loadProject({inputDirectory: exampleRoot});
+  project.fields.push(
+    {id: "spinButton", label: "Spin", type: "button", group: "Extras", value: "go", options: [], definition: {type: "button", value: "go"}, editable: true},
+    {id: "heroImage", label: "Hero image", type: "image-input", group: "Extras", value: "", options: [], definition: {type: "image-input"}, editable: true}
+  );
+  const scene = project.scenes.find((item) => item.id === "tutorial-editor").value;
+  const base = project.recipes.find((item) => item.id === "tutorial-setup").value.outputs.video;
+  const value = "sws-sample:avatars/pixel-2.png";
+  const video = {
+    ...base,
+    tutorial: {
+      ...base.tutorial,
+      autoZoom: false,
+      steps: [
+        {action: "selectLayer"},
+        {action: "pressButton", field: "spinButton"},
+        {action: "setField", field: "heroImage", value},
+        {action: "wait", ms: 300}
+      ]
+    }
+  };
+  const samples = await tutorialSamples(project, video);
+  assert.ok(samples?.some((item) => item.reference === value), "a media setField loads the sample list");
+  const timeline = compileVariantTutorial(project, {id: "media", scene}, video, samples);
+  const button = timeline.widget.find((action) => action.kind === "dispatch");
+  const dialogs = timeline.patches.filter((entry) => entry.patch.assetDialog).map((entry) => entry.patch.assetDialog);
+  const {openedAtMs, submitAtMs, closedAtMs} = dialogs.at(-1);
+  const commit = timeline.widget.find((action) => action.kind === "fields");
+
+  const server = await startStudioServer(project, {port: 0, watch: false});
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+  });
+  const opened = await openScene(project, server, browser, scene, {
+    host: "tutorial",
+    camera: tutorialCamera(timeline),
+    background: {id: "tutorial-editor", color: "transparent"}
+  });
+  t.after(() => opened.context.close());
+  const {page} = opened;
+  await page.evaluate((options) => window.__SWS_TUTORIAL__.setup(options), {timeline, menu: EMULATE_MENU, viewport: opened.resolved.viewport, output: opened.resolved.output});
+  const renderAt = (timeMs) => page.evaluate((time) => {
+    window.__SWS_TUTORIAL__.render(time);
+    const box = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height};
+    };
+    const cursor = document.querySelector("#se-cursor");
+    const [x, y] = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(cursor.style.transform).slice(1).map(Number);
+    const size = Number.parseFloat(cursor.style.width);
+    const tile = document.querySelector('[data-target="asset-tile:0"]');
+    return {
+      button: {box: box(document.querySelector('[data-target="field:spinButton"]')), text: document.querySelector('[data-target="field:spinButton"]')?.textContent ?? null,
+        pressed: document.querySelector('[data-target="field:spinButton"]')?.classList.contains("pressed") ?? null},
+      setButton: document.querySelector('[data-target="media-set:heroImage"]')?.textContent ?? null,
+      preview: document.querySelector(".se-field.media .se-media-preview")?.style.backgroundImage ?? null,
+      typed: Boolean(document.querySelector(".se-field.media .value")),
+      dialog: box(document.querySelector(".se-am")),
+      dialogOpacity: document.querySelector(".se-am")?.style.opacity ?? null,
+      backdrop: document.querySelector(".se-cp-backdrop")?.style.opacity ?? null,
+      grid: box(document.querySelector(".se-am-grid")),
+      tile: box(tile),
+      tileImage: tile?.style.backgroundImage ?? null,
+      tileName: tile?.querySelector(".info h3")?.textContent ?? null,
+      actions: tile?.querySelector(".actions")?.style.opacity ?? null,
+      submit: box(document.querySelector('[data-target="asset-submit:0"]')),
+      submitButton: box(tile?.querySelector(".actions .se-raised")),
+      tab: document.querySelector(".se-am-nav .tab.on")?.textContent ?? null,
+      tip: {x: x + (5 * size) / 24, y: y + (2.5 * size) / 24}
+    };
+  }, timeMs);
+  const within = (inner, outer) => inner && outer && inner.left >= outer.left - 0.5 && inner.top >= outer.top - 0.5
+    && inner.right <= outer.right + 0.5 && inner.bottom <= outer.bottom + 0.5;
+  const stage = {left: 0, top: 0, right: 1920, bottom: 1080};
+
+  const pressed = await renderAt(button.atMs);
+  assert.equal(pressed.button.text, "Spin", "the raised button shows the field label");
+  assert.equal(pressed.button.pressed, true);
+  assert.ok(within(pressed.button.box, stage), `button on stage: ${JSON.stringify(pressed.button.box)}`);
+  assert.equal(pressed.setButton, "Set image", "an empty image field offers Set image");
+  assert.equal(pressed.typed, false, "a media field has no text input");
+  assert.equal(pressed.preview, null);
+
+  const open = await renderAt(openedAtMs + 400);
+  assert.equal(Number(open.dialogOpacity), 1);
+  assert.ok(Number(open.backdrop) > 0.4, `the backdrop dims the editor: ${open.backdrop}`);
+  assert.ok(within(open.dialog, stage), `dialog on stage: ${JSON.stringify(open.dialog)}`);
+  // md-dialog.asset-dialog: 71.5% of the window wide, centered.
+  assert.ok(Math.abs(open.dialog.width - 1920 * 0.715) <= 1, `dialog width ${open.dialog.width}`);
+  assert.ok(Math.abs(open.dialog.left + open.dialog.width / 2 - 960) <= 1, "the dialog centers in the editor window");
+  assert.equal(open.tab, "Images", "the dialog opens on the page of the field's type");
+  assert.ok(within(open.tile, open.grid), "the asset being set is in view");
+  assert.equal(open.tileName, "pixel-2.png");
+  assert.ok(open.tileImage.includes("/__sws/sample/avatars/pixel-2.png"), open.tileImage);
+  assert.equal(Number(open.actions), 0, "Submit is hidden until the tile is hovered");
+
+  const submit = await renderAt(submitAtMs);
+  assert.equal(Number(submit.actions), 1, "hovering the tile faded Submit in");
+  assert.ok(within(submit.submit, submit.tile), "Submit sits on the tile");
+  for (const side of ["left", "top", "right", "bottom"]) {
+    assert.ok(Math.abs(submit.submit[side] - submit.submitButton[side]) <= 1, `the pointer's anchor covers the drawn Submit button (${side})`);
+  }
+  assert.ok(
+    submit.tip.x >= submit.submit.left && submit.tip.x <= submit.submit.right && submit.tip.y >= submit.submit.top && submit.tip.y <= submit.submit.bottom,
+    `the pointer presses Submit: tip ${JSON.stringify(submit.tip)}, button ${JSON.stringify(submit.submit)}`
+  );
+
+  const closing = await renderAt(closedAtMs + 200);
+  assert.ok(Number(closing.dialogOpacity) < 1, "the dialog fades after Submit");
+  assert.ok(closing.dialog.width < open.dialog.width * 0.8, `the dialog shrinks back into its button: ${closing.dialog.width} of ${open.dialog.width}`);
+  assert.ok(Math.hypot(closing.tip.x - submit.tip.x, closing.tip.y - submit.tip.y) < 1, "the pointer stays where it pressed while the dialog shrinks");
+  assert.equal(closing.preview, null, "the value commits only when the dialog is gone");
+  const done = await renderAt(commit.atMs + 50);
+  assert.equal(done.dialog, null);
+  assert.equal(done.setButton, "Change image");
+  assert.ok(done.preview.includes("/__sws/sample/avatars/pixel-2.png"), `the preview shows the new image: ${done.preview}`);
+
+  // Setup decodes every sample image before it returns: one the frame origin cannot serve fails it.
+  const broken = structuredClone(timeline);
+  broken.media[value].sample = "avatars/missing.png";
+  const outcome = await page.evaluate(async (options) => {
+    try {
+      await window.__SWS_TUTORIAL__.setup(options);
+      return "set up";
+    } catch (error) {
+      return String(error.message);
+    }
+  }, {timeline: broken, menu: EMULATE_MENU, viewport: opened.resolved.viewport, output: opened.resolved.output});
+  assert.match(outcome, /avatars\/missing\.png failed to load/);
 });

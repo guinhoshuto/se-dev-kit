@@ -206,6 +206,7 @@ const tutorialStepSchema = z.discriminatedUnion("action", [
   z.object({action: z.literal("selectLayer")}).strict(),
   z.object({action: z.literal("openGroup"), group: z.string().min(1)}).strict(),
   z.object({action: z.literal("setField"), field: z.string().min(1), value: jsonPrimitiveSchema}).strict(),
+  z.object({action: z.literal("pressButton"), field: z.string().min(1)}).strict(),
   z
     .object({
       action: z.literal("emulate"),

@@ -65,7 +65,8 @@ Steps run in order, and each one advances the tutorial clock.
 | `still` | Keep the editor at this point as `<variant>-still-<name>.png` (`name`: lowercase letters, numbers, and hyphens, unique). It takes no time and changes nothing in the video, and the PNG stays when the frames are deleted. By default it is a byte copy of the first frame at or after the step, camera zoom and pointer included; `camera: "full"` draws that instant with the whole editor and no pointer, the usual choice for a listing image. |
 | `selectLayer` | Click the layer, then the **Settings** section. |
 | `openGroup` | Expand a FIELDS group (ungrouped fields are in `General`). |
-| `setField` | Set `field` to `value` as a person would: select and type text and numbers, drag sliders, open dropdowns and pick an option, toggle checkboxes, and use the color picker for `colorpicker` fields. The widget reloads when the edit is committed. |
+| `setField` | Set `field` to `value` as a person would: select and type text and numbers, drag sliders, open dropdowns and pick an option, toggle checkboxes, use the color picker for `colorpicker` fields, and pick the asset in the asset manager for single image, video, and sound fields (`""` presses the preview's clear button). The widget reloads when the edit is committed. |
+| `pressButton` | Press the `button` field `field`: the widget receives `onEventReceived` with `detail.listener === "event:test"` and `detail.event` `{field, value, listener: "widget-button"}`, as in StreamElements. A button with `openUrl` is refused (StreamElements opens the page and sends no event). |
 | `chat` | Add a message (`user`, `text`) to the chat panel and dispatch a StreamElements `message` event. `typed: true` types it into the chat box first; `badges` accepts `broadcaster`, `moderator`, `vip`, and `subscriber`; `data` merges extra fields into `event.data`. |
 | `emulate` | Open **Emulate**, pick the submenu `option`, and dispatch `event`: `follower`, `subscriber` (`1`, `Gift`, `Community gift`), `tip` (`$10`, `$50`), `cheer` (`1k`, `5k`), `raid` (`10`, `50`), `redemption`, or `merch`. `name`, `amount`, and `message` adjust the payload; `listener` and `payload` replace it. |
 | `move` / `click` | Move to, or click, a `target`: `layer`, `save`, `preview`, `emulate`, `open-editor`, `chat-input`, `group:<name>`, `field:<id>`, or an `{x, y}` point in editor pixels. |
@@ -73,6 +74,7 @@ Steps run in order, and each one advances the tutorial clock.
 
 - A `setField` reloads the widget as StreamElements does, so whatever it built before, such as chat lines, is gone: change fields first, then chat and emulate (see [Field changes](catalog-authoring.md#field-changes)).
 - A color `value` must be `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)`, or `rgba(r, g, b, a)`; a color name fails. The committed value is exactly that string. A color edit takes 4 to 5.5 seconds, and up to about 7 when the opacity changes.
+- A media `setField` takes about 3 seconds and lists the value first, then the built-in samples of the field's type. A `multiple: true` media field cannot be set by a step: put its value in the scene's `fieldData`.
 - Fixture events still run at their `atMs`, and fixture chat messages also appear in the chat panel.
 - The sidebar scrolls a group or field into view before the cursor reaches it, so scripts need no scroll steps.
 
