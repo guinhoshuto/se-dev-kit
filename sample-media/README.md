@@ -37,6 +37,8 @@ A published reference never changes bytes, because saved hosted revisions store 
 
 Only the owner's explicit request removes a published image. Its file is deleted, its manifest entry moves to `retired` with the date, and its lock entry stays, so the name never returns with other pixels. A catalog or saved revision that uses a retired reference fails with the date it was retired. On 2026-09-29 the owner replaced the 14 images of 2026-09-25 (8 gallery images and 6 backdrops) with 9 new ones. On 2026-10-02 the owner retired `streamer-1` and added `streamer-1-blur` and `streamer-2-blur`.
 
+Before retiring an image, find every user: `command grep -rlI "sws-sample:<file>" ~/dev --exclude-dir=node_modules --exclude-dir=.git`, plus the `wip/` branches that have not reached `main`, which carry their own scenes. A repo with a catalog generator (se-windows: `build_catalog_v2.py` and `feature_map.py`) changes the generator's constant and regenerates the catalog, never the JSON by hand; render manifests (`thumb-assets/`, `out/`, `.studio-data` artifacts) are history and stay. Afterwards, `node dist/cli/index.js validate <repo>` passes in every widget repo (2026-10-03, `streamer-1.jpg`).
+
 ## Cost
 
 The files total about 1.3 MB, the clip 0.3 MB of it. The hosted interactive preview embeds only the sample references the selected scene uses. They share one 3 MiB budget with the captured assets, and the preview response, which carries all of them as base64 together with the background image, must stay under 4,000,000 bytes, so plan for well under 3 MB of raw media per previewed scene. Samples do not count toward the 128-file, 100 MB revision budget or the daily upload quota.
