@@ -36,7 +36,7 @@ All catalog entries require `schemaVersion: 1`, `id`, and `name`, and accept opt
 | Catalog | Additional properties |
 | --- | --- |
 | Theme | Required `fieldData` JSON object. |
-| Fixture | Optional JSON objects `channel`, `recents`, `fieldData`; `events` defaults to `[]`. Each event is `{atMs, listener, event}`, with a nonnegative integer timestamp and JSON payload. |
+| Fixture | Optional JSON objects `channel`, `recents`, `session`, `fieldData`; `events` defaults to `[]`. Each event is `{atMs, listener, event}`, with a nonnegative integer timestamp and JSON payload. |
 | Scene | Optional `theme`, `fixture`, `fieldData`, `background`, `viewport`, `output`, `camera`, `crop`, `captureAtMs`. Theme/fixture IDs must exist. |
 | Scenario | Required `steps`; optional `theme`, `fixture`, `scene`. Supported actions are listed below. |
 | Recipe | Required nonempty `scenes` array; optional `matrix`, `outputs`, `marketplacePreset`, `limit`. Use explicit existing theme IDs in `matrix.themes`; the local CLI's `"*"` theme shorthand is not accepted here. |

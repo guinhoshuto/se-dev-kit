@@ -151,11 +151,16 @@ The runtime deliberately simulates only the essential local contract:
 
 ```js
 window.dispatchEvent(new CustomEvent("onWidgetLoad", {
-  detail: {fieldData, channel, recents}
+  detail: {fieldData, channel, recents, session: {data}}
 }));
 
 window.dispatchEvent(new CustomEvent("onEventReceived", {
   detail: {listener, event}
+}));
+
+// After onEventReceived, for an event the Session Dashboard counts (see RUNTIME.md, Session data).
+window.dispatchEvent(new CustomEvent("onSessionUpdate", {
+  detail: {session: data}
 }));
 
 // Only with widget.fieldUpdate "event", and in the local development UI; StreamElements has no such event.

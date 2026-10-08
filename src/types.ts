@@ -96,6 +96,8 @@ export interface FixtureDefinition {
   description?: string;
   channel?: JsonObject;
   recents?: JsonObject;
+  /** Session data keys merged over the empty defaults, as onWidgetLoad delivers them (`detail.session.data`). */
+  session?: JsonObject;
   fieldData?: JsonObject;
   events: TimelineEvent[];
 }
@@ -338,6 +340,8 @@ export interface RuntimeState {
   fieldData: JsonObject;
   channel: JsonObject;
   recents: JsonObject;
+  /** The fixture's session data keys; the frame merges them over the empty defaults. */
+  session?: JsonObject;
   seed: number;
   fixedTime: string;
 }

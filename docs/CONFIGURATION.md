@@ -47,6 +47,7 @@ Fixtures contain synthetic context and a deterministic event timeline. Event pay
   "name": "Friendly chat",
   "channel": {"username": "streamer"},
   "recents": {},
+  "session": {"follower-goal": {"amount": 42}, "tip-session": {"amount": 25}},
   "fieldData": {},
   "events": [
     {
@@ -63,7 +64,7 @@ Fixtures contain synthetic context and a deterministic event timeline. Event pay
 }
 ```
 
-Use fixed ids, timestamps, and public-safe names. Never paste a captured live payload before removing tokens, cookies, personal data, private URLs, and licensed media.
+`session` sets StreamElements session data keys, such as a goal's progress or a session total, over the empty defaults (see [Session data](RUNTIME.md#session-data)); the events then add to them. Use fixed ids, timestamps, and public-safe names. Never paste a captured live payload before removing tokens, cookies, personal data, private URLs, and licensed media.
 
 ## Scenes
 

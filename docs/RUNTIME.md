@@ -45,6 +45,21 @@ window.addEventListener("onEventReceived", (obj) => {
 
 This shape was confirmed on a test overlay on 2026-10-05. StreamElements' own documentation disagrees: the 2022 example checks `obj.detail.event.listener`, which matches, while the current example checks `obj.detail.listener === "widget-button"`, which never fires in the editor. A button with `openUrl` opens that page and sends no event. The local development UI's **Trigger** button and the tutorial's `pressButton` step send the same event, from one builder (`src/studio-ui/widget-button.ts`).
 
+## Session data
+
+The frame keeps the StreamElements session data, what the Session Dashboard shows: latest events, totals per period, goals, top donations, and recent lists. `onWidgetLoad` delivers it as `detail.session.data`, and each event the dashboard counts updates it and then fires `onSessionUpdate` with `detail.session`, right after that event's `onEventReceived`. It covers every Twitch and common key of the [Session Data Reference](https://docs.streamelements.com/overlays/session-data) as read on 2026-10-07 (`src/runtime/frame.ts`, `defaultSessionData`), all empty to begin with: names `""`, counts and amounts `0`, and lists `[]`. A fixture's `session` replaces fields key by key, so a widget can start near a goal or with a session total. This works the same in captures, videos, scenarios, the tutorial's **Emulate** step, and the Studio's Emulate menu.
+
+The reference lists the keys but not how an event changes them, so these rules are the Studio's reading, not a measurement:
+
+- `follower-latest` sets `follower-latest` and adds 1 to `follower-session`, `-week`, `-month`, `-total`, and `follower-goal`.
+- `subscriber-latest` does the same for the `subscriber-` keys, and also updates `subscriber-new-*` (`amount` 1) or `subscriber-resub-*` (more months). With `gifted: true` it also sets `subscriber-gifted-latest` to the sender and counts `subscriber-gifted-session`. A community gift (`bulkGifted: true`) only sets `subscriber-gifted-latest`, because each gifted sub then arrives as its own event. `subscriber-points` and `subscriber-alltime-gifter` stay as the fixture set them.
+- `tip-latest` and `cheer-latest` add `amount` to `-session`, `-week`, `-month`, `-total`, and `-goal`, and 1 to `-count`. Then, in each period (`session`, `weekly`, `monthly`, `alltime`), `-top-donation` keeps the biggest single event and `-top-donator` the biggest sum per name, starting from the fixture's donator.
+- `raid-latest` and `host-latest` set their `-latest` key. `merch-latest` sets `merch-latest` and adds to `merch-goal-orders` (1), `merch-goal-items` (the quantities), and `merch-goal-total` (`amount`).
+- Every counted event adds `{name, amount, createdAt, type}` at the front of its `-recent` list (followers have no `amount`, subs also have `tier`). The list keeps 25 entries, and `createdAt` is the frame's clock.
+- Any other listener, such as a chat `message`, a redemption, or a button, leaves the data alone and fires no `onSessionUpdate`.
+
+A reload for a field change starts the new frame from the fixture's session data again. In StreamElements the reloaded widget would receive the dashboard's data with the events so far, so a tutorial that changes a field after an emulated tip shows the totals from before the tip.
+
 ## Placeholders
 
 As in StreamElements, a `{{name}}` in the widget's HTML, CSS, or JavaScript becomes the raw value of field `name` before the document loads: strings as written, numbers and booleans as text, `null` as nothing, and objects and arrays as JSON. Inner spaces are allowed (`{{ name }}`). Substitution happens in memory, in one pass, so a value that contains `{{…}}` is never expanded again, and the widget's files are never rewritten. A placeholder with no matching field stays as written and produces a warning. Because values are substituted raw, a value with quotes can break the CSS or JavaScript around it, as it would in StreamElements; the checks that refuse unsafe HTML at import run again on the substituted document.

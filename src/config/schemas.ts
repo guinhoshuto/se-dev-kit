@@ -121,6 +121,7 @@ export const fixtureSchema = z
     description: z.string().optional(),
     channel: jsonObjectSchema.optional(),
     recents: jsonObjectSchema.optional(),
+    session: jsonObjectSchema.optional(),
     fieldData: jsonObjectSchema.optional(),
     events: z.array(timelineEventSchema).default([])
   })
