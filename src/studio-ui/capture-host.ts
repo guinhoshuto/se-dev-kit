@@ -27,6 +27,12 @@ interface CaptureReloadOptions {
   readyTimeoutMs?: number;
   /** Key from StudioServer.registerFrameDocument for these values. */
   docKey?: string;
+  /**
+   * Start the new frame from the scene's own session data. By default it starts from the data the
+   * replaced frame reached, as a widget reloaded in the StreamElements editor receives the session
+   * with the events so far.
+   */
+  resetSession?: boolean;
 }
 
 declare global {
@@ -43,6 +49,8 @@ class CaptureController {
   bridge?: FrameBridge;
   events: FrameEvent[] = [];
   #state?: CaptureState;
+  /** The state `load` received, for a reload that resets the session. */
+  #loaded?: CaptureState;
   /** Index in `events` where the current frame's load began. */
   #loadStart = 0;
   #reloading?: Promise<void>;
@@ -90,6 +98,7 @@ class CaptureController {
     this.wrap.style.height = `${options.viewport.height}px`;
     this.wrap.style.transformOrigin = options.camera.origin ?? "center center";
     this.wrap.style.transform = `translate(-50%, -50%) translate(${options.camera.x}px, ${options.camera.y}px) scale(${options.camera.scale})`;
+    this.#loaded = structuredClone(options.state);
     this.#state = structuredClone(options.state);
     this.bridge = this.#bridgeFor(this.#state);
     await this.bridge.start((options.readyTimeoutMs ?? 10_000) + 2_000, options.docKey);
@@ -99,13 +108,17 @@ class CaptureController {
    * Starts replacing the widget frame with one that loads `fieldData`, as the StreamElements editor
    * does when a field changes; `reloaded()` settles when the new frame is ready. It returns before
    * the load, so `getLoadEvents()` already covers only the new frame when the caller polls it. The
-   * stage keeps its size, background and camera, and `events` keeps what the replaced frame
-   * reported, so its runtime errors still count.
+   * stage keeps its size, background and camera, `events` keeps what the replaced frame reported,
+   * so its runtime errors still count, and the new frame starts from the replaced frame's session
+   * data unless `resetSession` is set.
    */
   reload(options: CaptureReloadOptions): void {
-    if (!this.bridge || !this.#state) throw new Error("Capture host is not loaded.");
+    if (!this.bridge || !this.#state || !this.#loaded) throw new Error("Capture host is not loaded.");
+    const session = options.resetSession ? structuredClone(this.#loaded.session) : this.bridge.session;
     this.bridge.destroy();
     this.#state = {...this.#state, fieldData: structuredClone(options.fieldData)};
+    if (session) this.#state.session = session;
+    else delete this.#state.session;
     this.#loadStart = this.events.length;
     this.bridge = this.#bridgeFor(this.#state);
     this.#reloading = this.bridge.start((options.readyTimeoutMs ?? 10_000) + 2_000, options.docKey);

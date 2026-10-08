@@ -58,7 +58,7 @@ The reference lists the keys but not how an event changes them, so these rules a
 - Every counted event adds `{name, amount, createdAt, type}` at the front of its `-recent` list (followers have no `amount`, subs also have `tier`). The list keeps 25 entries, and `createdAt` is the frame's clock.
 - Any other listener, such as a chat `message`, a redemption, or a button, leaves the data alone and fires no `onSessionUpdate`.
 
-A reload for a field change starts the new frame from the fixture's session data again. In StreamElements the reloaded widget would receive the dashboard's data with the events so far, so a tutorial that changes a field after an emulated tip shows the totals from before the tip.
+A reload for a field change keeps the session: the frame reports its data to the host after each counted event, and the new frame's `onWidgetLoad` delivers the data with the events so far, as the reloaded widget receives the dashboard's data in StreamElements. So a tutorial that changes a field after an emulated tip shows the totals with the tip. Only the data travels: each name's running sum behind `-top-donator` restarts from the delivered top donator, so a name that was not on top counts again from 0. A seek back in the dev tutorial preview starts over from the fixture's session data.
 
 ## Placeholders
 
