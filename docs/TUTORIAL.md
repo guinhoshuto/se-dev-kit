@@ -165,10 +165,11 @@ Every frame is drawn from the timeline at the frame timestamp: the host page has
 
 ### Iterating on a script
 
-Two `render` options make a script cheaper to adjust than a full render per attempt:
+Three `render` options make a script cheaper to adjust than a full render per attempt:
 
 - `--plan-only` opens Chrome once per recipe, runs only `setup()` for each variant, and prints what it measured and the camera plan it made: the timeline's `endMs`, then each camera key with its time, kind, zoom, and view origin. With `--json` it prints the whole record, `tutorialPlan` per variant: `layout` (the pointer's home, the resolved sidebar scrolls, every move with its measured anchors, the cues with their rectangles, the caption heights) and `camera` (keys, holds, caption obstacles, repaired moves, and whether it fell back to strict moves). It draws no frame and writes no file, takes the render slot like a render, and fails with `PLAN_ONLY_NEEDS_TUTORIAL` for a recipe without a tutorial video. On the example `listing-tutorial` it answered in about 3 seconds (2026-10-07).
 - `--fps <count>` and `--duration <ms>` replace `outputs.video.fps` and `durationMs` for one run, for example `--fps 5` for a quick look at the motion. The replaced recipe is validated like a recipe file (`VIDEO_OVERRIDE_INVALID`), must still meet its marketplace preset, and is what the manifest records under `recipe`, next to the flags in `studio.cliFlags`. Because every frame is a function of its time, a 5 fps render shows the same instants a 30 fps one shows at those timestamps.
+- `--sheet-at <ms,...>` draws each variant only at the instants listed, comma-separated (whole milliseconds from 0 to the video's length minus 1, at most 24), and writes them as one sheet, `<recipe>/sheet-at.png`, captioned with the variant and the instant. It writes no frame, video, still, or manifest, takes the render slot like a render, and refuses to replace an earlier sheet without `--force`. An instant does not have to fall on a frame. Each instant is drawn as the full render draws it: the result lists every instant's PNG hash, which equals the manifest's `frameSequence` hash at that timestamp. It also works for videos that are not tutorials (`SHEET_AT_NEEDS_VIDEO` without a video). On the example `listing-tutorial`, six instants took about 4 seconds (2026-10-07).
 
 A full render records the same `tutorialPlan` in each tutorial artifact of the manifest, so the plan behind a delivered video can be compared with a later `--plan-only`.
 

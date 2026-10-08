@@ -72,3 +72,32 @@ test("render --plan-only refuses --dry-run and a recipe without a tutorial video
   assert.equal(error.code, "PLAN_ONLY_NEEDS_TUTORIAL", stage.stderr);
   assert.match(error.detail, /"listing-media"/);
 });
+
+test("render --sheet-at refuses other modes, a recipe without video, and instants outside the video before it waits for the machine", {timeout: 60_000}, async () => {
+  const sheetAt = (recipe, instants, ...extra) =>
+    runCli(["render", exampleRoot, "--recipe", recipe, "--sheet-at", instants, "--no-wait", "--browser-path", "/nonexistent/chrome", "--json", ...extra]);
+  // A check after the slot would answer with the busy machine (--no-wait) or, from the first recipe, the missing browser.
+  const second = await sheetAt("listing-tutorial", "0", "--recipe", "etsy-listing-images");
+  const secondError = JSON.parse(second.stderr);
+  assert.equal(secondError.code, "SHEET_AT_NEEDS_VIDEO", second.stderr);
+  assert.match(secondError.detail, /"etsy-listing-images"/);
+  const both = await sheetAt("listing-tutorial", "0", "--plan-only");
+  assert.equal(JSON.parse(both.stderr).code, "RENDER_MODE", both.stderr);
+  const dry = await sheetAt("listing-tutorial", "0", "--dry-run");
+  assert.equal(JSON.parse(dry.stderr).code, "RENDER_MODE", dry.stderr);
+  const noVideo = await sheetAt("etsy-listing-images", "0");
+  assert.equal(JSON.parse(noVideo.stderr).code, "SHEET_AT_NEEDS_VIDEO", noVideo.stderr);
+  const late = await sheetAt("listing-tutorial", "0,15000");
+  const lateError = JSON.parse(late.stderr);
+  assert.equal(lateError.code, "SHEET_AT_INVALID", late.stderr);
+  assert.match(lateError.detail, /lasts 15000 ms; --sheet-at got 15000/);
+  // The video's end moves with --duration.
+  const shorter = await sheetAt("listing-tutorial", "14500", "--duration", "14000");
+  assert.equal(JSON.parse(shorter.stderr).code, "SHEET_AT_INVALID", shorter.stderr);
+  for (const bad of ["0,,5", "-1", "2.5", "abc"]) {
+    const result = await sheetAt("listing-tutorial", bad);
+    assert.equal(JSON.parse(result.stderr).code, "SHEET_AT_INVALID", `${bad}: ${result.stderr}`);
+  }
+  const many = await sheetAt("listing-tutorial", Array.from({length: 25}, (_, index) => index * 100).join(","));
+  assert.match(JSON.parse(many.stderr).detail, /from 1 to 24 instants; it got 25/);
+});

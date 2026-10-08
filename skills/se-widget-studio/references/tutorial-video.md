@@ -81,7 +81,7 @@ Steps run in order, and each one advances the tutorial clock.
 ## Duration
 
 - The whole script must fit `durationMs`. One that does not fails with `TUTORIAL_TOO_LONG`, whose hint names the smallest `durationMs` that fits. The local CLI's `validate` and `render --dry-run` report it without rendering; the client has no dry run, so leave margin.
-- To adjust a script without a full render each time, the local CLI's `render --plan-only` prints each variant's camera keys (time, kind, zoom) from one browser and writes nothing, and `--fps 5` (or `--duration <ms>`) renders a quick pass with the recipe's video timing replaced for that run. A full render records the same plan in the manifest (`tutorialPlan`). The Studio client has neither.
+- To adjust a script without a full render each time, the local CLI's `render --plan-only` prints each variant's camera keys (time, kind, zoom) from one browser and writes nothing, and `--fps 5` (or `--duration <ms>`) renders a quick pass with the recipe's video timing replaced for that run. `render --sheet-at 0,2500,5000` draws just those instants into one `<recipe>/sheet-at.png`, the same pixels the full render draws there, without frames or video. A full render records the same plan in the manifest (`tutorialPlan`). The Studio client has neither.
 - The camera adds no time. For the disk check, tutorial frames count 0.3 bytes per output pixel (see "Plan a large batch" in [studio-workflow.md](studio-workflow.md#plan-a-large-batch)).
 
 ## Auto zoom

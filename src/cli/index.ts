@@ -18,11 +18,14 @@ import {
   planRecipe,
   planTutorialRecipe,
   renderRecipe,
+  renderSheetAt,
+  sheetInstants,
   singleSceneRecipe,
   tutorialVideo,
   withVideoOverrides,
   type RenderResult,
   type RenderTraceEvent,
+  type SheetAtResult,
   type TutorialPlanResult
 } from "../capture/renderer.js";
 import {reviewSummary, writeReviewPage} from "../capture/review.js";
@@ -415,6 +418,7 @@ program
   .option("--fps <count>", "Replace outputs.video.fps for this run; the manifest records the replaced recipe", (value) => Number(value))
   .option("--duration <ms>", "Replace outputs.video.durationMs for this run; the manifest records the replaced recipe", (value) => Number(value))
   .option("--plan-only", "Open Chrome once and print each tutorial variant's measured layout and camera plan, without frames or files")
+  .option("--sheet-at <ms,...>", "Draw only these instants of the video, comma-separated, into <recipe>/sheet-at.png; no frames, video, or manifest", (value) => value.split(",").map((part) => (part.trim() === "" ? Number.NaN : Number(part))))
   .option("--no-wait", NO_WAIT_HELP)
   .option("--allow-unsupported-node", UNSUPPORTED_NODE_HELP)
   .action(async (
@@ -438,6 +442,7 @@ program
       fps?: number;
       duration?: number;
       planOnly?: boolean;
+      sheetAt?: number[];
       wait?: boolean;
     },
     command: Command
@@ -454,7 +459,8 @@ program
         ...(options.duration !== undefined ? {durationMs: options.duration} : {})
       });
     });
-    if (options.planOnly && options.dryRun) throw new StudioError("RENDER_MODE", "Pass --plan-only or --dry-run, not both.");
+    const modes = [options.planOnly && "--plan-only", options.sheetAt && "--sheet-at", options.dryRun && "--dry-run"].filter(Boolean);
+    if (modes.length > 1) throw new StudioError("RENDER_MODE", `Pass one of ${modes.join(", ")}, not several.`);
     const renderOptions = {
       cliFlags: cliFlags(command),
       ...(options.output ? {outputRoot: resolve(options.output)} : {}),
@@ -495,6 +501,34 @@ program
       for (const result of plans) for (const warning of result.warnings ?? []) process.stderr.write(`Warning ${warning}\n`);
       const json = globals(command).json;
       print(json ? (plans.length === 1 ? plans[0] : plans) : tutorialPlanSummary(plans), json);
+      return;
+    }
+    if (options.sheetAt) {
+      const instants = options.sheetAt;
+      // Every recipe is checked before the render slot, so a wrong one never waits for the machine.
+      recipes.forEach((recipe) => sheetInstants(recipe, instants));
+      assertSupportedNode(options.allowUnsupportedNode === true);
+      const sheets: SheetAtResult[] = [];
+      await inRenderSlot(async (machineFree) => {
+        let shared: Awaited<ReturnType<typeof launchStudioBrowser>> | undefined;
+        try {
+          for (const recipe of recipes) {
+            await machineFree();
+            if (recipes.length > 1) shared ??= await launchStudioBrowser(options.browserPath ? {browserPath: options.browserPath} : {});
+            sheets.push(await renderSheetAt(project, recipe, instants, {...renderOptions, ...(shared ? {browser: shared} : {})}));
+          }
+        } finally {
+          if (shared) await closeStudioBrowser(shared.browser);
+        }
+      }, options.wait !== false);
+      for (const result of sheets) {
+        for (const warning of [...(result.warnings ?? []), ...result.variants.flatMap((variant) => variant.fontWarnings ?? [])]) {
+          process.stderr.write(`Warning ${warning}\n`);
+        }
+      }
+      const json = globals(command).json;
+      const outputRoot = resolve(options.output ?? project.outputRoot);
+      print(json ? (sheets.length === 1 ? sheets[0] : sheets) : sheets.map((sheet) => `${sheet.recipe}: ${resolve(outputRoot, sheet.sheet)} (${sheet.timestampsMs.join(", ")} ms)`).join("\n"), json);
       return;
     }
     if (options.dryRun) {

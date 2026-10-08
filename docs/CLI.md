@@ -137,7 +137,7 @@ se-widget-studio render examples/basic-chat --recipe etsy-listing-images --dry-r
 se-widget-studio render examples/basic-chat --recipe etsy-listing-video --dry-run --json
 ```
 
-For a recipe with video, `--fps <count>` and `--duration <ms>` replace `outputs.video.fps` and `durationMs` for one run; the manifest records the replaced recipe. For a tutorial video, `--plan-only` prints each variant's measured layout and camera plan from one browser, without frames or files. See [Tutorial videos](TUTORIAL.md#iterating-on-a-script).
+For a recipe with video, `--fps <count>` and `--duration <ms>` replace `outputs.video.fps` and `durationMs` for one run; the manifest records the replaced recipe. For a tutorial video, `--plan-only` prints each variant's measured layout and camera plan from one browser, without frames or files. For any video, `--sheet-at <ms,...>` draws only those instants into `<recipe>/sheet-at.png`, without frames, video, or manifest (`--force` replaces an earlier sheet). See [Tutorial videos](TUTORIAL.md#iterating-on-a-script).
 
 Matrix cardinality is calculated with integer-safe arithmetic before variants are expanded. The default matrix limit is 48 variants; a larger matrix requires `--allow-large-matrix`.
 
