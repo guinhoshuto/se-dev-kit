@@ -10,6 +10,8 @@ import {StudioError, toErrorMessage} from "../shared/errors.js";
 import {assetUrlPath, buildAssetMap, lookupAsset, type AssetEntry} from "./assets.js";
 import {renderCapturePage} from "./capture-page.js";
 import {EDITOR_FONT_FILES, renderTutorialPage} from "./tutorial-page.js";
+import {renderTutorialPreviewPage} from "./tutorial-preview-page.js";
+import {tutorialPreview, tutorialPreviewIndex} from "../tutorial/preview.js";
 import {renderFrameDocument} from "./html.js";
 import {loadProject} from "../config/load.js";
 import {assertPublicSafeProject} from "../validation/privacy.js";
@@ -61,6 +63,7 @@ const uiAssets = new Map([
   ["capture-host.js", resolve(distributionRoot, "studio-ui/capture-host.js")],
   ["tutorial-host.js", resolve(distributionRoot, "studio-ui/tutorial-host.js")],
   ["tutorial-camera.js", resolve(distributionRoot, "studio-ui/tutorial-camera.js")],
+  ["tutorial-preview.js", resolve(distributionRoot, "studio-ui/tutorial-preview.js")],
   ["sample-media.js", resolve(distributionRoot, "studio-ui/sample-media.js")],
   ["widget-button.js", resolve(distributionRoot, "studio-ui/widget-button.js")],
   ...EDITOR_FONT_FILES.map((file) => [`fonts/${file}`, resolve(distributionRoot, "studio-ui/fonts", file)] as const)
@@ -355,6 +358,27 @@ export async function startStudioServer(
   frameOrigin = `http://${host}:${framePort}`;
   frameHostHeader = `${host}:${framePort}`;
 
+  const registerFrameDocument = async (fieldData: JsonObject): Promise<string> => {
+    const values = frameFieldValues(fieldData, frameOrigin, assetUrls());
+    const project = activeProject;
+    const [html, css, js] = await Promise.all([project.files.html, project.files.css, project.files.js].map((file) => readFile(file, "utf8")));
+    // Build once so unsafe values fail here, with a clear error, instead of as a frame that never boots.
+    await renderFrameDocument(project, {frameOrigin, controlOrigin, sessionId: "0".repeat(24), nonce: "0".repeat(32), fieldData: values});
+    const relative = [project.relativeFiles.html, project.relativeFiles.css, project.relativeFiles.js];
+    [html, css, js].forEach((text, index) => {
+      const missing = substitutePlaceholders(text ?? "", values).missing;
+      if (missing.length > 0) options.onLog?.(missingPlaceholderWarning(relative[index] ?? "widget", missing));
+    });
+    const key = randomBytes(16).toString("hex");
+    frameDocuments.set(key, values);
+    while (frameDocuments.size > MAX_FRAME_DOCUMENTS) {
+      const oldest = frameDocuments.keys().next().value;
+      if (oldest === undefined) break;
+      frameDocuments.delete(oldest);
+    }
+    return key;
+  };
+
   const controlServer = createServer((request, response) => {
     void (async () => {
       if (!validateRequest(request, response, controlHostHeader)) return;
@@ -393,6 +417,29 @@ export async function startStudioServer(
       }
       if (pathname === "/__sws/tutorial") {
         send(request, response, 200, "text/html; charset=utf-8", renderTutorialPage(frameOrigin), controlHeaders);
+        return;
+      }
+      if (pathname === "/__sws/tutorial-preview") {
+        // The preview frames the tutorial host page of this same origin; the widget stays on the frame origin inside it.
+        send(request, response, 200, "text/html; charset=utf-8", renderTutorialPreviewPage(), {
+          "Content-Security-Policy": controlContentSecurityPolicy(frameOrigin).replace(`frame-src ${frameOrigin}`, `frame-src 'self' ${frameOrigin}`)
+        });
+        return;
+      }
+      if (pathname === "/__sws/api/tutorial-preview") {
+        const recipe = requestUrl.searchParams.get("recipe");
+        if (recipe === null) {
+          sendJson(request, response, 200, tutorialPreviewIndex(activeProject));
+          return;
+        }
+        const project = activeProject;
+        try {
+          const variant = requestUrl.searchParams.get("variant") ?? undefined;
+          sendJson(request, response, 200, await tutorialPreview(project, registerFrameDocument, recipe, variant));
+        } catch (error) {
+          if (!(error instanceof StudioError)) throw error;
+          sendJson(request, response, error.code === "TUTORIAL_PREVIEW_NOT_FOUND" ? 404 : 422, {code: error.code, message: error.message, ...(error.hint ? {hint: error.hint} : {})});
+        }
         return;
       }
       if (pathname.startsWith("/__sws/ui/")) {
@@ -475,26 +522,7 @@ export async function startStudioServer(
       const entry = requireSampleMedia(await sampleMedia(), reference);
       return `${frameOrigin}/__sws/sample/${entry.file}`;
     },
-    registerFrameDocument: async (fieldData) => {
-      const values = frameFieldValues(fieldData, frameOrigin, assetUrls());
-      const project = activeProject;
-      const [html, css, js] = await Promise.all([project.files.html, project.files.css, project.files.js].map((file) => readFile(file, "utf8")));
-      // Build once so unsafe values fail here, with a clear error, instead of as a frame that never boots.
-      await renderFrameDocument(project, {frameOrigin, controlOrigin, sessionId: "0".repeat(24), nonce: "0".repeat(32), fieldData: values});
-      const relative = [project.relativeFiles.html, project.relativeFiles.css, project.relativeFiles.js];
-      [html, css, js].forEach((text, index) => {
-        const missing = substitutePlaceholders(text ?? "", values).missing;
-        if (missing.length > 0) options.onLog?.(missingPlaceholderWarning(relative[index] ?? "widget", missing));
-      });
-      const key = randomBytes(16).toString("hex");
-      frameDocuments.set(key, values);
-      while (frameDocuments.size > MAX_FRAME_DOCUMENTS) {
-        const oldest = frameDocuments.keys().next().value;
-        if (oldest === undefined) break;
-        frameDocuments.delete(oldest);
-      }
-      return key;
-    },
+    registerFrameDocument,
     close: async () => {
       if (closed) return;
       closed = true;

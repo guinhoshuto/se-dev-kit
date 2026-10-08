@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {mkdtemp, readdir, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
 
 import {detectBrowser, launchStudioBrowser} from "../../dist/capture/browser.js";
-import {renderRecipe} from "../../dist/capture/renderer.js";
+import {planTutorialRecipe, renderRecipe, renderSheetAt} from "../../dist/capture/renderer.js";
 import {loadProject} from "../../dist/config/load.js";
 import {captureHostUpdateFields, openScene} from "../../dist/scenarios/runner.js";
 import {startStudioServer} from "../../dist/server/server.js";
@@ -35,6 +35,13 @@ test("tutorial mode records the widget inside the editor replica with scripted U
   );
   steps.unshift({action: "still", name: "start"});
 
+  // --plan-only: the same setup in the same Chrome build, with no frame and no file.
+  const planned = await planTutorialRecipe(project, recipe, {outputRoot, browserPath: detection.executablePath});
+  assert.equal(planned.status, "plan-only");
+  assert.equal(planned.recipe, recipe.id);
+  assert.deepEqual(await readdir(outputRoot), [], "a plan writes nothing");
+  assert.equal(planned.variants.length, 1);
+
   const result = await renderRecipe(project, recipe, {
     outputRoot,
     browserPath: detection.executablePath,
@@ -55,10 +62,34 @@ test("tutorial mode records the widget inside the editor replica with scripted U
     assert.equal(entry.frames, null);
   }
   assert.equal(frames.frames.length, Math.round((recipe.outputs.video.durationMs * 2) / 1000));
+  // The manifest keeps what setup measured and planned, and --plan-only printed exactly that.
+  const tutorialPlan = entry.tutorialPlan;
+  assert.ok(tutorialPlan.camera.keys.length > 0, "the camera plan has keys");
+  assert.ok(tutorialPlan.layout.moves.length > 0 && tutorialPlan.layout.moves.every((move) => move.arrive && move.approach), "every move has its measured anchors");
+  assert.ok(tutorialPlan.endMs > 0 && tutorialPlan.endMs <= recipe.outputs.video.durationMs);
+  assert.deepEqual(planned.variants[0].id, entry.id);
+  assert.deepEqual(planned.variants[0].tutorialPlan, tutorialPlan);
   assert.equal(frames.width, 1920);
   assert.equal(frames.height, 1080);
   const hashes = new Set(frames.frames.map((frame) => frame.sha256));
   assert.ok(hashes.size > frames.frames.length / 2, "the scripted editor changes across the recording");
+
+  // --sheet-at: jumping straight to a few frames draws the bytes the full render drew there, and writes only the sheet.
+  const picked = [frames.frames[1], frames.frames[Math.floor(frames.frames.length / 2)], frames.frames.at(-1)];
+  const before = await readdir(join(outputRoot, recipe.id));
+  const sheet = await renderSheetAt(project, recipe, picked.map((frame) => frame.timestampMs).reverse(), {outputRoot, browserPath: detection.executablePath});
+  assert.equal(sheet.status, "sheet");
+  assert.equal(sheet.sheet, `${recipe.id}/sheet-at.png`);
+  assert.deepEqual(sheet.timestampsMs, picked.map((frame) => frame.timestampMs), "instants are drawn in order");
+  assert.deepEqual(sheet.variants[0].instants, picked.map((frame) => ({timestampMs: frame.timestampMs, sha256: frame.sha256})));
+  assert.deepEqual((await readdir(join(outputRoot, recipe.id))).sort(), [...before, "sheet-at.png"].sort(), "the sheet is the only file written");
+  const sheetBytes = await readFile(join(outputRoot, sheet.sheet));
+  assert.equal(sheetBytes.readUInt32BE(16), 1600, "the sheet is 1600 px wide");
+  await assert.rejects(
+    renderSheetAt(project, recipe, [0], {outputRoot, browserPath: detection.executablePath}),
+    (error) => error.code === "OUTPUT_EXISTS",
+    "an existing sheet is replaced only with --force"
+  );
 
   // Each still is a byte copy of the frame it names, written next to the video and kept after the frames go.
   const full = entry.stills.pop();

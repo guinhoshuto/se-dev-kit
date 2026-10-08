@@ -422,6 +422,8 @@ export interface CaptureManifestEntry {
   fonts?: JsonObject;
   /** The video's fonts, as last settled after an event. */
   videoFonts?: JsonObject;
+  /** Tutorial videos only: what the editor replica measured in setup and the camera plan it made from it. */
+  tutorialPlan?: JsonObject;
   parameters: JsonObject;
   hashes: JsonObject;
   files?: JsonObject;

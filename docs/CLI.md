@@ -64,7 +64,7 @@ npm install --save-exact /absolute/path/to/se-widget-studio-0.2.0.tgz
 
 There is no automatic `prepare` build. Build `dist` explicitly before packing or using a checkout. The tarball includes the shared engine CLI, library exports, presets, documentation, skill, and example; it is not a deployable copy of the Next.js application. The current package version is `0.2.0`; check `package.json` when preparing another release. Record the repository commit and tarball SHA-256 in CI or release notes.
 
-`dev` binds the control and widget servers to `127.0.0.1` by default. It prints the URL instead of opening a browser unless `--open` is explicit.
+`dev` binds the control and widget servers to `127.0.0.1` by default. It prints the URL instead of opening a browser unless `--open` is explicit. When the widget has a recipe with a tutorial video, it also prints `tutorialPreview`, a page that scrubs the tutorial (see [Tutorial videos](TUTORIAL.md#previewing-in-dev)).
 
 ## Supported widget layouts
 
@@ -136,6 +136,8 @@ Every command supports `--json` at the program level. Matrix rendering should be
 se-widget-studio render examples/basic-chat --recipe etsy-listing-images --dry-run --json
 se-widget-studio render examples/basic-chat --recipe etsy-listing-video --dry-run --json
 ```
+
+For a recipe with video, `--fps <count>` and `--duration <ms>` replace `outputs.video.fps` and `durationMs` for one run; the manifest records the replaced recipe. For a tutorial video, `--plan-only` prints each variant's measured layout and camera plan from one browser, without frames or files. For any video, `--sheet-at <ms,...>` draws only those instants into `<recipe>/sheet-at.png`, without frames, video, or manifest (`--force` replaces an earlier sheet). See [Tutorial videos](TUTORIAL.md#iterating-on-a-script).
 
 Matrix cardinality is calculated with integer-safe arithmetic before variants are expanded. The default matrix limit is 48 variants; a larger matrix requires `--allow-large-matrix`.
 

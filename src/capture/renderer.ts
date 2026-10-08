@@ -18,6 +18,7 @@ import {stableStringify} from "../shared/json.js";
 import {buildInfo} from "../build-info.js";
 import {STUDIO_VERSION} from "../version.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
+import {recipeSchema} from "../config/schemas.js";
 import {startStudioServer} from "../server/server.js";
 import {buildAssetMap} from "../server/assets.js";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../scenarios/runner.js";
 import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, tutorialSamples, tutorialStillNames} from "../tutorial/variant.js";
 import type {TutorialTimeline} from "../tutorial/timeline.js";
+import {videoWidgetEvents} from "../tutorial/preview.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
 import {closeStudioBrowser, launchStudioBrowser, type BrowserDetection, type FontRoute} from "./browser.js";
 import {FontsMissingError, type FontResolver} from "../fonts/resolver.js";
@@ -103,6 +105,68 @@ export interface RenderOptions {
   trace?: (event: RenderTraceEvent) => void;
   /** The CLI options of this render, recorded as `studio.cliFlags` in the manifest; hosted jobs have none. */
   cliFlags?: string[];
+}
+
+/** Per-run replacements for a recipe's `outputs.video` timing, from `render --fps` and `--duration`. */
+export interface VideoOverrides {
+  fps?: number;
+  durationMs?: number;
+}
+
+/**
+ * The recipe with its video timing replaced, validated as a recipe. The result is what renders and what
+ * the manifest records; a recipe without an enabled video cannot take an override.
+ */
+export function withVideoOverrides(recipe: RecipeDefinition, overrides: VideoOverrides): RecipeDefinition {
+  if (overrides.fps === undefined && overrides.durationMs === undefined) return recipe;
+  const video = recipe.outputs?.video;
+  if (!video?.enabled) {
+    throw new StudioError("VIDEO_OVERRIDE_INVALID", `Recipe "${recipe.id}" has no enabled video, so --fps and --duration do not apply.`);
+  }
+  const next: RecipeDefinition = {
+    ...recipe,
+    outputs: {
+      ...recipe.outputs,
+      video: {
+        ...video,
+        ...(overrides.fps !== undefined ? {fps: overrides.fps} : {}),
+        ...(overrides.durationMs !== undefined ? {durationMs: overrides.durationMs} : {})
+      }
+    }
+  };
+  const parsed = recipeSchema.safeParse(next);
+  if (!parsed.success) {
+    throw new StudioError(
+      "VIDEO_OVERRIDE_INVALID",
+      `Recipe "${recipe.id}" with the override is invalid: ${parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}.`,
+      "--fps takes an integer from 1 to 120, and --duration milliseconds from 100 to 600000."
+    );
+  }
+  return next;
+}
+
+/** What the tutorial host measured in setup and the camera plan it made; mirrors TutorialPlanRecord in tutorial-host.ts. */
+export interface TutorialPlanRecord extends JsonObject {
+  endMs: number;
+  layout: JsonObject;
+  camera: JsonObject;
+}
+
+/** Lays out the editor replica for the timeline and plans the camera; nothing is drawn. */
+async function setupTutorial(opened: OpenSceneResult, tutorial: TutorialTimeline, variant: CaptureVariant): Promise<TutorialPlanRecord> {
+  const setup: unknown = {
+    timeline: tutorial,
+    menu: EMULATE_MENU,
+    viewport: {width: opened.resolved.viewport.width, height: opened.resolved.viewport.height},
+    output: {width: opened.resolved.output.width, height: opened.resolved.output.height},
+    // Frames are clipped to the scene crop, so the tutorial camera frames the crop.
+    crop: variant.scene.crop ?? null
+  };
+  const record = await opened.page.evaluate(
+    (value) => (window as unknown as {__SWS_TUTORIAL__: {setup: (options: unknown) => Promise<unknown>}}).__SWS_TUTORIAL__.setup(value),
+    setup
+  );
+  return JSON.parse(JSON.stringify(record)) as TutorialPlanRecord;
 }
 
 export interface RenderTraceEvent {
@@ -478,22 +542,23 @@ async function screenshotScene(
   temporaryFiles: TemporaryFiles
 ): Promise<void> {
   const atomic = await createAtomicTarget(outputRoot, target, temporaryFiles);
+  await sceneScreenshot(page, variant, atomic.temporaryPath);
+  await atomic.commit();
+}
+
+/** The scene's pixels, cropped as the variant asks; written to `path` when given, and returned. */
+async function sceneScreenshot(page: Page, variant: CaptureVariant, path?: string): Promise<Buffer> {
   const format = variant.output.format ?? "png";
   const base: PageScreenshotOptions = {
-    path: atomic.temporaryPath,
+    ...(path ? {path} : {}),
     type: format,
     scale: "css",
     animations: "allow",
     omitBackground: format === "png" && (variant.background.color === "transparent" || !variant.background.color)
   };
   if (format === "jpeg") base.quality = variant.output.quality ?? 90;
-  if (variant.scene.crop) {
-    const crop = variant.scene.crop;
-    await page.screenshot({...base, clip: crop});
-  } else {
-    await page.locator("#capture-stage").screenshot(base);
-  }
-  await atomic.commit();
+  if (variant.scene.crop) return page.screenshot({...base, clip: variant.scene.crop});
+  return page.locator("#capture-stage").screenshot(base);
 }
 
 function escapeHtml(value: string): string {
@@ -524,19 +589,57 @@ async function renderThumbnail(
   }
 }
 
-/** The contact sheet page: one cell per screenshot, captioned with the screenshot's review code and its variant id. */
-export function contactSheetHtml(cells: {id: string; src: string}[], review: readonly ReviewItem[]): string {
-  const codes = new Map(review.filter((item) => item.kind === "screenshot").map((item) => [item.variant, item.code]));
-  const columns = Math.min(3, Math.max(1, cells.length));
+/** A sheet page: one cell per image, with its caption (HTML, already escaped) under it. */
+function sheetHtml(cells: {caption: string; src: string}[], columns: number, cellHeight: number): string {
   const figures = cells.map((cell) =>
-    `<figure><div><img alt="" src="${cell.src}"></div><figcaption><b>${escapeHtml(codes.get(cell.id) ?? "")}</b> · ${escapeHtml(cell.id)}</figcaption></figure>`);
+    `<figure><div><img alt="" src="${cell.src}"></div><figcaption>${cell.caption}</figcaption></figure>`);
   return `<!doctype html><style>
       *{box-sizing:border-box}html,body{margin:0;background:#0b0d12;color:#e9edf5;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
       main{padding:32px;display:grid;grid-template-columns:repeat(${columns},1fr);gap:24px}
-      figure{margin:0;min-width:0}figure>div{height:326px;display:grid;place-items:center;overflow:hidden;background:#171b23;border:1px solid #2c3340}
+      figure{margin:0;min-width:0}figure>div{height:${cellHeight}px;display:grid;place-items:center;overflow:hidden;background:#171b23;border:1px solid #2c3340}
       img{display:block;width:100%;height:100%;object-fit:contain}figcaption{padding:12px 2px 0;color:#aeb8c8;overflow-wrap:anywhere}
       figcaption b{color:#fff}
     </style><main>${figures.join("")}</main>`;
+}
+
+/** The contact sheet page: one cell per screenshot, captioned with the screenshot's review code and its variant id. */
+export function contactSheetHtml(cells: {id: string; src: string}[], review: readonly ReviewItem[]): string {
+  const codes = new Map(review.filter((item) => item.kind === "screenshot").map((item) => [item.variant, item.code]));
+  return sheetHtml(
+    cells.map((cell) => ({src: cell.src, caption: `<b>${escapeHtml(codes.get(cell.id) ?? "")}</b> · ${escapeHtml(cell.id)}`})),
+    Math.min(3, Math.max(1, cells.length)),
+    326
+  );
+}
+
+/** The `render --sheet-at` page: one cell per variant and instant, captioned with both. */
+export function sheetAtHtml(cells: {variant: string; timestampMs: number; src: string}[]): string {
+  return sheetHtml(
+    cells.map((cell) => ({src: cell.src, caption: `<b>${escapeHtml(cell.variant)}</b> · ${cell.timestampMs} ms`})),
+    Math.min(2, Math.max(1, cells.length)),
+    420
+  );
+}
+
+/** Screenshots a sheet page 1600 CSS pixels wide, whole, into the atomic target; `height` is the viewport's. */
+async function renderSheet(
+  browser: Browser,
+  html: string,
+  height: number,
+  outputRoot: string,
+  target: string,
+  temporaryFiles: TemporaryFiles
+): Promise<void> {
+  const page = await browser.newPage({viewport: {width: 1600, height}, deviceScaleFactor: 1});
+  try {
+    await page.setContent(html);
+    await Promise.all(await page.locator("img").evaluateAll((images) => images.map((image) => (image as HTMLImageElement).decode())));
+    const atomic = await createAtomicTarget(outputRoot, target, temporaryFiles);
+    await page.screenshot({path: atomic.temporaryPath, type: "png", fullPage: true});
+    await atomic.commit();
+  } finally {
+    await page.close();
+  }
 }
 
 async function renderContactSheet(
@@ -547,27 +650,15 @@ async function renderContactSheet(
   target: string,
   temporaryFiles: TemporaryFiles
 ): Promise<void> {
-  const width = 1600;
-  const columns = Math.min(3, Math.max(1, items.length));
-  const rows = Math.max(1, Math.ceil(items.length / columns));
-  const height = 80 + rows * 390;
-  const page = await browser.newPage({viewport: {width, height}, deviceScaleFactor: 1});
-  try {
-    const cells = await Promise.all(
-      items.map(async (item) => {
-        const mime = item.path.endsWith(".jpg") ? "jpeg" : "png";
-        const data = (await readFile(item.path)).toString("base64");
-        return {id: item.id, src: `data:image/${mime};base64,${data}`};
-      })
-    );
-    await page.setContent(contactSheetHtml(cells, review));
-    await Promise.all(await page.locator("img").evaluateAll((images) => images.map((image) => (image as HTMLImageElement).decode())));
-    const atomic = await createAtomicTarget(outputRoot, target, temporaryFiles);
-    await page.screenshot({path: atomic.temporaryPath, type: "png", fullPage: true});
-    await atomic.commit();
-  } finally {
-    await page.close();
-  }
+  const cells = await Promise.all(
+    items.map(async (item) => {
+      const mime = item.path.endsWith(".jpg") ? "jpeg" : "png";
+      const data = (await readFile(item.path)).toString("base64");
+      return {id: item.id, src: `data:image/${mime};base64,${data}`};
+    })
+  );
+  const rows = Math.max(1, Math.ceil(items.length / Math.min(3, Math.max(1, items.length))));
+  await renderSheet(browser, contactSheetHtml(cells, review), 80 + rows * 390, outputRoot, target, temporaryFiles);
 }
 
 async function renderVideoFrames(options: {
@@ -582,12 +673,19 @@ async function renderVideoFrames(options: {
   onFrame: (written: number) => void;
   fontRoute?: FontRoute;
   fonts?: FontResolver;
+  /**
+   * `render --sheet-at`: draw only these instants (ascending milliseconds) and return them as PNG bytes;
+   * no frame file, frames.json, or still is written.
+   */
+  sampleAt?: readonly number[];
 }): Promise<{
   /** True when a font was outside the package: frames stopped, and nothing below was written. */
   discovery: boolean;
   fonts: ArtifactFonts;
   /** How the tutorial's field changes reached the widget, for the manifest; absent without any. */
   fieldUpdate?: JsonObject;
+  /** Tutorial videos only: the setup's layout and camera plan, for the manifest. */
+  tutorialPlan?: TutorialPlanRecord;
   framesDirectory: string;
   framesManifest: string;
   frameFiles: string[];
@@ -596,6 +694,8 @@ async function renderVideoFrames(options: {
   /** The exact frames.json content and text, so the manifest keeps them after the files are discarded. */
   sequence: JsonObject;
   sequenceText: string;
+  /** `sampleAt` only: one PNG per requested instant, in order. */
+  samples?: {timestampMs: number; png: Buffer}[];
 }> {
   const tutorial: TutorialTimeline | undefined = options.video.mode === "tutorial"
     ? compileVariantTutorial(options.project, options.variant, options.video, await tutorialSamples(options.project, options.video))
@@ -623,40 +723,21 @@ async function renderVideoFrames(options: {
   const framesDirectory = resolve(options.recipeDirectory, options.variant.id, "frames");
   const frameCount = videoFrameCount(options.video);
   const frames: {file: string; timestampMs: number; sha256: string}[] = [];
+  const timestamps = options.sampleAt ?? Array.from({length: frameCount}, (_, index) => Math.round((index * 1000) / options.video.fps));
+  const samples: {timestampMs: number; png: Buffer}[] = [];
   const stillPlan = (tutorial?.stills ?? []).map((still) => ({...still, frame: stillFrameIndex(still.atMs, options.video.fps, frameCount)}));
   const stills: VideoStill[] = [];
   const fieldUpdates: FieldUpdateRecord[] = [];
   let currentTime = 0;
   let eventIndex = 0;
-  const events: TutorialTimeline["widget"] = [
-    ...(options.variant.fixture?.events ?? []).map((event) => ({
-      atMs: event.atMs,
-      kind: "dispatch" as const,
-      listener: event.listener,
-      event: event.event
-    })),
-    ...(tutorial?.widget ?? [])
-  ].sort((left, right) => left.atMs - right.atMs);
+  const events = videoWidgetEvents(options.variant, tutorial);
+  let tutorialPlan: TutorialPlanRecord | undefined;
   // Where the recording is, for the message of a FONT_SETTLE_TIMEOUT.
   let step = tutorial ? "the first settle, before the tutorial setup" : "the first settle";
   try {
     noteFonts(await captureHostSettle(opened.page), true);
-    if (tutorial) {
-      const setup: unknown = {
-        timeline: tutorial,
-        menu: EMULATE_MENU,
-        viewport: {width: opened.resolved.viewport.width, height: opened.resolved.viewport.height},
-        output: {width: opened.resolved.output.width, height: opened.resolved.output.height},
-        // Frames are clipped to the scene crop, so the tutorial camera frames the crop.
-        crop: options.variant.scene.crop ?? null
-      };
-      await opened.page.evaluate(
-        (value) => (window as unknown as {__SWS_TUTORIAL__: {setup: (options: unknown) => Promise<void>}}).__SWS_TUTORIAL__.setup(value),
-        setup
-      );
-    }
-    for (let index = 0; index < frameCount; index += 1) {
-      const timestampMs = Math.round((index * 1000) / options.video.fps);
+    if (tutorial) tutorialPlan = await setupTutorial(opened, tutorial, options.variant);
+    for (const [index, timestampMs] of timestamps.entries()) {
       while (events[eventIndex] && events[eventIndex]!.atMs <= timestampMs) {
         const timelineEvent = events[eventIndex]!;
         step = timelineEvent.kind === "fields" ? `the field change at ${timelineEvent.atMs} ms` : `the ${timelineEvent.listener} event at ${timelineEvent.atMs} ms`;
@@ -692,6 +773,11 @@ async function renderVideoFrames(options: {
       if (tutorial) await renderTutorialFrame(opened.page, timestampMs, false);
       // A discovery pass keeps the timeline running for the URLs it would still request, without frames.
       if (discovering()) continue;
+      if (options.sampleAt) {
+        step = `the sheet instant ${timestampMs} ms`;
+        samples.push({timestampMs, png: await sceneScreenshot(opened.page, {...options.variant, output: {...options.variant.output, format: "png"}})});
+        continue;
+      }
       const target = resolve(framesDirectory, `frame-${String(index).padStart(4, "0")}.png`);
       await screenshotScene(
         opened.page,
@@ -733,6 +819,9 @@ async function renderVideoFrames(options: {
     await opened.context.close();
   }
   const framesManifest = resolve(framesDirectory, "frames.json");
+  if (options.sampleAt && !discovering()) {
+    return {discovery: false, fonts: {families: fontFamilies, warnings: [...fontWarnings], redrawMs: 0}, framesDirectory, framesManifest, frameFiles: [], stills: [], sequence: {}, sequenceText: "", samples};
+  }
   if (discovering()) {
     return {discovery: true, fonts: {families: fontFamilies, warnings: [...fontWarnings], redrawMs: 0}, framesDirectory, framesManifest, frameFiles: [], stills: [], sequence: {}, sequenceText: ""};
   }
@@ -753,6 +842,7 @@ async function renderVideoFrames(options: {
     ...(fieldUpdates.length > 0
       ? {fieldUpdate: JSON.parse(JSON.stringify({mode: opened.fieldUpdate, updates: fieldUpdates})) as JsonObject}
       : {}),
+    ...(tutorialPlan ? {tutorialPlan} : {}),
     framesDirectory,
     framesManifest,
     frameFiles: frames.map((frame) => frame.file),
@@ -997,6 +1087,7 @@ export async function renderRecipe(
       let stillFonts: ArtifactFonts | undefined;
       let videoFonts: ArtifactFonts | undefined;
       let videoFieldUpdate: JsonObject | undefined;
+      let videoTutorialPlan: TutorialPlanRecord | undefined;
       if (recipe.outputs?.screenshots !== false) {
         step("screenshot");
         const resolvedScene = await openScene(renderProject, server, activeBrowser, variant.scene, sceneFonts);
@@ -1058,6 +1149,7 @@ export async function renderRecipe(
         if (renderedFrames.discovery) return;
         videoFonts = renderedFrames.fonts;
         videoFieldUpdate = renderedFrames.fieldUpdate;
+        videoTutorialPlan = renderedFrames.tutorialPlan;
         videoStills = renderedFrames.stills;
         for (const still of videoStills) artifacts.push(still.path);
         framesPath = renderedFrames.framesDirectory;
@@ -1154,6 +1246,7 @@ export async function renderRecipe(
         ...(manifestFonts(stillFonts) ? {fonts: manifestFonts(stillFonts)!} : {}),
         ...(manifestFonts(videoFonts) ? {videoFonts: manifestFonts(videoFonts)!} : {}),
         ...(videoFieldUpdate ? {fieldUpdate: videoFieldUpdate} : {}),
+        ...(videoTutorialPlan ? {tutorialPlan: videoTutorialPlan} : {}),
         ...(stillEntries.length > 0 ? {stills: stillEntries} : {}),
         parameters: JSON.parse(JSON.stringify({
           background: variant.background,
@@ -1260,6 +1353,173 @@ export async function renderRecipe(
     trace("server close");
     await server.close();
     trace("server closed");
+  }
+}
+
+/** `render --plan-only`: each variant's tutorial layout and camera plan, from one browser and no frames. */
+export interface TutorialPlanResult {
+  recipe: string;
+  status: "plan-only";
+  /** The output plan's warnings; its targets and disk estimate belong to `--dry-run`. */
+  warnings?: string[];
+  variants: {id: string; tutorialPlan: TutorialPlanRecord; fontWarnings?: string[]}[];
+}
+
+/** At most this many instants per `render --sheet-at`; more is a render, not a look. */
+export const SHEET_AT_LIMIT = 24;
+
+/** `render --sheet-at`: one sheet of the video at chosen instants, from one browser and no frames. */
+export interface SheetAtResult {
+  recipe: string;
+  status: "sheet";
+  /** The sheet, relative to the output root. */
+  sheet: string;
+  timestampsMs: number[];
+  /** Per variant, each instant's PNG hash: equal to the full render's `frameSequence` hash at that timestamp. */
+  variants: {id: string; instants: {timestampMs: number; sha256: string}[]; fontWarnings?: string[]}[];
+  warnings?: string[];
+}
+
+/** The instants of a sheet, ascending and without repeats; each must fall inside the video. */
+export function sheetInstants(recipe: RecipeDefinition, instants: readonly number[]): number[] {
+  const video = recipe.outputs?.video;
+  if (!video?.enabled) {
+    throw new StudioError("SHEET_AT_NEEDS_VIDEO", `Recipe "${recipe.id}" has no enabled video; --sheet-at draws instants of the video.`, "Use the recipe's screenshots and contactSheet for still images.");
+  }
+  const sorted = [...new Set(instants)].sort((left, right) => left - right);
+  const invalid = sorted.filter((value) => !Number.isInteger(value) || value < 0 || value >= video.durationMs);
+  if (sorted.length === 0 || sorted.length > SHEET_AT_LIMIT || invalid.length > 0) {
+    throw new StudioError(
+      "SHEET_AT_INVALID",
+      invalid.length > 0
+        ? `Recipe "${recipe.id}" lasts ${video.durationMs} ms; --sheet-at got ${invalid.join(", ")}.`
+        : `--sheet-at takes from 1 to ${SHEET_AT_LIMIT} instants; it got ${sorted.length}.`,
+      `Pass whole milliseconds from 0 to ${video.durationMs - 1}, separated by commas, for example --sheet-at 0,2500,5000.`
+    );
+  }
+  return sorted;
+}
+
+/**
+ * Draws each variant's video at the given instants only, as the full render draws them at those
+ * timestamps, and writes them as one sheet, `<recipe>/sheet-at.png`. No frame, video, still, or manifest is written.
+ */
+export async function renderSheetAt(
+  project: ResolvedProject,
+  recipe: RecipeDefinition,
+  instants: readonly number[],
+  options: RenderOptions = {}
+): Promise<SheetAtResult> {
+  const timestampsMs = sheetInstants(recipe, instants);
+  const video = recipe.outputs!.video!;
+  const {plan, variants, outputRoot} = await planRecipe(project, recipe, options);
+  const target = resolve(outputRoot, recipe.id, "sheet-at.png");
+  await ensureOutputDirectory(outputRoot);
+  await preflightOutputTargets(outputRoot, [target], options.force ?? false);
+  const renderProject: ResolvedProject = outputRoot === project.outputRoot ? project : {...project, outputRoot};
+  const sceneFonts = options.fonts ? {fonts: options.fonts} : options.fontRoute ? {fontRoute: options.fontRoute} : {};
+  const temporaryFiles: TemporaryFiles = new Set();
+  const server = await startStudioServer(renderProject, {port: 0, watch: false});
+  let launched: Awaited<ReturnType<typeof launchStudioBrowser>> | undefined;
+  try {
+    launched = options.browser ? undefined : await launchStudioBrowser({
+      ...(options.browserPath ? {browserPath: options.browserPath} : {}),
+      ...(options.headed !== undefined ? {headed: options.headed} : {})
+    });
+    const browser = options.browser?.browser ?? launched!.browser;
+    const cells: {variant: string; timestampMs: number; src: string}[] = [];
+    const results: SheetAtResult["variants"] = [];
+    for (const variant of variants) {
+      const drawn = await renderVideoFrames({
+        project: renderProject,
+        server,
+        browser,
+        variant,
+        video,
+        outputRoot,
+        recipeDirectory: resolve(outputRoot, recipe.id),
+        temporaryFiles,
+        onFrame: () => undefined,
+        sampleAt: timestampsMs,
+        ...sceneFonts
+      });
+      if (drawn.discovery) throw new FontsMissingError(options.fonts!.missing());
+      for (const sample of drawn.samples ?? []) {
+        cells.push({variant: variant.id, timestampMs: sample.timestampMs, src: `data:image/png;base64,${sample.png.toString("base64")}`});
+      }
+      results.push({
+        id: variant.id,
+        instants: (drawn.samples ?? []).map((sample) => ({timestampMs: sample.timestampMs, sha256: sha256(sample.png)})),
+        ...(drawn.fonts.warnings.length > 0 ? {fontWarnings: drawn.fonts.warnings} : {})
+      });
+    }
+    await renderSheet(browser, sheetAtHtml(cells), 900, outputRoot, target, temporaryFiles);
+    return {
+      recipe: recipe.id,
+      status: "sheet",
+      sheet: portable(outputRoot, target),
+      timestampsMs,
+      variants: results,
+      ...(plan.warnings ? {warnings: plan.warnings} : {})
+    };
+  } finally {
+    await removeTemporaryFiles(temporaryFiles);
+    if (launched) await closeStudioBrowser(launched.browser);
+    await server.close();
+  }
+}
+
+/** The recipe's enabled tutorial video; any other recipe has no camera to plan. */
+export function tutorialVideo(recipe: RecipeDefinition): VideoDefinition {
+  const video = recipe.outputs?.video;
+  if (!video?.enabled || video.mode !== "tutorial") {
+    throw new StudioError("PLAN_ONLY_NEEDS_TUTORIAL", `Recipe "${recipe.id}" has no tutorial video; --plan-only plans the tutorial camera.`, "Use --dry-run for the output plan of any recipe.");
+  }
+  return video;
+}
+
+/**
+ * Opens each variant's tutorial in the editor replica and runs only its setup: the layout is measured
+ * and the camera planned, as the render would, but no frame is drawn and no file is written.
+ */
+export async function planTutorialRecipe(
+  project: ResolvedProject,
+  recipe: RecipeDefinition,
+  options: RenderOptions = {}
+): Promise<TutorialPlanResult> {
+  const video = tutorialVideo(recipe);
+  const {plan, variants, outputRoot} = await planRecipe(project, recipe, options);
+  const renderProject: ResolvedProject = outputRoot === project.outputRoot ? project : {...project, outputRoot};
+  const sceneFonts = options.fonts ? {fonts: options.fonts} : options.fontRoute ? {fontRoute: options.fontRoute} : {};
+  const server = await startStudioServer(renderProject, {port: 0, watch: false});
+  let launched: Awaited<ReturnType<typeof launchStudioBrowser>> | undefined;
+  try {
+    launched = options.browser ? undefined : await launchStudioBrowser({
+      ...(options.browserPath ? {browserPath: options.browserPath} : {}),
+      ...(options.headed !== undefined ? {headed: options.headed} : {})
+    });
+    const browser = options.browser?.browser ?? launched!.browser;
+    const results: TutorialPlanResult["variants"] = [];
+    for (const variant of variants) {
+      const tutorial = compileVariantTutorial(renderProject, variant, video, await tutorialSamples(renderProject, video));
+      const opened = await openScene(renderProject, server, browser, variant.scene, {
+        host: "tutorial" as const,
+        camera: tutorialCamera(tutorial),
+        background: {id: "tutorial-editor", color: "transparent"},
+        ...sceneFonts
+      });
+      try {
+        const fontWarnings = checkOpenedFonts(opened, await captureHostSettle(opened.page)).warnings;
+        const tutorialPlan = await setupTutorial(opened, tutorial, variant);
+        results.push({id: variant.id, tutorialPlan, ...(fontWarnings.length > 0 ? {fontWarnings} : {})});
+      } finally {
+        await opened.context.close();
+      }
+    }
+    return {recipe: recipe.id, status: "plan-only", ...(plan.warnings ? {warnings: plan.warnings} : {}), variants: results};
+  } finally {
+    if (launched) await closeStudioBrowser(launched.browser);
+    await server.close();
   }
 }
 
