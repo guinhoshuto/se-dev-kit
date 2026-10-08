@@ -1657,6 +1657,9 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
     // An event the Session Dashboard counts updates the session data, as in StreamElements.
     if (session?.apply(listener, transformed, new Date().toISOString())) {
       window.dispatchEvent(new CustomEvent("onSessionUpdate", {detail: {session: structuredClone(session.data)}}));
+      // The host keeps it for the next frame: a reload for a field change starts from it, as the
+      // reloaded widget in StreamElements receives the dashboard's data with the events so far.
+      send("frame:session-updated", {data: structuredClone(session.data)});
     }
   };
   const emitAndAnnounce = (listener: string, event: JsonValue) => {

@@ -142,6 +142,14 @@ export class FrameBridge {
     return fontsOf(await this.#command("host:emit", "frame:event-dispatched", {listener, event}));
   }
 
+  /**
+   * The frame's session data after the last event it counted, or the data it was started with.
+   * A frame reloaded for a field change starts from it.
+   */
+  get session(): Record<string, unknown> | undefined {
+    return this.#state.session === undefined ? undefined : structuredClone(this.#state.session);
+  }
+
   async updateFields(fieldData: Record<string, unknown>): Promise<FontReport | undefined> {
     this.#state.fieldData = {...this.#state.fieldData, ...structuredClone(fieldData)};
     return fontsOf(await this.#command("host:update-fields", "frame:fields-updated", {fieldData}));
@@ -174,7 +182,10 @@ export class FrameBridge {
         }
       }
     }
-    if (envelope.type === "frame:booted") {
+    if (envelope.type === "frame:session-updated") {
+      const data = (envelope.payload as {data?: unknown} | undefined)?.data;
+      if (data && typeof data === "object" && !Array.isArray(data)) this.#state.session = data as Record<string, unknown>;
+    } else if (envelope.type === "frame:booted") {
       this.send("host:init", {state: this.#state, clockManaged: this.#clockManaged});
     } else if (envelope.type === "frame:widget-ready") {
       if (this.#readyTimer !== undefined) window.clearTimeout(this.#readyTimer);

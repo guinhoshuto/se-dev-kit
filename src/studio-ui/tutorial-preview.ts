@@ -138,9 +138,20 @@ function draw(): void {
 }
 
 /** Replaces the widget frame with one that loads `fieldData`, as the editor does on a field change. */
-async function reloadWidget(host: HostWindow, payload: PreviewPayload, fieldData: Record<string, unknown>, docKey: string | undefined): Promise<void> {
+async function reloadWidget(
+  host: HostWindow,
+  payload: PreviewPayload,
+  fieldData: Record<string, unknown>,
+  docKey: string | undefined,
+  resetSession = false
+): Promise<void> {
   const {readyTimeoutMs} = payload.load;
-  host.__SWS_CAPTURE__.reload({fieldData, ...(readyTimeoutMs !== undefined ? {readyTimeoutMs} : {}), ...(docKey ? {docKey} : {})});
+  host.__SWS_CAPTURE__.reload({
+    fieldData,
+    ...(readyTimeoutMs !== undefined ? {readyTimeoutMs} : {}),
+    ...(docKey ? {docKey} : {}),
+    ...(resetSession ? {resetSession} : {})
+  });
   await host.__SWS_CAPTURE__.reloaded();
 }
 
@@ -162,7 +173,8 @@ function syncWidget(timeMs: number): Promise<void> {
     const {payload, host} = state;
     if (!payload || !host || generation !== state.generation) return;
     if (state.applied > 0 && payload.events[state.applied - 1]!.atMs > timeMs) {
-      await reloadWidget(host, payload, payload.load.state.fieldData, payload.load.docKey);
+      // A seek back starts over from the scene, session data included.
+      await reloadWidget(host, payload, payload.load.state.fieldData, payload.load.docKey, true);
       state.applied = 0;
     }
     while (generation === state.generation && state.applied < payload.events.length && payload.events[state.applied]!.atMs <= timeMs) {

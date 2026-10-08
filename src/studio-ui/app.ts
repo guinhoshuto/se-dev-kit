@@ -1046,6 +1046,7 @@ function handleFrameEvent(event: FrameEvent): void {
       break;
     }
     case "frame:fields-updated":
+    case "frame:session-updated":
     case "frame:settling":
     case "frame:booted":
       break;
