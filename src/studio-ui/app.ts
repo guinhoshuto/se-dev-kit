@@ -987,6 +987,7 @@ function runtimeContext(fixture: FixtureDefinition | null = findFixture(state.se
   fieldData: Record<string, unknown>;
   channel: Record<string, unknown>;
   recents: Record<string, unknown>;
+  session?: Record<string, unknown>;
   seed: number;
   fixedTime: string;
 } {
@@ -995,6 +996,7 @@ function runtimeContext(fixture: FixtureDefinition | null = findFixture(state.se
     fieldData: cloneObject(state.fieldValues),
     channel: mergeObjects(project?.channel, fixture?.channel),
     recents: cloneObject(fixture?.recents),
+    ...(fixture?.session ? {session: cloneObject(fixture.session)} : {}),
     seed: RUNTIME_SEED,
     fixedTime: RUNTIME_FIXED_TIME
   };
@@ -1390,6 +1392,7 @@ function createGalleryCard(variant: GalleryVariant): HTMLElement {
       fieldData: variantFieldValues(variant),
       channel: mergeObjects(project.channel, variant.fixture?.channel),
       recents: cloneObject(variant.fixture?.recents),
+      ...(variant.fixture?.session ? {session: cloneObject(variant.fixture.session)} : {}),
       seed: RUNTIME_SEED,
       fixedTime: RUNTIME_FIXED_TIME
     },

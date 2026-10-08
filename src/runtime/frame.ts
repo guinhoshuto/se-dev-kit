@@ -306,6 +306,206 @@ function addStylesheetLoad(link: HTMLLinkElement, load: Omit<StylesheetLoad, "pe
   stylesheetLoads.set(link, entry);
 }
 
+/*
+ * StreamElements session data: what the Session Dashboard shows, delivered to a custom widget as
+ * `obj.detail.session.data` in onWidgetLoad and as `obj.detail.session` in onSessionUpdate. Keys and
+ * fields follow the Session Data Reference (https://docs.streamelements.com/overlays/session-data,
+ * Twitch and common keys, read 2026-10-07). The reference does not say how an event changes the
+ * data; the rules in SessionTracker.apply are the Studio's reading of it, listed in docs/RUNTIME.md.
+ */
+
+/** How many entries a `*-recent` list keeps; the newest comes first. */
+export const SESSION_RECENT_LIMIT = 25;
+
+const SESSION_PERIODS = ["session", "week", "month", "total"] as const;
+const TOP_PERIODS = ["session", "weekly", "monthly", "alltime"] as const;
+
+/** Every documented Twitch and common key, empty: names "", counts and amounts 0, lists []. */
+export function defaultSessionData(): JsonObject {
+  const latest = {name: "", amount: 0, message: ""};
+  const data: JsonObject = {
+    "follower-latest": {name: ""},
+    "follower-goal": {amount: 0},
+    "follower-recent": [],
+    "subscriber-latest": {name: "", amount: 0, tier: "1000", message: "", sender: "", gifted: false},
+    "subscriber-new-latest": {...latest},
+    "subscriber-resub-latest": {...latest},
+    "subscriber-new-session": {count: 0},
+    "subscriber-resub-session": {count: 0},
+    "subscriber-goal": {amount: 0},
+    "subscriber-gifted-latest": {name: "", amount: 0},
+    "subscriber-alltime-gifter": {name: "", amount: 0},
+    "subscriber-gifted-session": {count: 0},
+    "subscriber-points": {amount: 0},
+    "subscriber-recent": [],
+    "host-latest": {name: "", amount: 0},
+    "host-recent": [],
+    "raid-latest": {name: "", amount: 0},
+    "raid-recent": [],
+    "cheer-latest": {...latest},
+    "cheer-count": {count: 0},
+    "cheer-goal": {amount: 0},
+    "cheer-recent": [],
+    "tip-latest": {...latest},
+    "tip-count": {count: 0},
+    "tip-goal": {amount: 0},
+    "tip-recent": [],
+    "merch-latest": {name: "", amount: 0, items: []},
+    "merch-goal-items": {amount: 0},
+    "merch-goal-orders": {amount: 0},
+    "merch-goal-total": {amount: 0},
+    "merch-recent": []
+  };
+  for (const period of SESSION_PERIODS) {
+    data[`follower-${period}`] = {count: 0};
+    data[`subscriber-${period}`] = {count: 0};
+    data[`cheer-${period}`] = {amount: 0};
+    data[`tip-${period}`] = {amount: 0};
+  }
+  for (const kind of ["tip", "cheer"]) {
+    for (const period of TOP_PERIODS) {
+      data[`${kind}-${period}-top-donation`] = {name: "", amount: 0};
+      data[`${kind}-${period}-top-donator`] = {name: "", amount: 0};
+    }
+  }
+  return data;
+}
+
+function sessionNumber(value: unknown): number {
+  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(number) ? number : 0;
+}
+
+function sessionText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * The session data of one widget frame. It starts from the defaults with the scene's `session`
+ * merged key by key, and `apply` changes it for each event the Session Dashboard counts.
+ */
+export class SessionTracker {
+  readonly data: JsonObject;
+  /** Per tip and cheer period: each name's sum so far, seeded with the period's top donator. */
+  readonly #donators = new Map<string, Map<string, number>>();
+
+  constructor(initial: JsonObject = {}) {
+    this.data = defaultSessionData();
+    for (const [key, value] of Object.entries(initial)) {
+      const base = this.data[key];
+      this.data[key] = isPlainObject(base) && isPlainObject(value) ? {...base, ...structuredClone(value)} as JsonObject : structuredClone(value);
+    }
+    for (const kind of ["tip", "cheer"]) {
+      for (const period of TOP_PERIODS) {
+        const top = this.#entry(`${kind}-${period}-top-donator`);
+        const sums = new Map<string, number>();
+        if (sessionText(top.name)) sums.set(sessionText(top.name), sessionNumber(top.amount));
+        this.#donators.set(`${kind}-${period}`, sums);
+      }
+    }
+  }
+
+  #entry(key: string): JsonObject {
+    const value = this.data[key];
+    if (isPlainObject(value)) return value as JsonObject;
+    const replaced: JsonObject = {};
+    this.data[key] = replaced;
+    return replaced;
+  }
+
+  #add(key: string, field: "count" | "amount", by: number): void {
+    const entry = this.#entry(key);
+    entry[field] = sessionNumber(entry[field]) + by;
+  }
+
+  #recent(key: string, item: JsonObject): void {
+    const list = Array.isArray(this.data[key]) ? (this.data[key] as JsonValue[]) : [];
+    this.data[key] = [item, ...list].slice(0, SESSION_RECENT_LIMIT);
+  }
+
+  /** Tips and cheers: totals, count, goal, the biggest single one, and the biggest sum per name, in every period. */
+  #donation(kind: "tip" | "cheer", name: string, amount: number, message: string, createdAt: string): void {
+    this.data[`${kind}-latest`] = {name, amount, message};
+    for (const period of SESSION_PERIODS) this.#add(`${kind}-${period}`, "amount", amount);
+    this.#add(`${kind}-count`, "count", 1);
+    this.#add(`${kind}-goal`, "amount", amount);
+    for (const period of TOP_PERIODS) {
+      const donation = this.#entry(`${kind}-${period}-top-donation`);
+      if (amount > sessionNumber(donation.amount)) this.data[`${kind}-${period}-top-donation`] = {name, amount};
+      const sums = this.#donators.get(`${kind}-${period}`)!;
+      const sum = (sums.get(name) ?? 0) + amount;
+      sums.set(name, sum);
+      if (sum > sessionNumber(this.#entry(`${kind}-${period}-top-donator`).amount)) this.data[`${kind}-${period}-top-donator`] = {name, amount: sum};
+    }
+    this.#recent(`${kind}-recent`, {name, amount, createdAt, type: kind});
+  }
+
+  /**
+   * Changes the data for an event; returns false, with the data unchanged, for a listener the
+   * Session Dashboard does not count (chat messages, redemptions, widget buttons, and others).
+   */
+  apply(listener: string, event: unknown, createdAt: string): boolean {
+    const payload = isPlainObject(event) ? event : {};
+    const name = sessionText(payload.name);
+    const amount = sessionNumber(payload.amount);
+    const message = sessionText(payload.message);
+    switch (listener) {
+      case "follower-latest":
+        this.data["follower-latest"] = {name};
+        for (const period of SESSION_PERIODS) this.#add(`follower-${period}`, "count", 1);
+        this.#add("follower-goal", "amount", 1);
+        this.#recent("follower-recent", {name, createdAt, type: "follower"});
+        return true;
+      case "subscriber-latest": {
+        const tier = sessionText(payload.tier) || "1000";
+        const sender = sessionText(payload.sender);
+        if (payload.bulkGifted === true) {
+          // A community gift announces the gifts; each gifted sub then arrives as its own event.
+          this.data["subscriber-gifted-latest"] = {name: sender || name, amount};
+          return true;
+        }
+        const gifted = payload.gifted === true;
+        this.data["subscriber-latest"] = {name, amount, tier, message, sender, gifted};
+        for (const period of SESSION_PERIODS) this.#add(`subscriber-${period}`, "count", 1);
+        this.#add("subscriber-goal", "amount", 1);
+        const kind = amount > 1 ? "resub" : "new";
+        this.data[`subscriber-${kind}-latest`] = {name, amount, message};
+        this.#add(`subscriber-${kind}-session`, "count", 1);
+        if (gifted) {
+          this.data["subscriber-gifted-latest"] = {name: sender, amount: 1};
+          this.#add("subscriber-gifted-session", "count", 1);
+        }
+        this.#recent("subscriber-recent", {name, amount, tier, createdAt, type: "subscriber"});
+        return true;
+      }
+      case "tip-latest":
+        this.#donation("tip", name, amount, message, createdAt);
+        return true;
+      case "cheer-latest":
+        this.#donation("cheer", name, amount, message, createdAt);
+        return true;
+      case "raid-latest":
+      case "host-latest": {
+        const kind = listener.slice(0, -"-latest".length);
+        this.data[listener] = {name, amount};
+        this.#recent(`${kind}-recent`, {name, amount, createdAt, type: kind});
+        return true;
+      }
+      case "merch-latest": {
+        const items = Array.isArray(payload.items) ? structuredClone(payload.items as JsonValue[]) : [];
+        this.data["merch-latest"] = {name, amount, items};
+        this.#add("merch-goal-orders", "amount", 1);
+        this.#add("merch-goal-items", "amount", items.reduce<number>((sum, item) => sum + (isPlainObject(item) ? sessionNumber(item.quantity) : 0), 0));
+        this.#add("merch-goal-total", "amount", amount);
+        this.#recent("merch-recent", {name, amount, createdAt, type: "merch"});
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+}
+
 /** A snapshot of what settle() waits on, for timeout messages. */
 export interface FontWaitState {
   phase: string;
@@ -1410,6 +1610,8 @@ function installFontBroker(send: (type: string, payload?: unknown) => void, samp
 
 export function installFrameRuntime(options: FrameRuntimeOptions): void {
   let runtimeState: RuntimeState | null = null;
+  /** The Session Dashboard data of this frame, from onWidgetLoad on. */
+  let session: SessionTracker | undefined;
   let adapter: BrowserAdapter = {};
   let initialized = false;
   const mapAssets = <T>(value: T): T => mapRuntimeAssets(value, options.assetMap, options.sampleMediaBaseUrl);
@@ -1452,6 +1654,10 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
         detail: {listener, event: structuredClone(transformed)}
       })
     );
+    // An event the Session Dashboard counts updates the session data, as in StreamElements.
+    if (session?.apply(listener, transformed, new Date().toISOString())) {
+      window.dispatchEvent(new CustomEvent("onSessionUpdate", {detail: {session: structuredClone(session.data)}}));
+    }
   };
   const emitAndAnnounce = (listener: string, event: JsonValue) => {
     void emit(listener, event).then(() => send("frame:event-dispatched", {listener}));
@@ -1513,6 +1719,7 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
       adapter = imported.default ?? {};
     }
     if (adapter.beforeLoad) runtimeState = await adapter.beforeLoad(runtimeState);
+    session = new SessionTracker(runtimeState.session ?? {});
     if (!clockManaged) {
       installFixedDate(runtimeState.fixedTime);
       fontBudgetMs = Math.max(0, Math.min(PREVIEW_FONT_BUDGET_MS, options.timeoutMs - 1_000));
@@ -1534,7 +1741,8 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
         detail: {
           fieldData: structuredClone(runtimeState.fieldData),
           channel: structuredClone(runtimeState.channel),
-          recents: structuredClone(runtimeState.recents)
+          recents: structuredClone(runtimeState.recents),
+          session: {data: structuredClone(session.data)}
         }
       })
     );

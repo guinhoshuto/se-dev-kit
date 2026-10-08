@@ -51,6 +51,7 @@ export function resolveSceneState(
     fieldData: mergeJsonObjects(project.fieldDefaults, theme?.fieldData, fixture?.fieldData, scene.fieldData, overrides.fieldData),
     channel: mergeJsonObjects({username: "streamer"}, project.config.channel, fixture?.channel),
     recents: mergeJsonObjects(fixture?.recents),
+    ...(fixture?.session ? {session: mergeJsonObjects(fixture.session)} : {}),
     seed: DEFAULT_SEED,
     fixedTime: DEFAULT_FIXED_TIME
   };

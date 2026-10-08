@@ -11,7 +11,7 @@ FIELDS defaults → theme → fixture → scene → temporary preview override
 ```
 
 - A **theme** contains `fieldData` only.
-- A **fixture** provides synthetic `channel`, `recents`, `fieldData`, and timed events.
+- A **fixture** provides synthetic `channel`, `recents`, `session` (session data keys such as `follower-goal`, which events then update), `fieldData`, and timed events.
 - A **scene** selects a theme/fixture and presentation: background, viewport, output, camera, crop, and capture time.
 - A **scenario** performs deterministic dispatch, field update, wait, and DOM assertion steps.
 - A **recipe** selects scenes and optional theme/background/viewport/camera matrices, then requests screenshots, thumbnails, contact sheets, or video.

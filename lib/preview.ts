@@ -65,7 +65,7 @@ export function previewState(snapshot: WidgetSnapshot, options: Pick<PreviewOpti
   if (themeId && !theme) throw new Error(`Theme not found: ${themeId}`);
   const fixture = scene?.fixture ? snapshot.fixtures.find(item => item.id === scene.fixture) : undefined;
   if (scene?.fixture && !fixture) throw new Error(`Fixture not found: ${scene.fixture}`);
-  return {sessionId: options.sessionId, fieldData: merge(normalizeFields(snapshot.widget.fields).defaults, theme?.fieldData, fixture?.fieldData, scene?.fieldData, options.fieldData), channel: merge({username: 'streamer'}, snapshot.channel, fixture?.channel), recents: merge(fixture?.recents), seed: 1337, fixedTime: '2025-01-15T12:00:00.000Z'};
+  return {sessionId: options.sessionId, fieldData: merge(normalizeFields(snapshot.widget.fields).defaults, theme?.fieldData, fixture?.fieldData, scene?.fieldData, options.fieldData), channel: merge({username: 'streamer'}, snapshot.channel, fixture?.channel), recents: merge(fixture?.recents), ...(fixture?.session ? {session: merge(fixture.session)} : {}), seed: 1337, fixedTime: '2025-01-15T12:00:00.000Z'};
 }
 
 /** A Google Fonts or other absolute URL that a substituted value put into the page. */
