@@ -13,6 +13,7 @@ import {runDoctor} from "../validation/doctor.js";
 import {runBrowserSmoke, runScenarios} from "../scenarios/runner.js";
 import {createDefaultScene} from "../scenarios/state.js";
 import {startStudioServer} from "../server/server.js";
+import {tutorialPreviewIndex} from "../tutorial/preview.js";
 import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser} from "../capture/browser.js";
 import {
   planRecipe,
@@ -253,6 +254,7 @@ program
         {
           status: "running",
           studio: `${server.origin}${options.view === "gallery" ? "/gallery" : "/"}`,
+          ...(tutorialPreviewIndex(project).recipes.length > 0 ? {tutorialPreview: `${server.origin}/__sws/tutorial-preview`} : {}),
           widgetOrigin: server.frameOrigin,
           host: server.host
         },

@@ -173,6 +173,12 @@ Three `render` options make a script cheaper to adjust than a full render per at
 
 A full render records the same `tutorialPlan` in each tutorial artifact of the manifest, so the plan behind a delivered video can be compared with a later `--plan-only`.
 
+### Previewing in dev
+
+`dev` serves `/__sws/tutorial-preview` (the `tutorialPreview` URL it prints): the tutorial host page in a frame at the recipe's output size, scaled to fit the window, and a transport bar under it. Pick the recipe and variant, then drag the scrubber, step one frame with ←/→ (one second with Shift), or play with Space. The page runs the same `setup()` as a render and draws `render(t)` at the scrubber's time, so the editor, pointer, camera, and captions are what the video shows at that time; **F** shows the full editor as a `camera: "full"` still does. Ticks above the track mark the camera keys, and ticks below it the widget events and field changes. **Copy --sheet-at** copies the current time as a flag for an exact sheet. The URL keeps `recipe` and `variant`, and `t=<ms>` opens at a time. When a widget file or the recipe changes, the page reloads the variant and stays at the same time.
+
+The widget itself runs in real time, not on the render's virtual clock. Its events and field changes reach it as the time passes them, and a seek back before one reloads it with the scene's values and replays what came before the new time, so the widget's content is right but its animations are approximate. For exact frames, use `render --sheet-at` or a render. The preview uses only the local servers: `/__sws/api/tutorial-preview` lists the tutorial recipes, and with `?recipe=<id>&variant=<id>` it compiles that variant and registers one frame document per field change, as a render's reload does.
+
 The hosted Studio still limits videos to 15 seconds, so longer tutorials must be rendered with the local CLI.
 
 The disk estimate counts tutorial frames at 0.3 bytes per pixel (tutorial frames measured about 0.076), so a 28-second full-HD tutorial estimates a peak of about 590 MiB and needs about 840 MiB free. On a tight disk it may still stop with `OUTPUT_DISK_LOW`; review `plan.disk.summary` from `--dry-run`, then free space or pass `--allow-low-disk`.

@@ -64,7 +64,7 @@ npm install --save-exact /absolute/path/to/se-widget-studio-0.2.0.tgz
 
 There is no automatic `prepare` build. Build `dist` explicitly before packing or using a checkout. The tarball includes the shared engine CLI, library exports, presets, documentation, skill, and example; it is not a deployable copy of the Next.js application. The current package version is `0.2.0`; check `package.json` when preparing another release. Record the repository commit and tarball SHA-256 in CI or release notes.
 
-`dev` binds the control and widget servers to `127.0.0.1` by default. It prints the URL instead of opening a browser unless `--open` is explicit.
+`dev` binds the control and widget servers to `127.0.0.1` by default. It prints the URL instead of opening a browser unless `--open` is explicit. When the widget has a recipe with a tutorial video, it also prints `tutorialPreview`, a page that scrubs the tutorial (see [Tutorial videos](TUTORIAL.md#previewing-in-dev)).
 
 ## Supported widget layouts
 

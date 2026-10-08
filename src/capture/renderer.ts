@@ -34,6 +34,7 @@ import {
 } from "../scenarios/runner.js";
 import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, tutorialSamples, tutorialStillNames} from "../tutorial/variant.js";
 import type {TutorialTimeline} from "../tutorial/timeline.js";
+import {videoWidgetEvents} from "../tutorial/preview.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
 import {closeStudioBrowser, launchStudioBrowser, type BrowserDetection, type FontRoute} from "./browser.js";
 import {FontsMissingError, type FontResolver} from "../fonts/resolver.js";
@@ -729,15 +730,7 @@ async function renderVideoFrames(options: {
   const fieldUpdates: FieldUpdateRecord[] = [];
   let currentTime = 0;
   let eventIndex = 0;
-  const events: TutorialTimeline["widget"] = [
-    ...(options.variant.fixture?.events ?? []).map((event) => ({
-      atMs: event.atMs,
-      kind: "dispatch" as const,
-      listener: event.listener,
-      event: event.event
-    })),
-    ...(tutorial?.widget ?? [])
-  ].sort((left, right) => left.atMs - right.atMs);
+  const events = videoWidgetEvents(options.variant, tutorial);
   let tutorialPlan: TutorialPlanRecord | undefined;
   // Where the recording is, for the message of a FONT_SETTLE_TIMEOUT.
   let step = tutorial ? "the first settle, before the tutorial setup" : "the first settle";
