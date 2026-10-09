@@ -106,6 +106,8 @@ export default defineConfig({
 });
 ```
 
+`defineConfig` only adds editor types, and its import resolves only where the widget installs `se-widget-studio`. `init` writes the same object as `export default {…}` with a JSDoc type instead, because most widget repositories have no `package.json`.
+
 All paths are resolved relative to `widget.root` and must remain inside it after `realpath` resolution. `assets` extends the startup allowlist for resources that cannot be discovered from production HTML, CSS, or JavaScript references.
 
 `fieldUpdate` says how a field change in a tutorial video or scenario reaches the widget. `"reload"`, the default, recreates the widget with the new values, as the StreamElements editor does: placeholders are substituted again and `onWidgetLoad` fires again. `"event"` keeps the widget and dispatches `onWidgetUpdate`, an event StreamElements does not have; use it only for a widget written against the Studio that must keep its state across a field change. With `"event"`, a render or `--dry-run` of a tutorial that has a `setField` step warns with `FIELD_UPDATE_NO_LISTENER` (in the plan's `warnings` and on stderr) when the widget's script never names `onWidgetUpdate`. The reload was checked in the StreamElements editor on 2026-10-07: changing a field gives the widget's iframe a new `blob:` source, which loads again. See [Runtime](RUNTIME.md#bridge-sequence).
@@ -118,7 +120,7 @@ Run `se-widget-studio <command> --help` for the installed contract.
 
 | Command | Purpose |
 | --- | --- |
-| `init [root]` | Create configuration and Studio data directories without changing production files. |
+| `init [root]` | Create configuration and Studio data directories without changing production files. `--agents` also writes `AGENTS.md` (how a coding agent works with the widget: SE Widget Studio, production files, themes, output) and `.gitignore` (`.DS_Store`, `.se-widget-studio/`, `.claude/settings.local.json`) at the root, never replacing an existing file, not even with `--force`, and keeps an existing configuration unless `--force` is passed. |
 | `doctor [root]` | Detect Node, browser, output, FFmpeg, and ffprobe without installing anything. Report the engine build that manifests will record, and warn when it was built from uncommitted changes (`BUILD_DIRTY`), is older than `src/` or than the checkout's commit (`BUILD_STALE`), or records no commit (`BUILD_UNKNOWN`). With a root, warn (`BROWSER_NO_H264`) when a Chromium build meets MP4/MOV video in the catalog. |
 | `list [root]` | List normalized fields and every configured catalog item. |
 | `presets` | List versioned marketplace presets and official sources. |

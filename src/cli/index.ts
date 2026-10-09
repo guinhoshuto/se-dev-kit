@@ -106,7 +106,11 @@ program
   .description("Create a small Studio configuration without modifying production widget files.")
   .argument("[root]", "Widget root", ".")
   .option("--force", "Replace the exact existing configuration file")
-  .action(async (root: string, options: {force?: boolean}, command: Command) => {
+  .option(
+    "--agents",
+    "Also write AGENTS.md and .gitignore for coding agents, never replacing existing ones (not even with --force); keep an existing configuration unless --force is passed"
+  )
+  .action(async (root: string, options: {force?: boolean; agents?: boolean}, command: Command) => {
     const result = await initializeWidget(resolve(root), options);
     // Placeholders to start themes and scenes from; a broken sample install never fails init.
     const samples = await loadSampleMediaCatalog().then(sampleMediaReferencesByKind, () => undefined);
@@ -114,7 +118,9 @@ program
       {
         status: "ok",
         config: result.configPath,
+        configStatus: result.config,
         directories: result.directories,
+        ...(result.agents ? {agentFiles: result.agents} : {}),
         note: "Production widget files were not modified.",
         ...(samples
           ? {

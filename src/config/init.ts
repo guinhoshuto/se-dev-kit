@@ -65,10 +65,57 @@ function toPortableRelative(root: string, target: string): string {
   return relative(root, target).split(sep).join("/") || ".";
 }
 
+const DEFAULT_OUTPUT_ROOT = ".se-widget-studio/output";
+
+const GITIGNORE = `.DS_Store
+.se-widget-studio/
+.claude/settings.local.json
+`;
+
+/** Generic instructions for a coding agent in a widget repository, naming its files as `root` sees them. */
+function agentInstructions(root: string, widgetRoot: string, files: ResolvedWidgetFiles, outputRoot: string): string {
+  const code = (target: string) => `\`${toPortableRelative(root, target)}\``;
+  const named = [files.html, files.css, files.js, files.fields].map((file) => code(resolve(widgetRoot, file)));
+  const themes = toPortableRelative(root, resolve(widgetRoot, "themes"));
+  return `# Agent instructions
+
+- Test, preview, capture, and render this widget with SE Widget Studio (the \`se-widget-studio\` skill or CLI), never with a sandbox, preview page, or runtime of your own.
+- ${named.slice(0, -1).join(", ")}, and ${named.at(-1)} are the production source, pasted as they are into the StreamElements Custom Widget tabs: never rewrite or copy them to make the Studio work.
+- Themes are field values, not code: \`${themes}/<id>.json\` holds partial \`fieldData\`, and \`${themes}/<id>.data.json\` a DATA-tab payload.
+- Studio output goes to \`${toPortableRelative(root, outputRoot)}/\`; it is regenerable, so keep it out of git.
+`;
+}
+
+/** Creates each file that does not exist yet; an existing path, even a symlink, is never opened or replaced. */
+async function writeAgentFiles(root: string, contents: Record<string, string>): Promise<{written: string[]; kept: string[]}> {
+  const result: {written: string[]; kept: string[]} = {written: [], kept: []};
+  for (const [name, content] of Object.entries(contents)) {
+    const path = resolve(root, name);
+    try {
+      await writeFile(path, content, {flag: "wx"});
+      result.written.push(path);
+    } catch (error) {
+      if ((error as {code?: unknown}).code !== "EEXIST") {
+        throw new StudioError("AGENT_FILE_WRITE_FAILED", `Could not write ${path}: ${toErrorMessage(error)}`);
+      }
+      result.kept.push(path);
+    }
+  }
+  return result;
+}
+
+export interface InitializeResult {
+  configPath: string;
+  /** `kept` only with `agents`, when a configuration already existed and `force` was absent. */
+  config: "written" | "kept";
+  directories: string[];
+  agents?: {written: string[]; kept: string[]};
+}
+
 export async function initializeWidget(
   inputDirectory: string,
-  options: {force?: boolean} = {}
-): Promise<{configPath: string; directories: string[]}> {
+  options: {force?: boolean; agents?: boolean} = {}
+): Promise<InitializeResult> {
   const requestedInput = resolve(inputDirectory);
   const resolvedInput = await resolveExistingPath(requestedInput, "Widget directory");
   const inputMetadata = await stat(resolvedInput);
@@ -78,7 +125,8 @@ export async function initializeWidget(
 
   const configPath = resolve(resolvedInput, CONFIG_FILE_NAME);
   const configExists = await inspectConfigTarget(configPath);
-  if (configExists && !options.force) {
+  const keepConfig = configExists && !options.force && options.agents === true;
+  if (configExists && !options.force && !keepConfig) {
     throw new StudioError(
       "CONFIG_EXISTS",
       `${CONFIG_FILE_NAME} already exists.`,
@@ -89,6 +137,7 @@ export async function initializeWidget(
   let widgetRoot = resolvedInput;
   let widgetRootRelative = ".";
   let relativeFiles: ResolvedWidgetFiles | undefined;
+  let outputRoot: string | undefined;
   let existingConfigError: unknown;
 
   if (configExists) {
@@ -97,6 +146,7 @@ export async function initializeWidget(
       widgetRoot = project.widgetRoot;
       widgetRootRelative = toPortableRelative(resolvedInput, widgetRoot);
       relativeFiles = project.relativeFiles;
+      outputRoot = project.outputRoot;
     } catch (error) {
       existingConfigError = error;
     }
@@ -113,13 +163,33 @@ export async function initializeWidget(
     }
   }
 
+  const agentFiles = options.agents
+    ? {
+        "AGENTS.md": agentInstructions(
+          resolvedInput,
+          widgetRoot,
+          relativeFiles,
+          outputRoot ?? resolve(widgetRoot, DEFAULT_OUTPUT_ROOT)
+        ),
+        ".gitignore": GITIGNORE
+      }
+    : undefined;
+  if (keepConfig) {
+    return {
+      configPath,
+      config: "kept",
+      directories: [],
+      ...(agentFiles ? {agents: await writeAgentFiles(resolvedInput, agentFiles)} : {})
+    };
+  }
+
   const directories = ["themes", "fixtures", "scenarios", "scenes", "recipes"].map((name) =>
     resolve(widgetRoot, name)
   );
   for (const directory of directories) await mkdir(directory, {recursive: true});
-  const source = `import {defineConfig} from "se-widget-studio";
-
-export default defineConfig({
+  // A plain object, not defineConfig(): most widget repositories do not install se-widget-studio, so the import would fail.
+  const source = `/** @type {import("se-widget-studio").StudioConfig} */
+export default {
   schemaVersion: 1,
   widget: {
     root: ${JSON.stringify(widgetRootRelative)},
@@ -134,11 +204,16 @@ export default defineConfig({
   scenarios: {glob: "scenarios/*.json"},
   scenes: {glob: "scenes/*.json"},
   recipes: {glob: "recipes/*.json"},
-  output: {root: ".se-widget-studio/output"}
-});
+  output: {root: ${JSON.stringify(DEFAULT_OUTPUT_ROOT)}}
+};
 `;
   const temporaryPath = resolve(dirname(configPath), `.${basename(configPath)}.${randomBytes(6).toString("hex")}.tmp`);
   await writeFile(temporaryPath, source, {flag: "wx"});
   await rename(temporaryPath, configPath);
-  return {configPath, directories};
+  return {
+    configPath,
+    config: "written",
+    directories,
+    ...(agentFiles ? {agents: await writeAgentFiles(resolvedInput, agentFiles)} : {})
+  };
 }

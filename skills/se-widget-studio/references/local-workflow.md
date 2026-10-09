@@ -23,7 +23,7 @@ Use a pinned CLI, never an unpinned remote package, and do not recreate the runt
 
   Run the checkout with Node 24, its `.node-version`. On the Studio's Mac the default `node` is 26, which is outside `engines`: use `/opt/homebrew/opt/node@24/bin/node` for `npm` and the CLI there, or put `/opt/homebrew/opt/node@24/bin` first in `PATH`.
 
-`<cli>` below stands for either form. The CLI runs without `se-widget-studio.config.mjs` and detects the widget layout. Do not run `init` in a consumer repository: it writes files there, and the config it writes imports `se-widget-studio`, which resolves only when the widget declares that dependency.
+`<cli>` below stands for either form. The CLI runs without `se-widget-studio.config.mjs` and detects the widget layout. Run `init` in a consumer repository only when the user asks, because it writes files there: `se-widget-studio.config.mjs` and empty catalog folders, plus, with `--agents`, an `AGENTS.md` and a `.gitignore` for the widget repository. It never replaces an existing `AGENTS.md` or `.gitignore`; with `--agents` it keeps an existing config, and only `--force` replaces it. Report each file it wrote and each it kept.
 
 ## Commands
 
