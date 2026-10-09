@@ -233,6 +233,10 @@ function reapAfter(t, pids) {
 const GRANDCHILD = marker => `require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(marker)}], {detached: true, stdio: ['ignore', 'inherit', 'inherit']}).unref();`;
 // A grandchild left in the run's group by a parent that exits at once: launchd adopts it before the leash notes it.
 const ORPHAN = (marker, cp = "require('node:child_process')") => `${cp}.spawn(process.execPath, ['-e', ${JSON.stringify(`require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(marker)}, 'orphan'], {stdio: 'ignore'}); process.exit(0);`)}], {stdio: 'ignore'});`;
+// A group leader the run leaves in its tree, as Playwright's Chrome or a leash nested in the test, with an orphan in its
+// group: once the leader dies, only the kill of its group reaches the orphan.
+const LEADER = marker => `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(`${ORPHAN(marker)} setInterval(() => {}, 1000);`)}, ${JSON.stringify(marker)}], {detached: true, stdio: 'ignore'});`;
+const orphanOf = root => table().some(row => row.ppid === 1 && row.command.includes(root) && row.command.endsWith(" orphan"));
 
 test("a folder whose owner died is swept when the next is made, and one whose owner lives is kept", async t => {
   const dead = spawnSync(process.execPath, ["-e", ""]).pid;
@@ -260,6 +264,17 @@ test("the watchdog stops a hung run and everything it started, a detached grandc
   assert.ok(orphaned, "the orphan was adopted by launchd while the run hung");
   assert.equal(run.timedOut, true, "the watchdog fired");
   assert.ok(Date.now() - started < 10_000, `the run ended ${Date.now() - started} ms after it started`);
+  assert.ok(await until(() => !processesOf(root).length, 5000), `still running: ${processesOf(root)}`);
+});
+
+test("the watchdog's reap takes the group of a leader in the run's tree, and the orphan adopted there", {timeout: 30_000}, async t => {
+  const root = await folder(t, "sws-mutate-nested-");
+  reapAfter(t, () => processesOf(root));
+  const running = spawnBounded(process.execPath, ["-e", `${LEADER(root)} setInterval(() => {}, 1000);`, root], {cwd: root, limitMs: 3000});
+  const orphaned = await until(() => orphanOf(root), 2500);
+  const run = await running;
+  assert.ok(orphaned, "the orphan in the leader's group was adopted by launchd while the run hung");
+  assert.equal(run.timedOut, true, "the watchdog fired");
   assert.ok(await until(() => !processesOf(root).length, 5000), `still running: ${processesOf(root)}`);
 });
 

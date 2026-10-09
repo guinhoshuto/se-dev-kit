@@ -144,31 +144,42 @@ export const isGreen = run => !run.timedOut && run.exitCode === 0 && run.tests >
 // outer mutate's watchdog kills it), the leash kills every descendant, read from ps first (Playwright starts Chrome in
 // a group of its own), then its group. When the run exits on its own, the leash kills what it left behind, which
 // would otherwise hold the output pipe open: a descendant whose parent exits is adopted by launchd at once, so the
-// leash notes the tree every 0.5 s and also kills the noted ones now parented by pid 1. A detached group alone
-// outlived a mutate killed mid-hang (THB-21 in etsy-thumb-generator, where this leash comes from).
+// leash notes the tree every 0.5 s (dropping the noted ones that died, so a reused pid is never taken for one) and also
+// kills the noted ones now parented by pid 1. A process it kills that leads a group of its own (Chrome under
+// Playwright, a leash nested in the test) takes its group along: an orphan adopted there before any note dies no other
+// way, and the nested leash may die before it kills its own group. A detached group alone outlived a mutate killed
+// mid-hang (THB-21 in etsy-thumb-generator, where this leash comes from).
 const LEASH = `
 const {execFileSync, spawn} = require('node:child_process');
 const run = spawn(process.argv[1], process.argv.slice(2), {stdio: ['ignore', 'inherit', 'inherit']});
 const read = () => {
   let table = '';
-  try {table = execFileSync('ps', ['-axo', 'pid=,ppid='], {encoding: 'utf8'});} catch {}
+  try {table = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid='], {encoding: 'utf8'});} catch {}
   const parent = new Map();
+  const group = new Map();
   const children = new Map();
   for (const line of table.trim().split('\\n')) {
-    const [pid, ppid] = line.trim().split(/\\s+/).map(Number);
+    const [pid, ppid, pgid] = line.trim().split(/\\s+/).map(Number);
     parent.set(pid, ppid);
+    group.set(pid, pgid);
     children.set(ppid, [...(children.get(ppid) ?? []), pid]);
   }
   const tree = [process.pid];
   for (let i = 0; i < tree.length; i++) tree.push(...(children.get(tree[i]) ?? []));
-  return {parent, tree: tree.slice(1)};
+  return {parent, group, tree: tree.slice(1)};
 };
 const seen = new Set();
-setInterval(() => {for (const pid of read().tree) seen.add(pid);}, 500).unref();
-const reap = () => {
+setInterval(() => {
   const {parent, tree} = read();
+  if (parent.size) for (const pid of seen) if (!parent.has(pid)) seen.delete(pid);
+  for (const pid of tree) seen.add(pid);
+}, 500).unref();
+const reap = () => {
+  const {parent, group, tree} = read();
   const orphans = [...seen].filter(pid => parent.get(pid) === 1);
-  for (const pid of [...tree, ...orphans]) {try {process.kill(pid, 'SIGKILL');} catch {}}
+  const doomed = [...tree, ...orphans];
+  for (const pid of doomed.filter(pid => group.get(pid) === pid)) {try {process.kill(-pid, 'SIGKILL');} catch {}}
+  for (const pid of doomed) {try {process.kill(pid, 'SIGKILL');} catch {}}
 };
 run.on('error', error => {console.error(String(error)); process.exit(127);});
 process.stdin.on('end', () => {reap(); process.kill(-process.pid, 'SIGKILL');}).resume();

@@ -38,20 +38,38 @@
     },
     {
       "file": "scripts/mutate.mjs",
+      "from": "  for (const pid of doomed.filter(pid => group.get(pid) === pid)) {try {process.kill(-pid, 'SIGKILL');} catch {}}\n",
+      "to": "",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "doomed.filter(pid => group.get(pid) === pid)",
+      "to": "doomed.filter(pid => group.get(pid) === process.pid)",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "group.set(pid, pgid);",
+      "to": "group.set(pid, ppid);",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
       "from": "for (let i = 0; i < tree.length; i++) tree.push(...(children.get(tree[i]) ?? []));",
       "to": "tree.push(...(children.get(process.pid) ?? []));",
       "test": "tests/unit/mutate.test.mjs"
     },
     {
       "file": "scripts/mutate.mjs",
-      "from": "setInterval(() => {for (const pid of read().tree) seen.add(pid);}, 500).unref();",
-      "to": "",
+      "from": "  for (const pid of tree) seen.add(pid);\n}, 500)",
+      "to": "}, 500)",
       "test": "tests/unit/mutate.test.mjs"
     },
     {
       "file": "scripts/mutate.mjs",
-      "from": "seen.add(pid);}, 500)",
-      "to": "seen.add(pid);}, 5000)",
+      "from": "  for (const pid of tree) seen.add(pid);\n}, 500)",
+      "to": "  for (const pid of tree) seen.add(pid);\n}, 5000)",
       "test": "tests/unit/mutate.test.mjs"
     },
     {
