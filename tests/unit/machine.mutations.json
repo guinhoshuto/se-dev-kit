@@ -1,0 +1,116 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": ",\n  String.raw`^(?:\\S*/)?ffmpeg\\s(?!.*\\s-(?:frames:v|vframes)\\s+1(?:\\s|$))` +\n    String.raw`.*(?:\\s-f\\s+image2(?:\\s|$)|%0?\\d*d\\.\\w+|\\s(?:libx26[45]|libvpx(?:-vp9)?|libaom-av1|libsvtav1|\\w+_videotoolbox|prores\\w*)(?:\\s|$))`",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "(?!.*\\s-(?:frames:v|vframes)\\s+1(?:\\s|$))",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "(?:frames:v|vframes)",
+      "to": "(?:frames:v)",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "\\s+1(?:\\s|$))` +",
+      "to": "\\s+1)` +",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "\\s-f\\s+image2(?:\\s|$)|",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "|%0?\\d*d\\.\\w+",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "libx26[45]",
+      "to": "libx264",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "libvpx(?:-vp9)?",
+      "to": "libvpx-vp9",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "|libaom-av1",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "|libsvtav1",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "|\\w+_videotoolbox",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "|prores\\w*",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "String.raw`^(?:\\S*/)?ffmpeg",
+      "to": "String.raw`(?:\\S*/)?ffmpeg",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ffmpeg is another session"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "'egrep', 'ugrep', 'rg'",
+      "to": "'egrep', 'rg'",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ugrep, caffeinate"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": ", 'caffeinate']",
+      "to": "]",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ugrep, caffeinate"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": ".replace(/^-+/, '')",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ugrep, caffeinate"
+    }
+  ]
+}
