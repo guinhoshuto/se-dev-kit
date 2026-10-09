@@ -1,0 +1,88 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "spawn(process.execPath, ['-e', LEASH, command, ...args], {cwd, env, detached: true, stdio: ['pipe', 'pipe', 'pipe']})",
+      "to": "spawn(command, args, {cwd, env, detached: true, stdio: ['pipe', 'pipe', 'pipe']})",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "process.stdin.on('end', () => {reap(); process.kill(-process.pid, 'SIGKILL');}).resume();",
+      "to": "process.stdin.resume();",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "process.stdin.on('end', () => {reap(); process.kill",
+      "to": "process.stdin.on('end', () => {process.kill",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "reap(); process.kill(-process.pid, 'SIGKILL');}",
+      "to": "reap();}",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "run.on('exit', (code, signal) => {reap(); process.exit",
+      "to": "run.on('exit', (code, signal) => {process.exit",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "const orphans = [...seen].filter(pid => parent.get(pid) === 1);",
+      "to": "const orphans = [];",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "for (let i = 0; i < tree.length; i++) tree.push(...(children.get(tree[i]) ?? []));",
+      "to": "tree.push(...(children.get(process.pid) ?? []));",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "setInterval(() => {for (const pid of read().tree) seen.add(pid);}, 500).unref();",
+      "to": "",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "seen.add(pid);}, 500)",
+      "to": "seen.add(pid);}, 5000)",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "const stop = child => {child.stdin.destroy(); setTimeout",
+      "to": "const stop = child => {setTimeout",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "timedOut = true; stop(child);",
+      "to": "timedOut = true;",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "if (owner && !alive(Number(owner)))",
+      "to": "if (owner)",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "return error.code === \"EPERM\";}",
+      "to": "return false;}",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "  sweep();\n  const path",
+      "to": "  const path",
+      "test": "tests/unit/mutate.test.mjs"
+    }
+  ]
+}

@@ -1,14 +1,15 @@
 // scripts/mutate.mjs on a throwaway git checkout with tiny node:test files: no Chrome, no network.
 import assert from "node:assert/strict";
-import {execFileSync, spawn} from "node:child_process";
+import {execFileSync, spawn, spawnSync} from "node:child_process";
 import {createHash} from "node:crypto";
 import {once} from "node:events";
+import {readdirSync, rmSync} from "node:fs";
 import {copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {dirname, join} from "node:path";
 import test from "node:test";
 
-import {applySwap, mutate, opensChrome, parseArgs} from "../../scripts/mutate.mjs";
+import {applySwap, mutate, opensChrome, parseArgs, spawnBounded} from "../../scripts/mutate.mjs";
 import {gate, takeBrowserSlot} from "../../scripts/run-tests.mjs";
 
 const FILES = {
@@ -25,9 +26,25 @@ const FILES = {
 const WORK_IN_PROGRESS = "// work in progress\n";
 const quiet = () => {};
 
+// A folder's name carries its owner's pid, so a run killed before its t.after (an outer mutate's watchdog kills
+// it with SIGKILL) leaves a folder that the next run sweeps.
+const alive = pid => {try {process.kill(pid, 0); return true;} catch (error) {return error.code === "EPERM";}};
+function sweep(dir = tmpdir()) {
+  for (const name of readdirSync(dir)) {
+    const owner = /^sws-mutate-[a-z]+-(\d+)-/.exec(name)?.[1];
+    if (owner && !alive(Number(owner))) rmSync(join(dir, name), {recursive: true, force: true});
+  }
+}
+
+async function folder(t, prefix) {
+  sweep();
+  const path = await mkdtemp(join(tmpdir(), `${prefix}${process.pid}-`));
+  t.after(() => rm(path, {recursive: true, force: true}));
+  return path;
+}
+
 async function checkout(t) {
-  const root = await mkdtemp(join(tmpdir(), "sws-mutate-"));
-  t.after(() => rm(root, {recursive: true, force: true}));
+  const root = await folder(t, "sws-mutate-checkout-");
   for (const [path, text] of Object.entries(FILES)) {
     await mkdir(dirname(join(root, path)), {recursive: true});
     await writeFile(join(root, path), text);
@@ -106,12 +123,6 @@ test("setup errors change nothing: a missing literal, a red baseline, a backup l
 });
 
 const exists = path => stat(path).then(() => true, () => false);
-
-async function folder(t, prefix) {
-  const path = await mkdtemp(join(tmpdir(), prefix));
-  t.after(() => rm(path, {recursive: true, force: true}));
-  return path;
-}
 
 // A test under tests/integration that would start Chrome; this one only leaves a mark that it ran.
 const CHROME_TEST = "import assert from 'node:assert/strict';\nimport {writeFileSync} from 'node:fs';\nimport test from 'node:test';\nimport {value} from '../../lib/value.mjs';\ntest('stands in for a Chrome test', () => {\n  writeFileSync(new URL('../../ran', import.meta.url), 'ran');\n  assert.equal(value, 1);\n});\n";
@@ -197,4 +208,89 @@ test("a mutation whose test starts no Chrome runs while the machine is busy, wit
   assert.equal(opensChrome("tests/integration/capture.test.mjs"), true);
   assert.equal(opensChrome("tests/unit/mutate.test.mjs"), false);
   assert.equal(opensChrome("tests/web/jobs.test.ts"), false, "mutate skips the [browser] web tests, so the rest of a web file starts no Chrome");
+});
+
+// Nothing a run starts outlives it (THB-21 in etsy-thumb-generator): the processes below name the checkout on their
+// command line, and the grandchild runs detached, in a group of its own, as Playwright starts Chrome.
+const table = () => execFileSync("ps", ["-axo", "pid=,ppid=,command="], {encoding: "utf8"}).trim().split("\n")
+  .map(line => {const [pid, ppid, ...command] = line.trim().split(/\s+/); return {pid: Number(pid), ppid: Number(ppid), command: command.join(" ")};});
+const processesOf = root => table().filter(row => row.command.includes(root) && row.pid > 1 && row.pid !== process.pid).map(row => row.pid);
+function descendants(pid) {
+  const rows = table();
+  const tree = [pid];
+  for (let i = 0; i < tree.length; i++) tree.push(...rows.filter(row => row.ppid === tree[i]).map(row => row.pid));
+  return tree.slice(1);
+}
+const living = pids => {const all = new Set(table().map(row => row.pid)); return pids.filter(pid => all.has(pid));};
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(check, ms) {
+  for (const end = Date.now() + ms; Date.now() < end; await pause(100)) if (check()) return true;
+  return check();
+}
+function reapAfter(t, pids) {
+  t.after(() => {for (const pid of [...pids()]) {try {process.kill(pid, "SIGKILL");} catch { /* gone */ }}});
+}
+const GRANDCHILD = marker => `require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(marker)}], {detached: true, stdio: ['ignore', 'inherit', 'inherit']}).unref();`;
+// A grandchild left in the run's group by a parent that exits at once: launchd adopts it before the leash notes it.
+const ORPHAN = (marker, cp = "require('node:child_process')") => `${cp}.spawn(process.execPath, ['-e', ${JSON.stringify(`require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(marker)}, 'orphan'], {stdio: 'ignore'}); process.exit(0);`)}], {stdio: 'ignore'});`;
+
+test("a folder whose owner died is swept when the next is made, and one whose owner lives is kept", async t => {
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio: "ignore"});
+  t.after(() => holder.kill("SIGKILL"));
+  const names = {dead: `sws-mutate-checkout-${dead}-x`, living: `sws-mutate-checkout-${holder.pid}-x`, launchd: "sws-mutate-checkout-1-x"};
+  for (const name of Object.values(names)) {
+    await mkdir(join(tmpdir(), name));
+    t.after(() => rm(join(tmpdir(), name), {recursive: true, force: true}));
+  }
+  assert.equal(alive(dead), false, "the dead owner's pid is free");
+  await folder(t, "sws-mutate-checkout-");
+  assert.equal(await exists(join(tmpdir(), names.dead)), false, "the dead owner's folder is gone");
+  assert.equal(await exists(join(tmpdir(), names.living)), true, "a living owner's folder stays");
+  assert.equal(await exists(join(tmpdir(), names.launchd)), true, "an owner this user may not signal (EPERM) counts as alive");
+});
+
+test("the watchdog stops a hung run and everything it started, a detached grandchild and an orphan in its group included", {timeout: 30_000}, async t => {
+  const root = await folder(t, "sws-mutate-hang-");
+  reapAfter(t, () => processesOf(root));
+  const started = Date.now();
+  const running = spawnBounded(process.execPath, ["-e", `${GRANDCHILD(root)} ${ORPHAN(root)} setInterval(() => {}, 1000);`, root], {cwd: root, limitMs: 3000});
+  const orphaned = await until(() => table().some(row => row.ppid === 1 && row.command.includes(root) && row.command.endsWith(" orphan")), 2500);
+  const run = await running;
+  assert.ok(orphaned, "the orphan was adopted by launchd while the run hung");
+  assert.equal(run.timedOut, true, "the watchdog fired");
+  assert.ok(Date.now() - started < 10_000, `the run ended ${Date.now() - started} ms after it started`);
+  assert.ok(await until(() => !processesOf(root).length, 5000), `still running: ${processesOf(root)}`);
+});
+
+test("a run that exits leaving a child on its output pipe ends, and the child is gone", {timeout: 30_000}, async t => {
+  const root = await folder(t, "sws-mutate-stray-");
+  reapAfter(t, () => processesOf(root));
+  const run = await Promise.race([
+    spawnBounded(process.execPath, ["-e", `${GRANDCHILD(root)} setTimeout(() => process.exit(0), 1500);`, root], {cwd: root, limitMs: 20_000}),
+    pause(15_000).then(() => "hung")
+  ]);
+  assert.notEqual(run, "hung", "the run ended although its child held the output pipe");
+  assert.equal(run.exitCode, 0);
+  assert.equal(run.timedOut, false);
+  assert.ok(await until(() => !processesOf(root).length, 5000), `still running: ${processesOf(root)}`);
+});
+
+test("mutate killed with SIGKILL mid-hang takes its test run, the detached grandchild and an orphan in its group with it", {timeout: 60_000}, async t => {
+  const {root} = await checkout(t);
+  const hang = {file: "lib/wait.mjs", from: "Promise.resolve(true)", to: `(import('node:child_process').then(c => {c.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(root)}], {detached: true, stdio: 'ignore'}); ${ORPHAN(root, "c")}}), new Promise(() => {}))`, test: "tests/wait.test.mjs"};
+  const script = `import {mutate} from ${JSON.stringify(new URL("../../scripts/mutate.mjs", import.meta.url).href)}; await mutate([${JSON.stringify(hang)}], {root: ${JSON.stringify(root)}, timeoutMs: 60000, log: () => {}});`;
+  const driver = spawn(process.execPath, ["--input-type=module", "-e", script], {stdio: "ignore"});
+  let tree = [];
+  reapAfter(t, () => [driver.pid, ...tree, ...processesOf(root)]);
+  const hanging = await until(() => {
+    tree = descendants(driver.pid);
+    const rows = table();
+    return rows.some(row => tree.includes(row.pid) && row.command.includes("setInterval") && row.command.includes(root))
+      && rows.some(row => row.ppid === 1 && row.command.includes(root) && row.command.endsWith(" orphan"));
+  }, 20_000);
+  assert.ok(hanging, `the mutant's grandchild and orphan never started: ${JSON.stringify(tree)}`);
+  assert.ok(tree.length >= 4, `the leash, the runner, the test file and the grandchild: ${JSON.stringify(tree)}`);
+  driver.kill("SIGKILL");
+  assert.ok(await until(() => !living(tree).length && !processesOf(root).length, 5000), `still running: ${living(tree)} ${processesOf(root)}`);
 });

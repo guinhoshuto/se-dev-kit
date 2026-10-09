@@ -2,6 +2,7 @@
 /**
  * Proves that a test catches a change: swaps one literal in a file, runs the named test file with a
  * bounded runner, and puts the file back byte for byte. A mutation the test does not notice survived.
+ * Nothing a run starts outlives it: when mutate dies or the watchdog fires, a leash kills the whole tree.
  *
  *   npm run mutate -- <file> --from <old> --to <new> --test <test-file> [--name <pattern>] [--occurrences <n>]
  *   npm run mutate -- --plan <mutations.json>
@@ -138,29 +139,66 @@ export function summarize(output) {
 /** Green means: a test passed, none failed or was cancelled (a timeout), node exited 0 and no watchdog fired. */
 export const isGreen = run => !run.timedOut && run.exitCode === 0 && run.tests > 0 && run.pass > 0 && !run.fail && !run.cancelled;
 
-const running = new Set();
+// Every run goes under a leash: a small node process that leads the run's process group and reads a pipe from mutate.
+// When the pipe closes, because the watchdog closed it or because mutate died in any way (SIGKILL included, as an
+// outer mutate's watchdog kills it), the leash kills every descendant, read from ps first (Playwright starts Chrome in
+// a group of its own), then its group. When the run exits on its own, the leash kills what it left behind, which
+// would otherwise hold the output pipe open: a descendant whose parent exits is adopted by launchd at once, so the
+// leash notes the tree every 0.5 s and also kills the noted ones now parented by pid 1. A detached group alone
+// outlived a mutate killed mid-hang (THB-21 in etsy-thumb-generator, where this leash comes from).
+const LEASH = `
+const {execFileSync, spawn} = require('node:child_process');
+const run = spawn(process.argv[1], process.argv.slice(2), {stdio: ['ignore', 'inherit', 'inherit']});
+const read = () => {
+  let table = '';
+  try {table = execFileSync('ps', ['-axo', 'pid=,ppid='], {encoding: 'utf8'});} catch {}
+  const parent = new Map();
+  const children = new Map();
+  for (const line of table.trim().split('\\n')) {
+    const [pid, ppid] = line.trim().split(/\\s+/).map(Number);
+    parent.set(pid, ppid);
+    children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+  }
+  const tree = [process.pid];
+  for (let i = 0; i < tree.length; i++) tree.push(...(children.get(tree[i]) ?? []));
+  return {parent, tree: tree.slice(1)};
+};
+const seen = new Set();
+setInterval(() => {for (const pid of read().tree) seen.add(pid);}, 500).unref();
+const reap = () => {
+  const {parent, tree} = read();
+  const orphans = [...seen].filter(pid => parent.get(pid) === 1);
+  for (const pid of [...tree, ...orphans]) {try {process.kill(pid, 'SIGKILL');} catch {}}
+};
+run.on('error', error => {console.error(String(error)); process.exit(127);});
+process.stdin.on('end', () => {reap(); process.kill(-process.pid, 'SIGKILL');}).resume();
+run.on('exit', (code, signal) => {reap(); process.exit(code ?? (signal ? 128 : 1));});
+`;
 const killGroup = child => {try {process.kill(-child.pid, 'SIGKILL');} catch {try {child.kill('SIGKILL');} catch { /* already gone */ }}};
+// Closing the pipe lets the leash reap the tree; the group goes by hand only if the leash does not answer.
+const stop = child => {child.stdin.destroy(); setTimeout(() => killGroup(child), 2000).unref();};
 
-function spawnBounded(command, args, {cwd, limitMs}) {
+/** Runs `command` under the leash; past `limitMs` the watchdog stops it and everything it started. */
+export function spawnBounded(command, args, {cwd, limitMs}) {
   return new Promise((done, fail) => {
     // A nested `node --test` would otherwise talk its parent runner's protocol instead of printing.
     const env = {...process.env};
     delete env.NODE_TEST_CONTEXT;
-    const child = spawn(command, args, {cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe']});
-    running.add(child);
+    const child = spawn(process.execPath, ['-e', LEASH, command, ...args], {cwd, env, detached: true, stdio: ['pipe', 'pipe', 'pipe']});
+    child.stdin.on('error', () => { /* the leash is gone */ });
     let output = ''; let timedOut = false;
     const collect = chunk => {output = (output + chunk).slice(-2_000_000);};
     child.stdout.setEncoding('utf8').on('data', collect);
     child.stderr.setEncoding('utf8').on('data', collect);
-    const timer = setTimeout(() => {timedOut = true; killGroup(child);}, limitMs);
-    child.on('error', error => {clearTimeout(timer); running.delete(child); fail(error);});
-    child.on('close', (code, signal) => {clearTimeout(timer); running.delete(child); done({exitCode: code ?? (signal ? 128 : 1), timedOut, output});});
+    const timer = setTimeout(() => {timedOut = true; stop(child);}, limitMs);
+    child.on('error', error => {clearTimeout(timer); fail(error);});
+    child.on('close', (code, signal) => {clearTimeout(timer); done({exitCode: code ?? (signal ? 128 : 1), timedOut, output});});
   });
 }
 
 const tail = (output, lines = 30) => output.trimEnd().split('\n').slice(-lines).join('\n');
 
-/** One bounded run of a test file; the watchdog kills its process group if the runner itself hangs. */
+/** One bounded run of a test file under the leash; the watchdog stops it (Chrome too) if the runner itself hangs. */
 export async function runTest({root, test, name, timeoutMs}) {
   const args = [
     ...(/\.m?ts$/.test(test) ? ['--import', 'tsx'] : []),
@@ -202,9 +240,8 @@ async function restore({path, original, backup}) {
   await rm(backup);
 }
 
-/** For signals: puts the file under mutation back synchronously and stops the test run. */
+/** For signals: puts the file under mutation back synchronously; the exit closes the leash's pipe, which stops the run. */
 export function restoreNow() {
-  for (const child of running) killGroup(child);
   if (!active) return;
   try {writeFileSync(active.path, active.original); rmSync(active.backup, {force: true});} catch { /* the backup stays for a manual restore */ }
 }
