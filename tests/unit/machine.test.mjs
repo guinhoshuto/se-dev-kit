@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
-import {spawn} from "node:child_process";
+import {execFileSync, spawn} from "node:child_process";
 import {once} from "node:events";
+import {existsSync} from "node:fs";
 import {mkdtemp, realpath, rm, writeFile} from "node:fs/promises";
-import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {homedir, tmpdir} from "node:os";
+import {dirname, join} from "node:path";
 import {setTimeout as sleep} from "node:timers/promises";
 import test from "node:test";
 import {fileURLToPath} from "node:url";
 
 import {BROWSER_MARKER as ENGINE_MARKER} from "../../dist/capture/browser.js";
-import {BROWSER_MARKER, browserGate, checkoutOrphans, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseVerdict} from "../../scripts/lib/machine.mjs";
+import {BROWSER_MARKER, HEAVY_PATTERNS, WRAPPERS, browserGate, checkoutOrphans, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseVerdict} from "../../scripts/lib/machine.mjs";
 import {killStale} from "../../scripts/kill-stale.mjs";
 
 const ROOT = "/work/se-dev-kit";
@@ -98,6 +99,67 @@ test("Blender is another session's render only when its executable runs in the b
     // A command that only names it, like a request to an agent.
     "claude -p render it with blender -b scene.blend -a"
   ]) assert.equal(isHeavy(command), false, command);
+});
+
+test("ffmpeg is another session's render only while it writes many frames or encodes video, never for one frame or for naming it", () => {
+  // HAR-32: the machine check counted ffmpeg from 2026-10-08, and this fallback did not.
+  for (const command of [
+    "ffmpeg -hide_banner -ss 0 -i in.mp4 -fps_mode passthrough -c:v png -f image2 -atomic_writing 1 out/frames/%06d.png",
+    "ffmpeg -i in.mp4 -vf fps=2 -f image2 -strftime 1 out/%H%M%S.png",
+    "ffmpeg -i in.webm frames/%06d.png",
+    "ffmpeg -i in.mp4 -frames:v 100 out/%03d.png",
+    "/opt/homebrew/bin/ffmpeg -y -i in.mov -c:v libx264 -crf 16 -pix_fmt yuv420p out.mp4",
+    "ffmpeg -i in.mov -c:v libx265 out.mp4",
+    "ffmpeg -i in.mov -c:v libvpx out.webm",
+    "ffmpeg -i in.mov -c:v libvpx-vp9 -b:v 0 -crf 30 out.webm",
+    "ffmpeg -i in.mov -c:v libaom-av1 out.mkv",
+    "ffmpeg -i in.mov -c:v libsvtav1 out.mkv",
+    "ffmpeg -i in.mov -c:v hevc_videotoolbox -tag:v hvc1 out.mp4",
+    "/opt/homebrew/bin/ffmpeg -i in.mov -c:v prores_ks -profile:v 4 out.mov"
+  ]) assert.equal(isHeavy(command), true, command);
+  for (const command of [
+    "/opt/homebrew/bin/ffmpeg -ss 3 -i in.mp4 -frames:v 1 -f image2 frame.png",
+    "ffmpeg -c:v libvpx-vp9 -i stinger.webm -frames:v 1 -pix_fmt rgba a.png",
+    "ffmpeg -i in.mp4 -vframes 1 -f image2 thumb.png",
+    "ffmpeg -i in.mp4 -c:a aac out.m4a",
+    "/opt/homebrew/bin/ffprobe -v error -show_streams out.mp4",
+    "/usr/local/bin/myffmpeg -c:v libx264 out.mp4",
+    "claude -p run ffmpeg -i a.mp4 -c:v libx264 b.mp4"
+  ]) assert.equal(isHeavy(command), false, command);
+});
+
+test("ugrep, caffeinate and a login shell only wrap a render: the render they start counts, they do not", () => {
+  const wrappers = [
+    // Claude Code's grep, as ps lists it.
+    "ugrep -G --ignore-files --hidden -I --exclude-dir=.git --exclude-dir=.svn npx remotion render",
+    "/opt/homebrew/bin/ugrep -rn npx remotion still src",
+    "caffeinate -i npx remotion render src/index.ts Comp out/a.mp4",
+    "/usr/bin/caffeinate -dims node /x/node_modules/.bin/remotion render src/index.ts Comp out/a.mp4",
+    "-zsh -c until ! pgrep -f 'Chrome.*--headless'; do sleep 10; done"
+  ];
+  for (const command of wrappers) assert.equal(isHeavy(command), false, command);
+  // Each line names a render: run by a program that is no wrapper, every one would count.
+  for (const command of wrappers) assert.equal(isHeavy(`/usr/local/bin/tool ${command}`), true, command);
+  // A program whose name only starts like a wrapper is no wrapper.
+  assert.equal(isHeavy("/usr/local/bin/caffeinated npx remotion render A"), true);
+  const list = [
+    {pid: 500, ppid: 1, command: "/usr/bin/caffeinate -i node /x/node_modules/.bin/remotion render src/index.ts Comp out/a.mp4"},
+    {pid: 510, ppid: 500, command: "node /x/node_modules/.bin/remotion render src/index.ts Comp out/a.mp4"}
+  ];
+  assert.deepEqual(otherSessionsWork(list, [900]).map((item) => item.pid), [510]);
+});
+
+test("the heavy patterns and wrappers are the machine check's, string for string", async (t) => {
+  // The fallback saw neither ffmpeg nor caffeinate long after the check did (HAR-32). Not machineCheckScript():
+  // the test runner points MACHINE_CHECK at a missing file.
+  const check = join(homedir(), "obsidian", "AI", "scripts", "maquina_livre.py");
+  if (!existsSync(check)) return t.skip("no vault on this machine");
+  const read = 'import json, sys; sys.path.insert(0, sys.argv[1]); import maquina_livre as m; print(json.dumps({"heavy": [p.pattern for p in m.PESADO], "wrappers": sorted(m.EMBRULHO)}))';
+  const vault = JSON.parse(execFileSync("python3", ["-c", read, dirname(check)], {encoding: "utf8"}));
+  assert.ok(vault.heavy.length > 0 && vault.wrappers.length > 0, `read nothing from the check: ${JSON.stringify(vault)}`);
+  const fix = "edit PESADO and EMBRULHO in ~/obsidian/AI/scripts/maquina_livre.py first, then copy them to HEAVY_PATTERNS and WRAPPERS in scripts/lib/machine.mjs";
+  assert.deepEqual(HEAVY_PATTERNS, vault.heavy, fix);
+  assert.deepEqual([...WRAPPERS].sort(), vault.wrappers, fix);
 });
 
 test("the caller's ancestors, and a shell or pgrep that only mentions a pattern, are not another session's render", () => {

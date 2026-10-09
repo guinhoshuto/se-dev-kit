@@ -17,8 +17,9 @@ export const BROWSER_MARKER = '--se-widget-studio';
 /** Free space a browser suite needs before it starts: the machine rule is "no render below 3 GB free". */
 export const MIN_FREE_BYTES = 3 * 1024 ** 3;
 
-// A render or an automated browser from any session: the same patterns as the machine check every repo
-// shares (PESADO in ~/obsidian/AI/scripts/maquina_livre.py).
+// A render or an automated browser from any session: the same patterns, string for string, as the
+// machine check every repo shares (PESADO in ~/obsidian/AI/scripts/maquina_livre.py; a unit test fails
+// while they differ), so this fallback sees what the check sees.
 // Remotion counts while its CLI renders (the render, still and benchmark commands), called through
 // node_modules/.bin, remotion-cli.js, npx or npm exec (the title npx shows in ps), and while its compositor
 // runs; the Chrome it opens matches the headless patterns. Studio, compositions, bundle and any command
@@ -26,21 +27,27 @@ export const MIN_FREE_BYTES = 3 * 1024 ** 3;
 // pattern reported `node .cache/remotion-mock/slot-run.mts`, a wrapper that renders nothing (HAR-32).
 // Blender counts as its executable with -b or --background. A render started from Blender's UI stays
 // invisible to this check; before this rule, a 511 s Blender render in a Codex session went unseen.
-const HEAVY = [
-  /\bChrom(e|ium)\b.*--headless/,
-  /headless[_-]shell/,
-  /--remote-debugging-pipe/,
-  /(?:node_modules\/\.bin\/remotion|@remotion\/cli\/remotion-cli\.js|(?:^|[\s/])(?:npx|npm\s+exec)\s+remotion)\s+(?:render|still|benchmark)(?:\s|$)/,
-  /@remotion\/compositor-[^/\s]+\/remotion(?:\s|$)/,
-  /dist\/cli\/index\.js\s+(render|record|capture)\b/,
-  /^(?:\S*\/)?[Bb]lender\s(?:.*\s)?(?:-b|--background)(?:\s|$)/
+// ffmpeg counts while it writes many frames (image2, a %06d name) or encodes video, not for one frame.
+export const HEAVY_PATTERNS = [
+  String.raw`\bChrom(e|ium)\b.*--headless`,
+  String.raw`headless[_-]shell`,
+  String.raw`--remote-debugging-pipe`,
+  String.raw`(?:node_modules/\.bin/remotion|@remotion/cli/remotion-cli\.js|(?:^|[\s/])(?:npx|npm\s+exec)\s+remotion)\s+(?:render|still|benchmark)(?:\s|$)`,
+  String.raw`@remotion/compositor-[^/\s]+/remotion(?:\s|$)`,
+  String.raw`dist/cli/index\.js\s+(render|record|capture)\b`,
+  String.raw`^(?:\S*/)?[Bb]lender\s(?:.*\s)?(?:-b|--background)(?:\s|$)`,
+  String.raw`^(?:\S*/)?ffmpeg\s(?!.*\s-(?:frames:v|vframes)\s+1(?:\s|$))` +
+    String.raw`.*(?:\s-f\s+image2(?:\s|$)|%0?\d*d\.\w+|\s(?:libx26[45]|libvpx(?:-vp9)?|libaom-av1|libsvtav1|\w+_videotoolbox|prores\w*)(?:\s|$))`
 ];
+const HEAVY = HEAVY_PATTERNS.map(pattern => new RegExp(pattern));
 
 // A shell or a search tool whose command line only mentions a pattern (the machine check's own
 // `pgrep -fl 'Chrome.*headless|remotion|...'`, or the shell that chains it) renders nothing: the
-// work a shell starts is listed as a process of its own.
-const WRAPPER = /^-?(sh|bash|zsh|dash|ksh|fish|pgrep|pkill|grep|egrep|rg)$/;
-const executable = command => basename(command.trimStart().split(/\s+/, 1)[0] ?? '');
+// work a shell starts is listed as a process of its own. So does caffeinate, which only wraps the
+// command it keeps the Mac awake for. The same names as EMBRULHO in the machine check; Claude Code's
+// grep shows up as ugrep. A login shell's leading dash is dropped.
+export const WRAPPERS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'pgrep', 'pkill', 'grep', 'egrep', 'ugrep', 'rg', 'caffeinate']);
+const executable = command => basename(command.trimStart().split(/\s+/, 1)[0] ?? '').replace(/^-+/, '');
 
 export function parseProcessList(text) {
   return text.split('\n').flatMap(line => {
@@ -86,7 +93,7 @@ export function familyOf(processes, roots) {
 }
 
 export function isHeavy(command) {
-  return !WRAPPER.test(executable(command)) && HEAVY.some(pattern => pattern.test(command));
+  return !WRAPPERS.has(executable(command)) && HEAVY.some(pattern => pattern.test(command));
 }
 
 const isTestWorker = command => /\bnode\b/.test(command) && /\.test\.(mjs|ts)\b/.test(command) && !/\s--test(\s|$)/.test(command);
