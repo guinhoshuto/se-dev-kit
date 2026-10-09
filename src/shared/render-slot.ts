@@ -7,6 +7,15 @@
 // test in each repo) fails while a copy differs. Only node: imports, so it compiles under the
 // strictest tsconfig of the two repos.
 //
+// Command line (HAR-80, 2026-10-08): `node render-slot.ts run -- <cmd> [args]` runs one heavy step
+// under the slot, for a repo or a one-off render that does not import this module. It waits in the
+// queue, takes the slot named after the command, runs it with RENDER_SLOT_HELD (so a render inside
+// runs under the same slot), forwards SIGINT, SIGTERM and SIGHUP to it, and releases the slot only
+// when the command has exited, however it ends. It exits with the command's status (128 + the signal
+// number when the command died of a signal), 2 on a usage error or a refused command, and 75 when the
+// wait gave up. It refuses a .sh script, run directly or through a shell: the slot covers each heavy
+// step, never the script that chains them (2026-10-06, a chain held it 50 minutes through light steps).
+//
 // Protocol: the slot is the directory ~/.cache/render-slot (RENDER_SLOT_DIR overrides it). Taking it
 // is an atomic mkdir; inside, owner.json holds {protocol, pid, repo, command, startedAt}. A slot
 // whose pid is gone, or whose startedAt is before the last boot (the pid was reused), is taken over,
@@ -72,10 +81,12 @@
 // claim. Only then, for a few syscalls, can a live mutex be off its path (so two processes share the
 // critical section), and the move back can replace a mutex that was just made and is still an empty
 // directory (whose maker then gives up, as above).
+import {spawn, type ChildProcess} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
-import {mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync} from 'node:fs';
+import {mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 export type SlotOwner = {protocol?: number; pid: number; repo: string; command: string; startedAt: string};
 export type SlotHandle = {release: () => void; inherited: boolean};
@@ -666,3 +677,82 @@ export const withRenderSlot = async <T>(task: () => Promise<T>, options: Partial
     slot.release();
   }
 };
+
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+const EXIT_USAGE = 2;
+const EXIT_GAVE_UP = 75;
+
+/** Why `run` refuses this command line, or null: a .sh script, run directly or through a shell. */
+export const refusedCommand = (command: string[]) => {
+  const [program, ...args] = command;
+  if (program === undefined) return 'Nothing to run: render-slot run -- <command> [args].';
+  const name = path.basename(program);
+  const script = name.endsWith('.sh') ? program : SHELLS.has(name) ? args.find((arg) => !arg.startsWith('-') && arg.endsWith('.sh')) : undefined;
+  if (script === undefined) return null;
+  return `Refused: ${script} is a chain of steps. The render slot covers each heavy step, never the script that chains them: run each heavy step inside it with render-slot run.`;
+};
+
+/**
+ * `render-slot run -- <cmd> [args]`: waits for the slot, runs the command holding it, and resolves to
+ * the exit status. The slot is released only once the command has exited.
+ */
+export const runCommand = async (command: string[], options: Partial<SlotOptions> = {}): Promise<number> => {
+  const refusal = refusedCommand(command);
+  if (refusal !== null) {
+    console.error(refusal);
+    return EXIT_USAGE;
+  }
+  const [program = '', ...args] = command;
+  let child: ChildProcess | null = null;
+  // Registered before the slot's own handlers: while waiting, a signal leaves the queue (the 'exit'
+  // handlers take the ticket and the slot out); while the command runs, it goes to the command.
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (child === null) process.exit(128 + (os.constants.signals[signal] ?? 15));
+    child.kill(signal);
+  };
+  for (const signal of SIGNALS) process.on(signal, onSignal);
+  try {
+    let slot: SlotHandle;
+    try {
+      slot = await acquireRenderSlot({command: command.join(' ').slice(0, 200), log: (message) => console.error(message), ...options});
+    } catch (error) {
+      if (!(error instanceof RenderSlotError)) throw error;
+      console.error(error.message);
+      return EXIT_GAVE_UP;
+    }
+    // The slot's own signal handlers would release it at once, while the command still runs: only
+    // onSignal stays, and the slot is released below, or by its 'exit' handler.
+    for (const signal of SIGNALS) for (const listener of process.listeners(signal)) if (listener !== onSignal) process.off(signal, listener);
+    try {
+      const started = spawn(program, args, {stdio: 'inherit'});
+      child = started;
+      return await new Promise<number>((resolve) => {
+        started.on('error', (error: Error) => { console.error(`Could not run ${program}: ${error.message}`); resolve(127); });
+        started.on('exit', (status: number | null, signal: NodeJS.Signals | null) => resolve(status ?? 128 + (signal ? os.constants.signals[signal] ?? 15 : 0)));
+      });
+    } finally {
+      slot.release();
+    }
+  } finally {
+    for (const signal of SIGNALS) process.off(signal, onSignal);
+  }
+};
+
+const isMain = () => {
+  try {
+    return process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+};
+
+if (isMain()) {
+  const [verb, separator, ...command] = process.argv.slice(2);
+  if (verb !== 'run' || separator !== '--') {
+    console.error('Usage: node render-slot.ts run -- <command> [args]');
+    process.exitCode = EXIT_USAGE;
+  } else {
+    process.exitCode = await runCommand(command);
+  }
+}
