@@ -16,6 +16,18 @@
 // wait gave up. It refuses a .sh script, run directly or through a shell: the slot covers each heavy
 // step, never the script that chains them (2026-10-06, a chain held it 50 minutes through light steps).
 //
+// `node render-slot.ts hold --rotulo <label> --max <minutes>` (HAR-109, 2026-10-09) holds the slot for a
+// heavy task that is not one shell command: an E2E driven step by step through an MCP (Chrome, the SE
+// Widget Studio), which could only wait for the machine and let another session start a render in the
+// middle. It waits in the queue like `run`, takes the slot as the command "hold: <label>", says so on
+// stdout with its pid, and keeps it until `node render-slot.ts release --rotulo <label>`, a signal, or
+// --max minutes (1 to 240), whichever comes first; then it releases the slot and exits 0 (75 when the
+// wait gave up, 2 on a usage error). Run it in the background. A heavy command of the same task runs
+// under that slot with RENDER_SLOT_HELD=<hold pid> in its environment, instead of waiting behind it.
+// `release` sends SIGTERM to the hold of that label, holding the slot or still in the queue, waits up to
+// 10 seconds for it to let go, and exits 0; 1 when no live hold has that label (it never touches the slot
+// of anything else).
+//
 // Protocol: the slot is the directory ~/.cache/render-slot (RENDER_SLOT_DIR overrides it). Taking it
 // is an atomic mkdir; inside, owner.json holds {protocol, pid, repo, command, startedAt}. A slot
 // whose pid is gone, or whose startedAt is before the last boot (the pid was reused), is taken over,
@@ -739,6 +751,97 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
   }
 };
 
+export const HOLD_PREFIX = 'hold: ';
+const LABEL = /^[\w.-]{1,60}$/;
+const HOLD_MAX_MINUTES = 240;
+
+/** Why `hold` or `release` refuses its options, or null. */
+export const refusedHold = (label: string | undefined, maxMinutes?: number) => {
+  if (label === undefined || !LABEL.test(label)) return 'Usage: render-slot hold --rotulo <label> --max <minutes>; the label is 1 to 60 letters, digits, ".", "_" or "-".';
+  if (maxMinutes !== undefined && !(maxMinutes > 0 && maxMinutes <= HOLD_MAX_MINUTES)) return `--max is the minutes the hold may last, more than 0 and at most ${HOLD_MAX_MINUTES}.`;
+  return null;
+};
+
+/**
+ * `render-slot hold --rotulo <label> --max <minutes>`: waits for the slot, holds it as "hold: <label>"
+ * until a signal (what `release` sends) or the deadline, and resolves to the exit status.
+ */
+export const holdSlot = async (label: string, maxMinutes: number, options: Partial<SlotOptions> = {}): Promise<number> => {
+  const refusal = refusedHold(label, maxMinutes);
+  if (refusal !== null) {
+    console.error(refusal);
+    return EXIT_USAGE;
+  }
+  let stop: ((why: string) => void) | null = null;
+  // While waiting, a signal (what `release` sends) leaves the queue: the 'exit' handlers take the ticket out.
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (stop === null) process.exit(128 + (os.constants.signals[signal] ?? 15));
+    stop(signal);
+  };
+  for (const signal of SIGNALS) process.on(signal, onSignal);
+  try {
+    let slot: SlotHandle;
+    try {
+      slot = await acquireRenderSlot({command: `${HOLD_PREFIX}${label}`, log: (message) => console.error(message), ...options});
+    } catch (error) {
+      if (!(error instanceof RenderSlotError)) throw error;
+      console.error(error.message);
+      return EXIT_GAVE_UP;
+    }
+    // Only onSignal stays: the slot is released below, once, whatever ends the hold.
+    for (const signal of SIGNALS) for (const listener of process.listeners(signal)) if (listener !== onSignal) process.off(signal, listener);
+    try {
+      console.log(`Holding the render slot as "${HOLD_PREFIX}${label}" (pid ${process.pid}) for at most ${maxMinutes} minutes, until \`render-slot release --rotulo ${label}\`. Heavy commands of this task: ${HELD_ENV}=${process.pid} <command>.`);
+      const why = await new Promise<string>((resolve) => {
+        const timer = setTimeout(() => resolve('deadline'), maxMinutes * 60_000);
+        stop = (signal) => { clearTimeout(timer); resolve(signal); };
+      });
+      console.log(why === 'deadline' ? `Released the render slot: --max ${maxMinutes} minutes passed.` : `Released the render slot (${why}).`);
+      return 0;
+    } finally {
+      slot.release();
+    }
+  } finally {
+    for (const signal of SIGNALS) process.off(signal, onSignal);
+  }
+};
+
+/** `render-slot release --rotulo <label>`: ends the live hold of that label, holding the slot or queued. */
+export const releaseHold = async (label: string, dir = slotDir(), waitMs = 10_000): Promise<number> => {
+  const refusal = refusedHold(label);
+  if (refusal !== null) {
+    console.error(refusal);
+    return EXIT_USAGE;
+  }
+  const command = `${HOLD_PREFIX}${label}`;
+  const owner = renderSlotHolder(dir)?.owner ?? null;
+  const pids = new Set<number>();
+  if (owner?.command === command && ownerAlive(owner)) pids.add(owner.pid);
+  for (const ticket of renderSlotQueue(dir)) if (ticket.command === command && alive(ticket.pid)) pids.add(ticket.pid);
+  if (pids.size === 0) {
+    console.error(`No live hold named "${label}" holds or waits for the render slot (${dir}).`);
+    return 1;
+  }
+  for (const pid of pids) {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* gone meanwhile */ }
+  }
+  const until = Date.now() + waitMs;
+  while (Date.now() < until && [...pids].some((pid) => alive(pid))) await sleep(50);
+  const left = [...pids].filter((pid) => alive(pid));
+  if (left.length > 0) {
+    console.error(`The hold "${label}" (pid ${left.join(', ')}) did not exit in ${Math.round(waitMs / 1000)} seconds.`);
+    return 1;
+  }
+  console.log(`Released the hold "${label}".`);
+  return 0;
+};
+
+/** The value of `--name <value>` in `args`, or undefined. */
+const optionValue = (args: string[], name: string) => {
+  const at = args.indexOf(name);
+  return at >= 0 ? args[at + 1] : undefined;
+};
+
 const isMain = () => {
   try {
     return process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
@@ -749,10 +852,16 @@ const isMain = () => {
 
 if (isMain()) {
   const [verb, separator, ...command] = process.argv.slice(2);
-  if (verb !== 'run' || separator !== '--') {
-    console.error('Usage: node render-slot.ts run -- <command> [args]');
-    process.exitCode = EXIT_USAGE;
-  } else {
+  const args = process.argv.slice(3);
+  if (verb === 'run' && separator === '--') {
     process.exitCode = await runCommand(command);
+  } else if (verb === 'hold') {
+    const max = optionValue(args, '--max');
+    process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max));
+  } else if (verb === 'release') {
+    process.exitCode = await releaseHold(optionValue(args, '--rotulo') ?? '');
+  } else {
+    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> | release --rotulo <label>');
+    process.exitCode = EXIT_USAGE;
   }
 }
