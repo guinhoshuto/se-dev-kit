@@ -79,6 +79,24 @@ export function tutorialStillNames(video: VideoDefinition | undefined): string[]
   return names;
 }
 
+/**
+ * The names of a video's stills: a tutorial's `still` steps, or a stage video's `stills`, in order, checked to
+ * be safe file-name ids and unique. Each becomes `<variant>-still-<name>.png` next to the video.
+ */
+export function videoStillNames(video: VideoDefinition | undefined): string[] {
+  if (!video?.enabled) return [];
+  if (video.mode === "tutorial") return tutorialStillNames(video);
+  const names: string[] = [];
+  for (const still of video.stills ?? []) {
+    assertSafeId(still.name, "video still name");
+    if (names.includes(still.name)) {
+      throw new StudioError("VIDEO_STILL_DUPLICATE", `Two video stills are named "${still.name}".`, "Give every still its own name.");
+    }
+    names.push(still.name);
+  }
+  return names;
+}
+
 /** The first video frame at or after `atMs`, or the last frame when the video ends first. */
 export function stillFrameIndex(atMs: number, fps: number, frameCount: number): number {
   let index = Math.max(0, Math.ceil((atMs * fps) / 1000) - 1);

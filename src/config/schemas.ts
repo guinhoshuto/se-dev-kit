@@ -192,13 +192,15 @@ const tutorialTargetSchema = z.union([
 
 const tutorialMoveDurationSchema = z.number().int().min(0).max(10_000).optional();
 
+const stillNameSchema = z.string().max(64).regex(SAFE_ID, "still names use lowercase letters, numbers, and single hyphens");
+
 const tutorialStepSchema = z.discriminatedUnion("action", [
   z.object({action: z.literal("wait"), ms: z.number().int().min(0).max(120_000)}).strict(),
   z.object({action: z.literal("caption"), text: z.string().max(240).nullable()}).strict(),
   z
     .object({
       action: z.literal("still"),
-      name: z.string().max(64).regex(SAFE_ID, "still names use lowercase letters, numbers, and single hyphens"),
+      name: stillNameSchema,
       camera: z.enum(["video", "full"]).optional()
     })
     .strict(),
@@ -278,7 +280,12 @@ const videoSchema = z
     audio: z.literal("none").optional(),
     mode: z.enum(["stage", "tutorial"]).optional(),
     tutorial: tutorialSchema.optional(),
-    keepFrames: z.boolean().optional()
+    keepFrames: z.boolean().optional(),
+    /** Stage videos: frames copied out as PNG before the frames are discarded; a poster is a still at 0 ms. */
+    stills: z
+      .array(z.object({name: stillNameSchema, atMs: z.number().int().min(0)}).strict())
+      .max(32)
+      .optional()
   })
   .strict();
 
@@ -352,6 +359,31 @@ export const recipeSchema = z
         path: ["outputs", "video", "crf"],
         message: "crf applies only to H.264 MP4; VP9 WebM keeps libvpx's default bitrate"
       });
+    }
+    if (video.stills && video.mode === "tutorial") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["outputs", "video", "stills"],
+        message: "a tutorial video takes its stills from still steps"
+      });
+    }
+    const stillNames = new Set<string>();
+    for (const [index, still] of (video.stills ?? []).entries()) {
+      if (stillNames.has(still.name)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["outputs", "video", "stills", index, "name"],
+          message: `two stills are named "${still.name}"`
+        });
+      }
+      stillNames.add(still.name);
+      if (still.atMs >= video.durationMs) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["outputs", "video", "stills", index, "atMs"],
+          message: `a still must be before the end of the video (durationMs ${video.durationMs})`
+        });
+      }
     }
     if (pixelFormat === "yuva420p" && codec !== "vp9") {
       context.addIssue({

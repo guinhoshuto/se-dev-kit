@@ -31,7 +31,7 @@ export interface VariantByteEstimate {
   frames: number;
   /** PNG frames plus frames.json; removed after a validated encode unless frames are kept. */
   frameBytes: number;
-  /** Still, thumbnail, tutorial stills, and encoded video. */
+  /** Still, thumbnail, video stills, and encoded video. */
   persistentBytes: number;
   totalBytes: number;
 }
@@ -87,8 +87,10 @@ export function estimateRenderBytes(input: ByteEstimateInput): RenderByteEstimat
   const video = input.outputs?.video?.enabled ? input.outputs.video : undefined;
   const frames = video ? input.framesPerVariant : 0;
   const frameRate = video?.mode === "tutorial" ? TUTORIAL_FRAME_MILLIBYTES_PER_PIXEL : PNG_MILLIBYTES_PER_PIXEL;
-  // A tutorial still is a copy of one frame, kept when the frames are discarded.
-  const tutorialStills = video?.mode === "tutorial" ? (video.tutorial?.steps ?? []).filter((step) => step.action === "still").length : 0;
+  // A video still (a tutorial still step, or a stage video's stills) is a copy of one frame, kept when the frames are discarded.
+  const videoStills = video?.mode === "tutorial"
+    ? (video.tutorial?.steps ?? []).filter((step) => step.action === "still").length
+    : video?.stills?.length ?? 0;
   const variants = input.variants.map((variant): VariantByteEstimate => {
     const stillBytes = screenshots ? pngBytes(variant.width, variant.height) : 0;
     const thumbnailBytes = screenshots && thumbnail ? pngBytes(thumbnail.width, thumbnail.height) : 0;
@@ -97,8 +99,8 @@ export function estimateRenderBytes(input: ByteEstimateInput): RenderByteEstimat
       ? Math.ceil((frames * variant.width * variant.height * VIDEO_MILLIBYTES_PER_PIXEL) / 1000)
       : 0;
     if (input.maximumVideoBytes !== undefined) videoBytes = Math.min(videoBytes, input.maximumVideoBytes);
-    const tutorialStillBytes = tutorialStills * pngBytes(variant.width, variant.height, frameRate);
-    const persistentBytes = stillBytes + thumbnailBytes + tutorialStillBytes + videoBytes;
+    const videoStillBytes = videoStills * pngBytes(variant.width, variant.height, frameRate);
+    const persistentBytes = stillBytes + thumbnailBytes + videoStillBytes + videoBytes;
     return {id: variant.id, frames, frameBytes, persistentBytes, totalBytes: frameBytes + persistentBytes};
   });
   const sheetItems = screenshots && input.outputs?.contactSheet ? variants.length : 0;

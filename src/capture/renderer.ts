@@ -33,7 +33,7 @@ import {
   SETTLE_DEADLINE_MS,
   type OpenSceneResult
 } from "../scenarios/runner.js";
-import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, tutorialSamples, tutorialStillNames} from "../tutorial/variant.js";
+import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, tutorialSamples, videoStillNames} from "../tutorial/variant.js";
 import type {TutorialTimeline} from "../tutorial/timeline.js";
 import {videoWidgetEvents} from "../tutorial/preview.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
@@ -188,7 +188,7 @@ interface ArtifactFonts {
   redrawMs: number;
 }
 
-/** A tutorial `still` step's PNG: the frame it copies and where it was written. */
+/** A still's PNG (a tutorial `still` step, or one of a stage video's `stills`): the frame it copies and where it was written. */
 interface VideoStill {
   name: string;
   camera: "video" | "full";
@@ -425,7 +425,7 @@ function targetPaths(
   const targets: string[] = [];
   const directory = resolve(outputRoot, recipe.id);
   const screenshots = recipe.outputs?.screenshots !== false;
-  const stills = tutorialStillNames(recipe.outputs?.video);
+  const stills = videoStillNames(recipe.outputs?.video);
   for (const variant of variants) {
     const format = variant.output.format ?? "png";
     if (screenshots) targets.push(resolve(directory, `${variant.id}.${format === "jpeg" ? "jpg" : "png"}`));
@@ -477,7 +477,7 @@ function renderWorkload(
   let targetsPerVariant = 0n;
   if (recipe.outputs?.screenshots !== false) targetsPerVariant += 1n;
   if (recipe.outputs?.thumbnails) targetsPerVariant += 1n;
-  if (video) targetsPerVariant += BigInt(frameCountPerVariant) + 1n + (includeVideo ? 1n : 0n) + BigInt(tutorialStillNames(video).length);
+  if (video) targetsPerVariant += BigInt(frameCountPerVariant) + 1n + (includeVideo ? 1n : 0n) + BigInt(videoStillNames(video).length);
   const totalFrames = variantCount * BigInt(frameCountPerVariant);
   const totalTargets = variantCount * targetsPerVariant
     + (recipe.outputs?.contactSheet ? 1n : 0n)
@@ -590,33 +590,54 @@ async function renderThumbnail(
   }
 }
 
-/** A sheet page: one cell per image, with its caption (HTML, already escaped) under it. */
-function sheetHtml(cells: {caption: string; src: string}[], columns: number, cellHeight: number): string {
+/** A sheet cell's image: its source and pixel size. */
+export interface SheetImage {
+  src: string;
+  width: number;
+  height: number;
+}
+
+/** A sheet image as a data URL with the pixel size its bytes declare (PNG or JPEG). */
+function sheetImage(bytes: Buffer, mime: "png" | "jpeg"): SheetImage {
+  const size = imageDimensions(bytes);
+  if (!size) throw new StudioError("SHEET_IMAGE_INVALID", "A contact sheet image is neither a PNG nor a JPEG with a readable size.");
+  return {src: `data:image/${mime};base64,${bytes.toString("base64")}`, ...size};
+}
+
+/**
+ * A sheet page: one cell per image, with its caption (HTML, already escaped) under it. Each image is scaled to
+ * fit its cell and drawn over a checkerboard of its own size, so transparent pixels show as the checkerboard and
+ * the rest of the cell stays plain.
+ */
+function sheetHtml(cells: (SheetImage & {caption: string})[], columns: number, cellHeight: number): string {
+  // The cell's border takes one pixel on each side.
+  const innerHeight = cellHeight - 2;
   const figures = cells.map((cell) =>
-    `<figure><div><img alt="" src="${cell.src}"></div><figcaption>${cell.caption}</figcaption></figure>`);
+    `<figure><div><img alt="" src="${cell.src}" style="width:min(100%,calc(${innerHeight}px * ${cell.width} / ${cell.height}))"></div><figcaption>${cell.caption}</figcaption></figure>`);
   return `<!doctype html><style>
       *{box-sizing:border-box}html,body{margin:0;background:#0b0d12;color:#e9edf5;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
       main{padding:32px;display:grid;grid-template-columns:repeat(${columns},1fr);gap:24px}
       figure{margin:0;min-width:0}figure>div{height:${cellHeight}px;display:grid;place-items:center;overflow:hidden;background:#171b23;border:1px solid #2c3340}
-      img{display:block;width:100%;height:100%;object-fit:contain}figcaption{padding:12px 2px 0;color:#aeb8c8;overflow-wrap:anywhere}
+      img{display:block;height:auto;background:repeating-conic-gradient(#2a2e36 0 25%,#1f2229 0 50%) 0 0/16px 16px}
+      figcaption{padding:12px 2px 0;color:#aeb8c8;overflow-wrap:anywhere}
       figcaption b{color:#fff}
     </style><main>${figures.join("")}</main>`;
 }
 
 /** The contact sheet page: one cell per screenshot, captioned with the screenshot's review code and its variant id. */
-export function contactSheetHtml(cells: {id: string; src: string}[], review: readonly ReviewItem[]): string {
+export function contactSheetHtml(cells: (SheetImage & {id: string})[], review: readonly ReviewItem[]): string {
   const codes = new Map(review.filter((item) => item.kind === "screenshot").map((item) => [item.variant, item.code]));
   return sheetHtml(
-    cells.map((cell) => ({src: cell.src, caption: `<b>${escapeHtml(codes.get(cell.id) ?? "")}</b> · ${escapeHtml(cell.id)}`})),
+    cells.map((cell) => ({src: cell.src, width: cell.width, height: cell.height, caption: `<b>${escapeHtml(codes.get(cell.id) ?? "")}</b> · ${escapeHtml(cell.id)}`})),
     Math.min(3, Math.max(1, cells.length)),
     326
   );
 }
 
 /** The `render --sheet-at` page: one cell per variant and instant, captioned with both. */
-export function sheetAtHtml(cells: {variant: string; timestampMs: number; src: string}[]): string {
+export function sheetAtHtml(cells: (SheetImage & {variant: string; timestampMs: number})[]): string {
   return sheetHtml(
-    cells.map((cell) => ({src: cell.src, caption: `<b>${escapeHtml(cell.variant)}</b> · ${cell.timestampMs} ms`})),
+    cells.map((cell) => ({src: cell.src, width: cell.width, height: cell.height, caption: `<b>${escapeHtml(cell.variant)}</b> · ${cell.timestampMs} ms`})),
     Math.min(2, Math.max(1, cells.length)),
     420
   );
@@ -652,11 +673,7 @@ async function renderContactSheet(
   temporaryFiles: TemporaryFiles
 ): Promise<void> {
   const cells = await Promise.all(
-    items.map(async (item) => {
-      const mime = item.path.endsWith(".jpg") ? "jpeg" : "png";
-      const data = (await readFile(item.path)).toString("base64");
-      return {id: item.id, src: `data:image/${mime};base64,${data}`};
-    })
+    items.map(async (item) => ({id: item.id, ...sheetImage(await readFile(item.path), item.path.endsWith(".jpg") ? "jpeg" : "png")}))
   );
   const rows = Math.max(1, Math.ceil(items.length / Math.min(3, Math.max(1, items.length))));
   await renderSheet(browser, contactSheetHtml(cells, review), 80 + rows * 390, outputRoot, target, temporaryFiles);
@@ -690,7 +707,7 @@ async function renderVideoFrames(options: {
   framesDirectory: string;
   framesManifest: string;
   frameFiles: string[];
-  /** One per tutorial `still` step: a copy of the first frame at or after the step, kept with the video. */
+  /** One per tutorial `still` step or stage video still: a copy of the first frame at or after it, kept with the video. */
   stills: VideoStill[];
   /** The exact frames.json content and text, so the manifest keeps them after the files are discarded. */
   sequence: JsonObject;
@@ -726,7 +743,8 @@ async function renderVideoFrames(options: {
   const frames: {file: string; timestampMs: number; sha256: string}[] = [];
   const timestamps = options.sampleAt ?? Array.from({length: frameCount}, (_, index) => Math.round((index * 1000) / options.video.fps));
   const samples: {timestampMs: number; png: Buffer}[] = [];
-  const stillPlan = (tutorial?.stills ?? []).map((still) => ({...still, frame: stillFrameIndex(still.atMs, options.video.fps, frameCount)}));
+  const stillTimes = tutorial?.stills ?? (options.video.stills ?? []).map((still) => ({...still, camera: "video" as const}));
+  const stillPlan = stillTimes.map((still) => ({...still, frame: stillFrameIndex(still.atMs, options.video.fps, frameCount)}));
   const stills: VideoStill[] = [];
   const fieldUpdates: FieldUpdateRecord[] = [];
   let currentTime = 0;
@@ -1431,7 +1449,7 @@ export async function renderSheetAt(
       ...(options.headed !== undefined ? {headed: options.headed} : {})
     });
     const browser = options.browser?.browser ?? launched!.browser;
-    const cells: {variant: string; timestampMs: number; src: string}[] = [];
+    const cells: (SheetImage & {variant: string; timestampMs: number})[] = [];
     const results: SheetAtResult["variants"] = [];
     for (const variant of variants) {
       const drawn = await renderVideoFrames({
@@ -1449,7 +1467,7 @@ export async function renderSheetAt(
       });
       if (drawn.discovery) throw new FontsMissingError(options.fonts!.missing());
       for (const sample of drawn.samples ?? []) {
-        cells.push({variant: variant.id, timestampMs: sample.timestampMs, src: `data:image/png;base64,${sample.png.toString("base64")}`});
+        cells.push({variant: variant.id, timestampMs: sample.timestampMs, ...sheetImage(sample.png, "png")});
       }
       results.push({
         id: variant.id,

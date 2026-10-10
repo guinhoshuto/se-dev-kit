@@ -17,6 +17,7 @@ How to make store-listing media (cover images, field images, demo and tutorial v
 
 ## Stills
 
+- A video's poster and stills: add `stills` to `outputs.video` of a stage video, as in `"stills": [{"name": "poster", "atMs": 0}, {"name": "mid-minimize", "atMs": 2267}]`. Each is `<variant>-still-<name>.png` next to the video, a copy of the first frame at or after its time, delivered by a Studio job too, and listed under its review code; the manifest entry's `stills` gives the frame it copies. A poster of a cut loop is the still at the loop's `originalOffsetMs` (in `<video>-loop.json`): render again with that time. A tutorial video takes its stills from `still` steps instead ([tutorial-video.md](tutorial-video.md)).
 - Take a still in the middle of an animation with `captureAtMs`, also when a widget timer starts the animation: the replay samples animations every 16 ms, as a browser frame does, so the still may trail the timer by up to 16 ms. A `captureAtMs` late in the timeline is slower, about 4.5 s per minute.
 
 ## Loops
