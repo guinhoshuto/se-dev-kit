@@ -1,5 +1,5 @@
 import {readFile} from "node:fs/promises";
-import type {VideoDefinition} from "../types.js";
+import type {VideoDefinition, VideoEncoding} from "../types.js";
 import {StudioError} from "../shared/errors.js";
 import {createAtomicTarget, type TemporaryFiles} from "./output.js";
 import {findExecutable, runExecutable, toolVersion} from "../validation/tools.js";
@@ -10,6 +10,9 @@ export interface MediaTooling {
   ffmpegVersion?: string;
   ffprobeVersion?: string;
 }
+
+/** x264's CRF when a recipe sets none, as in background-creator's delivery profile (decided 2026-10-09); x264's own is 23. */
+export const DEFAULT_H264_CRF = 16;
 
 export async function detectMediaTooling(options: {
   ffmpegPath?: string;
@@ -40,12 +43,13 @@ export async function encodeFrameSequence(options: {
   maximumBytes?: number;
   /** Receives the temporary video path so a failed render can remove it. */
   temporaryFiles?: TemporaryFiles;
-}): Promise<{status: "final" | "intermediate" | "unvalidated"; metadata?: unknown}> {
+}): Promise<{status: "final" | "intermediate" | "unvalidated"; metadata?: unknown; encoding?: VideoEncoding}> {
   if (!options.tooling.ffmpegPath) return {status: "intermediate"};
   const atomic = await createAtomicTarget(options.outputRoot, options.outputPath, options.temporaryFiles);
   const format = options.video.format ?? "mp4";
   const codec = options.video.codec ?? (format === "mp4" ? "h264" : "vp9");
   const codecName = codec === "h264" ? "libx264" : "libvpx-vp9";
+  const encoding: VideoEncoding = {codec, crf: codec === "h264" ? options.video.crf ?? DEFAULT_H264_CRF : null};
   const args = [
     options.force ? "-y" : "-n",
     "-framerate",
@@ -62,6 +66,7 @@ export async function encodeFrameSequence(options: {
     "scale=out_color_matrix=bt709,setparams=color_primaries=bt709:color_trc=bt709",
     "-c:v",
     codecName,
+    ...(encoding.crf === null ? [] : ["-crf", String(encoding.crf)]),
     "-pix_fmt",
     options.video.pixelFormat ?? "yuv420p"
   ];
@@ -145,5 +150,5 @@ export async function encodeFrameSequence(options: {
     );
   }
   await atomic.commit();
-  return options.tooling.ffprobePath ? {status: "final", metadata} : {status: "unvalidated"};
+  return options.tooling.ffprobePath ? {status: "final", metadata, encoding} : {status: "unvalidated", encoding};
 }

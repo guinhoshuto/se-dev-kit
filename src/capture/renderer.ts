@@ -10,7 +10,8 @@ import type {
   RecipeDefinition,
   ResolvedProject,
   SceneDefinition,
-  VideoDefinition
+  VideoDefinition,
+  VideoEncoding
 } from "../types.js";
 import {StudioError, toErrorMessage} from "../shared/errors.js";
 import {assertOutputTarget, assertSafeOutputRoot, ensureOutputDirectory} from "../shared/paths.js";
@@ -1088,6 +1089,7 @@ export async function renderRecipe(
       let videoFonts: ArtifactFonts | undefined;
       let videoFieldUpdate: JsonObject | undefined;
       let videoTutorialPlan: TutorialPlanRecord | undefined;
+      let videoEncoding: VideoEncoding | undefined;
       if (recipe.outputs?.screenshots !== false) {
         step("screenshot");
         const resolvedScene = await openScene(renderProject, server, activeBrowser, variant.scene, sceneFonts);
@@ -1182,6 +1184,7 @@ export async function renderRecipe(
             width: variant.scene.crop?.width ?? variant.output.width,
             height: variant.scene.crop?.height ?? variant.output.height
           };
+          videoEncoding = encoded.encoding;
           status = encoded.status === "unvalidated" ? "unvalidated" : status;
           artifacts.push(videoPath);
           if (shouldDiscardFrames(keepFrames, encoded.status)) {
@@ -1247,6 +1250,7 @@ export async function renderRecipe(
         ...(manifestFonts(videoFonts) ? {videoFonts: manifestFonts(videoFonts)!} : {}),
         ...(videoFieldUpdate ? {fieldUpdate: videoFieldUpdate} : {}),
         ...(videoTutorialPlan ? {tutorialPlan: videoTutorialPlan} : {}),
+        ...(videoEncoding ? {videoEncoding} : {}),
         ...(stillEntries.length > 0 ? {stills: stillEntries} : {}),
         parameters: JSON.parse(JSON.stringify({
           background: variant.background,

@@ -149,6 +149,7 @@ Recipes expand cross products of scenes, themes, backgrounds, viewports, and cam
       "format": "mp4",
       "codec": "h264",
       "pixelFormat": "yuv420p",
+      "crf": 16,
       "audio": "none",
       "keepFrames": false
     }
@@ -160,5 +161,7 @@ Recipes expand cross products of scenes, themes, backgrounds, viewports, and cam
 Run `render --dry-run` to inspect the exact variant names, output targets, and estimated disk use (`plan.estimate`, `plan.disk`) before starting a browser.
 
 `keepFrames` is optional and defaults to `false`: after a validated encode, the PNG frames and `frames.json` are deleted and the manifest keeps their list and hashes. Set it to `true` to keep them for inspection or post-processing (loop cuts, posters, stills, a higher-quality re-encode); the `--keep-frames` flag does the same for one run. Hosted jobs never publish frames. A deployment or CLI older than this key rejects it, because video settings are strict.
+
+`crf` is optional and applies to H.264 MP4 only: x264's constant rate factor, an integer from 0 (lossless) to 51, where lower is sharper and larger. It defaults to 16 (x264's own default, 23, was the Studio's until 2026-10-09). A recipe that sets `crf` for VP9 WebM is refused; WebM keeps libvpx's default bitrate. Each video's manifest entry records what it was encoded with in `videoEncoding`. A deployment or CLI older than this key rejects it.
 
 A recipe cannot request thumbnails or a contact sheet while disabling screenshots. Video container, codec, and alpha pixel-format combinations are checked when the recipe is loaded.

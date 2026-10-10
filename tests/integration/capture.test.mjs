@@ -223,6 +223,7 @@ test("video capture with keepFrames writes deterministic frames and produces an 
   assert.equal(entry.files.video.width, 320);
   assert.equal(entry.files.video.height, 240);
   assert.ok(entry.files.video.bytes > 0);
+  assert.deepEqual(entry.videoEncoding, {codec: "h264", crf: 16}, "a recipe without crf is encoded, and recorded, at CRF 16");
   assert.equal(entry.framesRetained, true);
   const frames = JSON.parse(await readFile(join(outputRoot, entry.files.framesManifest.file), "utf8"));
   assert.equal(frames.frames.length, 2);

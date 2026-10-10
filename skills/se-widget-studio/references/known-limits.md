@@ -11,7 +11,7 @@ What the Studio does not do yet, or does differently from StreamElements, and wh
 ## Video
 
 - **Store length.** An Etsy listing video lasts 5 to 15 seconds, at most 100 MB, between 2:1 and 1:2 (square included), and Etsy removes its audio (`presets/marketplaces/etsy-listing-2026-09.json`). The local Studio itself has no length cap: keep listing recipes within the preset, and set `marketplacePreset` so `validate` checks them.
-- **Loops are never byte-identical.** Compositing leaves 1 to 4 levels of rounding between the first frame and its return; cut a loop at the first frame within 6/255 of frame 0 on all but 0.01% of the pixels (see [marketing-assets.md](marketing-assets.md#loops); `scripts/cut-loop.mjs` cuts a Studio job's MP4 within a mean of 1/255).
+- **Loops are never byte-identical.** Compositing leaves 1 to 4 levels of rounding between the first frame and its return; cut a loop at the first frame within 6/255 of frame 0 on all but 0.01% of the pixels (see [marketing-assets.md](marketing-assets.md#loops); `scripts/cut-loop.mjs` cuts a Studio job's MP4 within a mean of 1/255, or at a known period with `--period`).
 - **Color.** Studio videos are converted with the BT.709 matrix and tagged BT.709 since 2026-09-29 (`a9904c8`); earlier ones are BT.601 without tags. A tool that re-encodes them lets FFmpeg read the tags instead of forcing `in_color_matrix`.
 - **Frames are deleted.** Studio jobs never publish PNG frames, whatever `keepFrames` says; frames for posters or stills come from the local CLI with `--keep-frames`, and `scripts/cut-loop.mjs` cuts a loop from the MP4 itself.
 

@@ -274,6 +274,7 @@ const videoSchema = z
     format: z.enum(["mp4", "webm"]).optional(),
     codec: z.enum(["h264", "vp9"]).optional(),
     pixelFormat: z.enum(["yuv420p", "yuva420p"]).optional(),
+    crf: z.number().int().min(0).max(51).optional(),
     audio: z.literal("none").optional(),
     mode: z.enum(["stage", "tutorial"]).optional(),
     tutorial: tutorialSchema.optional(),
@@ -343,6 +344,13 @@ export const recipeSchema = z
         code: z.ZodIssueCode.custom,
         path: ["outputs", "video", "mode"],
         message: "a tutorial script requires mode \"tutorial\""
+      });
+    }
+    if (video.crf !== undefined && codec !== "h264") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["outputs", "video", "crf"],
+        message: "crf applies only to H.264 MP4; VP9 WebM keeps libvpx's default bitrate"
       });
     }
     if (pixelFormat === "yuva420p" && codec !== "vp9") {
