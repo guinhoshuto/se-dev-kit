@@ -246,11 +246,19 @@ export interface VideoDefinition {
   format?: "mp4" | "webm";
   codec?: "h264" | "vp9";
   pixelFormat?: "yuv420p" | "yuva420p";
+  /** H.264 only: x264's constant rate factor, 0 to 51 (lower is better and larger). Defaults to 16. */
+  crf?: number;
   audio?: "none";
   mode?: "stage" | "tutorial";
   tutorial?: TutorialDefinition;
   /** Keep the PNG frames and frames.json after a validated encode. Defaults to false. */
   keepFrames?: boolean;
+}
+
+/** How a video was encoded, as the manifest records it. */
+export interface VideoEncoding extends JsonObject {
+  codec: "h264" | "vp9";
+  crf: number | null;
 }
 
 export interface RecipeDefinition {
@@ -428,6 +436,8 @@ export interface CaptureManifestEntry {
   videoFonts?: JsonObject;
   /** Tutorial videos only: what the editor replica measured in setup and the camera plan it made from it. */
   tutorialPlan?: JsonObject;
+  /** Encoded videos only: the codec and the CRF FFmpeg was given (null for VP9, which keeps libvpx's default bitrate). */
+  videoEncoding?: VideoEncoding;
   parameters: JsonObject;
   hashes: JsonObject;
   files?: JsonObject;
