@@ -1,6 +1,6 @@
 # Local CLI workflow
 
-The local CLI is for developing or debugging SE Widget Studio itself, and for a render that must keep its PNG frames (`--keep-frames`: loop cuts, posters, stills). Widget tests and media generation use the local Studio by default ([studio-workflow.md](studio-workflow.md)), which runs jobs with the same engine.
+The local CLI is for developing or debugging SE Widget Studio itself, and for a render that must keep all of its PNG frames (`--keep-frames`: a loop cut at frame 0, a re-encode). Posters and stills come from `outputs.video.stills` in a Studio job as well. Widget tests and media generation use the local Studio by default ([studio-workflow.md](studio-workflow.md)), which runs jobs with the same engine.
 
 The local CLI blocks Google Fonts and fails with `FONT_UNAVAILABLE`; render a widget that depends on them in the local Studio. Do not reintroduce `--allow-google-fonts`.
 

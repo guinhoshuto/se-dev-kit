@@ -151,7 +151,8 @@ Recipes expand cross products of scenes, themes, backgrounds, viewports, and cam
       "pixelFormat": "yuv420p",
       "crf": 16,
       "audio": "none",
-      "keepFrames": false
+      "keepFrames": false,
+      "stills": [{"name": "poster", "atMs": 0}, {"name": "mid-transition", "atMs": 2300}]
     }
   },
   "limit": 48
@@ -162,6 +163,8 @@ Run `render --dry-run` to inspect the exact variant names, output targets, and e
 
 `keepFrames` is optional and defaults to `false`: after a validated encode, the PNG frames and `frames.json` are deleted and the manifest keeps their list and hashes. Set it to `true` to keep them for inspection or post-processing (loop cuts, posters, stills, a higher-quality re-encode); the `--keep-frames` flag does the same for one run. Hosted jobs never publish frames. A deployment or CLI older than this key rejects it, because video settings are strict.
 
+`stills` is optional, for stage videos: up to 32 `{"name", "atMs"}` entries. Each becomes `<variant>-still-<name>.png` next to the video, a byte copy of the first frame at or after `atMs`, written while the frames exist, so it stays when they are discarded and a Studio job, which never publishes frames, delivers it too. A poster is a still at 0 ms. Names use lowercase letters, numbers, and single hyphens, and are unique; `atMs` is a whole number of milliseconds below `durationMs`. A tutorial video takes its stills from `still` steps and refuses `stills`. A deployment or CLI older than this key rejects it.
+
 `crf` is optional and applies to H.264 MP4 only: x264's constant rate factor, an integer from 0 (lossless) to 51, where lower is sharper and larger. It defaults to 16 (x264's own default, 23, was the Studio's until 2026-10-09). A recipe that sets `crf` for VP9 WebM is refused; WebM keeps libvpx's default bitrate. Each video's manifest entry records what it was encoded with in `videoEncoding`. A deployment or CLI older than this key rejects it.
 
-A recipe cannot request thumbnails or a contact sheet while disabling screenshots. Video container, codec, and alpha pixel-format combinations are checked when the recipe is loaded.
+The contact sheet shows each screenshot at its own proportions, scaled to fit its cell, over a checkerboard of its size: transparent pixels show as the checkerboard, and the cell around the image stays plain. `render --sheet-at` draws its sheet the same way. A recipe cannot request thumbnails or a contact sheet while disabling screenshots. Video container, codec, and alpha pixel-format combinations are checked when the recipe is loaded.

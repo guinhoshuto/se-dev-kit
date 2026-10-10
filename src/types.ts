@@ -253,6 +253,11 @@ export interface VideoDefinition {
   tutorial?: TutorialDefinition;
   /** Keep the PNG frames and frames.json after a validated encode. Defaults to false. */
   keepFrames?: boolean;
+  /**
+   * Stage videos only: each becomes `<variant>-still-<name>.png`, a copy of the first frame at or after `atMs`,
+   * written before the frames are discarded. A poster is a still at 0 ms.
+   */
+  stills?: {name: string; atMs: number}[];
 }
 
 /** How a video was encoded, as the manifest records it. */

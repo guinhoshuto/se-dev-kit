@@ -70,7 +70,7 @@ test("review codes number screenshots first, then videos, stills, thumbnails, an
 test("the contact sheet captions each cell with its screenshot's review code before the variant id", () => {
   const entries = [{id: "x<y", screenshot: "r/x.png", video: "r/x.mp4"}, {id: "tutorial-editor-midnight", screenshot: "r/t.png"}];
   const html = contactSheetHtml(
-    [{id: "tutorial-editor-midnight", src: "data:image/png;base64,AA=="}, {id: "x<y", src: "data:image/png;base64,AA=="}],
+    [{id: "tutorial-editor-midnight", src: "data:image/png;base64,AA==", width: 1920, height: 1080}, {id: "x<y", src: "data:image/png;base64,AA==", width: 320, height: 240}],
     reviewItems("LT", entries, "r/contact-sheet.png")
   );
   assert.match(html, /<figcaption><b>LT-02<\/b> · tutorial-editor-midnight<\/figcaption>/);
