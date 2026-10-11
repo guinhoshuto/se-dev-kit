@@ -505,6 +505,28 @@ async function runJob(flags) {
   console.log(JSON.stringify({status: job.status, projectId: access.projectId, jobId: job.id, output, artifacts, ...fontSummary}));
 }
 
+/**
+ * How many jobs of every project the Studio runs or holds. A local job runs inside the server process, so a session
+ * stops the local Studio it started only at 0. A Studio that is not running reports itself as such, never as an error
+ * that asks to start it.
+ */
+async function activeJobs(flags) {
+  const origin = normalizeOrigin(flags['--origin'] ?? process.env.SE_WIDGET_STUDIO_URL ?? DEFAULT_ORIGIN);
+  let response;
+  try {response = await fetch(new URL('/api/v1/active-jobs', origin), {redirect: 'manual', signal: AbortSignal.timeout(60_000)});} catch (error) {
+    const code = error?.cause?.code ?? error?.code;
+    if (isLoopback(origin) && code === 'ECONNREFUSED') return console.log(JSON.stringify({origin, running: false, activeJobs: 0}));
+    throw error;
+  }
+  const bytes = await boundedBody(response, JSON_LIMIT);
+  if (response.status === 404) fail(`The Studio at ${origin} does not report its active jobs (GET /api/v1/active-jobs returned HTTP 404): it runs a build from before that route. Leave it running: a job of another session may be running in it.`);
+  check(response.status === 200, `The Studio at ${origin} could not count its active jobs (HTTP ${response.status}).`);
+  let data;
+  try {data = JSON.parse(bytes.toString('utf8'));} catch {fail(`The Studio at ${origin} returned an invalid active job count.`);}
+  check(data?.schemaVersion === 1 && Number.isSafeInteger(data.activeJobs) && data.activeJobs >= 0, `The Studio at ${origin} returned an invalid active job count.`);
+  console.log(JSON.stringify({origin, running: true, activeJobs: data.activeJobs}));
+}
+
 function help() {
   console.log(`SE Widget Studio client
 
@@ -517,6 +539,7 @@ Usage:
   studio-client.mjs pull --access <private-json> --draft-out <new-json>
   studio-client.mjs push --access <private-json> --draft <json>
   studio-client.mjs run --access <private-json> --kind <test|render> --selection <id|all|scene:id|video:id> --output-dir <new-dir>
+  studio-client.mjs active [--origin <url>]
 
 The default origin is ${DEFAULT_ORIGIN}, the local Studio that \`npm run serve\` starts in the Studio checkout.
 Set SE_WIDGET_STUDIO_URL or pass --origin to select another Studio.
@@ -530,7 +553,9 @@ the widget source references it. --recipes keeps only those recipes and the scen
 leaves scenarios out.
 Catalog writes that flattened catalog, the JSON that import --catalog takes, without contacting any Studio.
 Import and push check sws-sample: references against the selected deployment before any change; a blocked import prints its diagnostics.
-Run refuses an existing output directory, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.`);
+Run refuses an existing output directory, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.
+Active prints how many jobs of every project the Studio runs, without a capability. A local job runs inside the server
+process: stop a local Studio you started only when it prints "activeJobs":0.`);
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -543,6 +568,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'pull') return pull(parseFlags(args, new Set(['--access', '--draft-out'])));
   if (command === 'push') return push(parseFlags(args, new Set(['--access', '--draft'])));
   if (command === 'run') return runJob(parseFlags(args, new Set(['--access', '--kind', '--selection', '--output-dir'])));
+  if (command === 'active') return activeJobs(parseFlags(args, new Set(['--origin'])));
   fail(`Unknown command ${command}. Run with --help.`);
 }
 

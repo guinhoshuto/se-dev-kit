@@ -30,7 +30,7 @@ Operate the shared Studio instead of building a widget-specific preview runtime.
 
 Use `scripts/studio-client.mjs`; it defaults to the local Studio, `http://127.0.0.1:4310`, and accepts `--origin` (or `SE_WIDGET_STUDIO_URL`) for another Studio.
 
-- The local Studio runs from the Studio checkout this skill belongs to (`<skill>/../..`), on `main`. If the client answers `No Studio is running at …`, start it as [references/studio-workflow.md](references/studio-workflow.md#start-the-local-studio) describes, then run the command again. Stop only a server you started, when the task ends.
+- The local Studio runs from the Studio checkout this skill belongs to (`<skill>/../..`), on `main`. If the client answers `No Studio is running at …`, start it as [references/studio-workflow.md](references/studio-workflow.md#start-the-local-studio) describes, then run the command again. Stop only a server you started, when the task ends, and only once `studio-client.mjs active` prints `"activeJobs":0`: every session uses the server on that port, and a local job runs inside it, so stopping it kills the jobs of other sessions too.
 - Project capabilities and signed URLs are secrets. Keep access bundles mode `0600`; never print, quote, attach, commit, or paste their contents.
 - A `blocked` import already created the project and prints its diagnostics. Fix them with `pull`/`push` on that project; never import again.
 - `pull` produces a capability-free draft with an opaque `etag`. Edit the complete `snapshot`, then `push`. A conflict must stop for reconciliation; never refetch and overwrite silently.

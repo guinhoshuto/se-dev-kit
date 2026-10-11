@@ -1,0 +1,109 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));",
+      "to": "return resolve(process.argv[1]) === fileURLToPath(import.meta.url);",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "prints its usage"
+    },
+    {
+      "file": "lib/jobs.ts",
+      "from": "return (error as {code?: unknown}).code === 'EPERM';",
+      "to": "return true;",
+      "test": "tests/web/projects.test.ts",
+      "name": "^a local job whose server process is gone fails"
+    },
+    {
+      "file": "lib/jobs.ts",
+      "from": "try {process.kill(pid, 0); return true;}",
+      "to": "try {process.kill(pid, 0); return false;}",
+      "test": "tests/web/projects.test.ts",
+      "name": "^a local job whose server process is gone fails"
+    },
+    {
+      "file": "lib/jobs.ts",
+      "from": "!process.env.VERCEL && (process.env.STUDIO_EXECUTION ?? 'local') === 'local'",
+      "to": "true",
+      "test": "tests/web/projects.test.ts",
+      "name": "^a hosted job records no server process"
+    },
+    {
+      "file": "lib/projects.ts",
+      "from": ",...(localExecution()?{server:{pid:process.pid}}:{})",
+      "to": "",
+      "test": "tests/web/projects.test.ts",
+      "name": "^a local job whose server process is gone fails"
+    },
+    {
+      "file": "lib/projects.ts",
+      "from": "TERMINAL.includes((await failOrphanedLocalJob(store,previous)).status)",
+      "to": "TERMINAL.includes(previous.status)",
+      "test": "tests/web/projects.test.ts",
+      "name": "^a local job whose server process is gone fails"
+    },
+    {
+      "file": "lib/projects.ts",
+      "from": "if(!job)throw new HttpError(404,'Job not found.');return failOrphanedLocalJob(store,job);",
+      "to": "if(!job)throw new HttpError(404,'Job not found.');return job;",
+      "test": "tests/web/projects.test.ts",
+      "name": "^polling or listing"
+    },
+    {
+      "file": "lib/projects.ts",
+      "from": ".map(j=>failOrphanedLocalJob(store,j))",
+      "to": ".map(async j=>j)",
+      "test": "tests/web/projects.test.ts",
+      "name": "^polling or listing"
+    },
+    {
+      "file": "lib/projects.ts",
+      "from": "if(!job||(!TERMINAL.includes(job.status)&&!orphanedLocalJob(job)))active++;",
+      "to": "active++;",
+      "test": "tests/web/api-contract.test.ts",
+      "name": "^the active job count"
+    },
+    {
+      "file": "lib/projects.ts",
+      "from": "&&!orphanedLocalJob(job)))active++;",
+      "to": "))active++;",
+      "test": "tests/web/projects.test.ts",
+      "name": "^a local job whose server process is gone fails"
+    },
+    {
+      "file": "lib/projects.ts",
+      "from": "if(!(lease.expires>Date.now()))continue;",
+      "to": "",
+      "test": "tests/web/api-contract.test.ts",
+      "name": "^the active job count"
+    },
+    {
+      "file": "app/api/v1/active-jobs/route.ts",
+      "from": "activeJobs:await activeJobs(getStore())",
+      "to": "activeJobs:0",
+      "test": "tests/web/api-contract.test.ts",
+      "name": "^the active job count"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "if (isLoopback(origin) && code === 'ECONNREFUSED') return",
+      "to": "if (false) return",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^active prints"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "if (response.status === 404) fail(`The Studio at ${origin} does not report",
+      "to": "if (false) fail(`The Studio at ${origin} does not report",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^active prints"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "if (command === 'active') return activeJobs(",
+      "to": "if (false) return activeJobs(",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^active prints"
+    }
+  ]
+}

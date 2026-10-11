@@ -12,7 +12,13 @@ The local Studio is the Studio web app, served by the checkout on loopback, with
 curl -s http://127.0.0.1:4310/api/v1/version
 ```
 
-- No answer: start it. In `$STUDIO_DIR`, on `main`, with Node 24 first in `PATH` (`/opt/homebrew/opt/node@24/bin` on the Studio's Mac), run `npm run build` when `.next/` is missing or older than the checkout's last commit, then `npm run serve` in the background, its output to `$STUDIO_DIR/.cache/studio-server.log`. Wait until the version route answers. You started it: stop that process (its PID, never a pattern) when the task ends.
+- No answer: start it. In `$STUDIO_DIR`, on `main`, with Node 24 first in `PATH` (`/opt/homebrew/opt/node@24/bin` on the Studio's Mac), run `npm run build` when `.next/` is missing or older than the checkout's last commit, then `npm run serve` in the background, its output to `$STUDIO_DIR/.cache/studio-server.log`. Wait until the version route answers. You started it: stop that process (its PID, never a pattern) when the task ends, and only once no job runs in it:
+
+  ```sh
+  node "$SKILL_DIR/scripts/studio-client.mjs" active    # {"origin":"http://127.0.0.1:4310","running":true,"activeJobs":0}
+  ```
+
+  Every session uses the server on the port, not only the one that started it, and a local job runs inside the server process: stopping it with a job of any project active kills that job. With `activeJobs` above 0, or an error, leave it running and say so in your answer. The count needs no capability and names no project or job.
 - An answer whose `commit` is not `git -C "$STUDIO_DIR" rev-parse HEAD`, or whose `dirty` is true: another session's server is running an older or uncommitted build. Do not stop it; tell the user, and work with it only if the change you need is already in that build.
 - `npm run build` writes about 330 MB to `.next/`. It and the server's jobs follow the machine rules: check free disk first, and render one job at a time.
 
@@ -134,7 +140,7 @@ These hold in the local Studio and in the hosted deployment:
 - A render recipe has at most 48 variants.
 - Interactive editor preview: captured assets and the `sws-sample:` images the previewed scene uses share one budget: 8 MiB in the local Studio, 3 MiB in the hosted deployment. The preview response carries them as base64 together with the stage background image and must stay under 10 MB locally (4 MB hosted), so plan for well under the budget, background included; an image the widget HTML or CSS references directly is embedded more than once. When a revision is too large to preview, preview a smaller revision; render jobs keep the 100 MB revision budget. Sample media never count toward the 128-file or 100 MB revision budget.
 - A saved revision pins each sample it uses to its SHA-256. If a Studio ever served different bytes for that reference, preview and jobs fail with `Sample media changed since this revision was saved` instead of rendering other pixels.
-- One active job per project, two at once in total.
+- One active job per project, two at once in total. A local job that a stopped server took along fails with `The local Studio stopped while this job ran, and the job stopped with it. Run the job again.` once the restarted Studio reads it (a poll, the job list, or a new job), and stops holding its project.
 - There is no account recovery, capability rotation, cancel endpoint, project listing, or delete endpoint.
 - Google Fonts (`fonts.googleapis.com` `/css` and `/css2`, `fonts.gstatic.com` `/s/`) are served from the Studio cache and fetched on demand, with no preparation. `/icon` and `text=` URLs are outside that list (see "Fonts"). All other runtime network access stays blocked and must be captured during preparation.
 

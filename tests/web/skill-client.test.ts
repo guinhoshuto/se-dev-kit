@@ -493,3 +493,25 @@ test('the client waits for a local job and accepts its artifacts within the loca
   assert.deepEqual(originLimits('http://127.0.0.1:4310'), {jobMs: 125 * 60_000, artifact: 512 * 1024 * 1024});
   assert.deepEqual(originLimits('https://se-dev-kit.vercel.app'), {jobMs: 10 * 60_000, artifact: 100 * 1024 * 1024});
 });
+
+test('active prints the active job count, reports a Studio that is not running, and refuses an old one', async () => {
+  const mode = {current: 'counted' as 'counted' | 'old'};
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    if (request.method === 'GET' && request.url === '/api/v1/active-jobs' && mode.current === 'counted') {
+      response.setHeader('Content-Type', 'application/json'); return response.end(JSON.stringify({schemaVersion: 1, activeJobs: 2}));
+    }
+    response.statusCode = 404; response.setHeader('Content-Type', 'text/html'); response.end('<!doctype html><title>404</title>');
+  });
+  await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const address = server.address(); assert.ok(address && typeof address === 'object');
+  const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    const {stdout} = await exec(process.execPath, [script, 'active', '--origin', origin]);
+    assert.deepEqual(JSON.parse(stdout), {origin, running: true, activeJobs: 2});
+    mode.current = 'old';
+    await assert.rejects(exec(process.execPath, [script, 'active', '--origin', origin]), failure(/does not report its active jobs \(GET \/api\/v1\/active-jobs returned HTTP 404\).*Leave it running/));
+  } finally {await new Promise(done => server.close(done));}
+  const {stdout} = await exec(process.execPath, [script, 'active', '--origin', origin]);
+  assert.deepEqual(JSON.parse(stdout), {origin, running: false, activeJobs: 0});
+});

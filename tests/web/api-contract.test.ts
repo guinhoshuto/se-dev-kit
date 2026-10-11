@@ -11,7 +11,9 @@ import {POST as restore} from '../../app/api/studio/projects/[id]/restore/route'
 import {GET as revision} from '../../app/api/studio/projects/[id]/revisions/[revisionId]/route';
 import {GET as download} from '../../app/api/studio/projects/[id]/artifacts/[artifactId]/route';
 import {GET as pollJob} from '../../app/api/studio/projects/[id]/jobs/[jobId]/route';
-import {LocalStore, writeJson} from '../../lib/storage';
+import {GET as activeJobs} from '../../app/api/v1/active-jobs/route';
+import {LocalStore, readJson, writeJson} from '../../lib/storage';
+import {createJob, getRevision} from '../../lib/projects';
 import type {ProjectView} from '../../lib/model';
 
 const source = {schemaVersion: 1, name: 'API fixture', widget: {html: '<main>Ready</main>', css: 'body{margin:0}', js: '', fields: {}}, themes: [{schemaVersion: 1, id: 'paper', name: 'Paper', fieldData: {title: 'Paper'}}]};
@@ -203,6 +205,28 @@ test('a job poll reads the project and that job record only, never the job list'
   assert.equal(missing.status, 404);
   assert.deepEqual(await missing.json(), {error: 'Job not found.'});
   assert.equal((await pollJob(request(path(project.projectId, '..'), 'GET', project.token), target(project.projectId, '..'))).status, 400);
+});
+
+test('the active job count needs no capability and says nothing but the count, of every project', async t => {
+  const store = await setup(t);
+  const count = async () => {
+    const response = await activeJobs(request('/api/v1/active-jobs'));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    return response.json();
+  };
+  assert.deepEqual(await count(), {schemaVersion: 1, activeJobs: 0});
+  const jobs = [];
+  for (const created of [await newProject(), await newProject()]) {
+    jobs.push(await createJob(store, created.projectId, await getRevision(store, created.projectId, created.revisionId), 'render', 'default'));
+  }
+  assert.deepEqual(await count(), {schemaVersion: 1, activeJobs: 2});
+  await writeJson(store, `projects/${jobs[0]!.projectId}/jobs/${jobs[0]!.id}.json`, {...jobs[0], status: 'completed'}, {overwrite: true});
+  assert.deepEqual(await count(), {schemaVersion: 1, activeJobs: 1});
+  // A lease past the job budget holds nothing, whatever its record says.
+  const ledger = await readJson<{leases: {id: string; projectId: string; expires: number}[]}>(store, 'usage/active.json');
+  await writeJson(store, 'usage/active.json', {leases: ledger!.leases.map(lease => ({...lease, expires: Date.now() - 1}))}, {overwrite: true});
+  assert.deepEqual(await count(), {schemaVersion: 1, activeJobs: 0});
 });
 
 test('creation keys and cross-origin guards reject writes without creating projects', async t => {
