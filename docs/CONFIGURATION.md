@@ -44,6 +44,8 @@ The widget's `themes/` folder and its root `data.json` ship with the widget, for
 themes: {glob: "themes/*.json", keepDefault: ["welcomeText", "maxMessages"]}
 ```
 
+That holds when applying a theme replaces the whole DATA tab. When buyers instead copy a theme's values into the field panel by hand, a key a theme leaves out keeps the value the previous look set, so a look key that any theme changes (a gradient switch, say) belongs in every shipped theme, never in `keepDefault`.
+
 A Studio-only theme, such as a look made for marketing media, belongs outside `themes/` (for example in `studio/themes/`, added to the glob) and may stay partial.
 
 ## Fixtures
