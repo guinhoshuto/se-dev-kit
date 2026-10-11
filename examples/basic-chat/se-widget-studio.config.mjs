@@ -25,7 +25,9 @@ export default defineConfig({
     username: "studio_channel"
   },
   themes: {
-    glob: "themes/*.json"
+    glob: "themes/*.json",
+    // Copy and behavior, not looks: every theme keeps their FIELDS defaults.
+    keepDefault: ["footerLabel", "welcomeText", "fontSize", "showTimestamps", "maxMessages"]
   },
   fixtures: {
     glob: "fixtures/*.json"

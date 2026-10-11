@@ -114,6 +114,34 @@ export async function loadThemes(root: string, pattern: string | undefined): Pro
   return items;
 }
 
+/** A theme file that ships with the widget for buyers to paste into the StreamElements DATA tab. */
+export interface ShippedTheme {
+  filePath: string;
+  /** The field values it sets: a whole theme's `fieldData`, or the bare object. Absent when the file is not a JSON object. */
+  fieldData?: JsonObject;
+}
+
+/**
+ * Reads every theme that ships with the widget, whatever the theme glob: the root `data.json` and each
+ * `themes/**\/*.data.json`, plus each other `themes/**\/<id>.json` that has no `<id>.data.json` beside it.
+ * A `<id>.json` beside its `<id>.data.json` is the Studio's view of the same look, and may stay partial.
+ */
+export async function loadShippedThemes(root: string): Promise<ShippedTheme[]> {
+  const files = await catalogFiles(root, "{data.json,themes/**/*.json}");
+  const shipped = new Set(files);
+  const items: ShippedTheme[] = [];
+  for (const filePath of files) {
+    if (shipped.has(filePath.replace(/\.json$/, ".data.json"))) continue;
+    const raw = await readJsonFile(filePath);
+    if (!isJsonObject(raw)) {
+      items.push({filePath});
+      continue;
+    }
+    items.push({filePath, fieldData: isJsonObject(raw.fieldData) ? raw.fieldData : raw});
+  }
+  return items;
+}
+
 export function loadFixtures(root: string, pattern?: string): Promise<CatalogItem<FixtureDefinition>[]> {
   return loadTypedCatalog(root, pattern, fixtureSchema as ZodType<FixtureDefinition>, "fixture");
 }

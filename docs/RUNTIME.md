@@ -35,7 +35,7 @@ The hosted editor preview always recreates the iframe when a field changes. The 
 
 ## Button fields
 
-A FIELDS entry with `"type": "button"` is a button in the StreamElements editor. Pressing it sends no field change: the widget receives `onEventReceived` with `detail.listener` `"event:test"` and `detail.event` `{field, value, listener: "widget-button"}`, where `field` is the field id and `value` its saved value (the FIELDS `value` when none is saved). Listen for it this way:
+A FIELDS entry with `"type": "button"` is a button in the StreamElements editor. Pressing it sends no field change: the widget receives `onEventReceived` with `detail.listener` `"event:test"` and `detail.event` `{field, value, listener: "widget-button"}`, where `field` is the field id and `value` its saved value (the FIELDS `value` when none is saved). Keep its `label` within 24 characters: on 2026-10-09 a 79-character label pushed the editor's field panel out of place, and `validate` reports a longer one as `FIELD_BUTTON_LABEL_LONG`, an error. Listen for it this way:
 
 ```js
 window.addEventListener("onEventReceived", (obj) => {

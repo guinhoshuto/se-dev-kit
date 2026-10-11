@@ -21,6 +21,7 @@ Operate the shared Studio instead of building a widget-specific preview runtime.
 - Inspect repository instructions and the working tree before reading or changing a consumer widget.
 - Treat production HTML, CSS, JavaScript, and FIELDS as source. Never rewrite or copy them merely to make Studio work.
 - Put Studio-only behavior in JSON catalogs or the consumer's existing versioned Studio configuration.
+- After a change to a widget's FIELDS or themes, run the CLI's `validate` on it (`node <checkout>/dist/cli/index.js validate <widget-root>`, the checkout being `<skill>/../..`), in Studio mode too, and fix every error before testing: a button label over 24 characters pushes the StreamElements editor's field panel out of place, and a theme that ships sets every FIELDS key ([Theme files](references/catalog-authoring.md#theme-files)).
 - Keep `fieldData` separate from background, viewport, output size, camera, crop, and device scale.
 - For test media, use the Studio's built-in sample images (`sws-sample:` references listed in [references/catalog-authoring.md](references/catalog-authoring.md#sample-media)) instead of generating, downloading, or uploading images, and never copy them into the widget. The client refuses them before any change when the selected Studio does not serve them; then stop and tell the user the Studio must be updated, rather than working around it.
 - Use only synthetic, public-safe channel data, identities, messages, and events. Never submit StreamElements tokens, cookies, webhooks, private messages, or viewer data.
@@ -45,4 +46,4 @@ Invoke a pinned CLI, never an unpinned remote package: the consumer's locked dep
 
 ## Completion evidence
 
-Report the Studio origin, the project ID, and the private access-file path, never its capability. For edits, report the new immutable revision. For jobs, report terminal status, exact local artifact paths, byte counts, hashes, and media validation. Keep Studio simulation separate from real StreamElements and OBS validation.
+Report the Studio origin, the project ID, and the private access-file path, never its capability. For edits, report the new immutable revision. For jobs, report terminal status, exact local artifact paths, byte counts, hashes, and media validation. Keep Studio simulation separate from real StreamElements and OBS validation. When a task also tests in real StreamElements: after a FIELDS change, check the overlay editor's field panel for overflow (its `scrollWidth` greater than its `clientWidth`); report every visual anomaly, even when the feature under test works, since a test with an anomaly did not pass; say so before each Save; and check a saved change by opening the editor in a new tab, never by forcing a navigation or reload of the tab you edited.

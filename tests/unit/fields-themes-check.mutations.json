@@ -1,0 +1,178 @@
+{
+  "mutations": [
+    {
+      "file": "src/validation/project.ts",
+      "from": "const BUTTON_LABEL_MAX = 24;",
+      "to": "const BUTTON_LABEL_MAX = 25;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "characterCount(field.label) > BUTTON_LABEL_MAX)",
+      "to": "characterCount(field.label) >= BUTTON_LABEL_MAX)",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "return [...graphemes.segment(text)].length;",
+      "to": "return text.length;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "return [...graphemes.segment(text)].length;",
+      "to": "return [...text].length;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": ".filter((field) => field.type === \"button\" && characterCount",
+      "to": ".filter((field) => characterCount",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "        \"error\",\n        \"FIELD_BUTTON_LABEL_LONG\",",
+      "to": "        \"warning\",\n        \"FIELD_BUTTON_LABEL_LONG\",",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "  diagnostics.push(...buttonLabelDiagnostics(project));\n",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "  diagnostics.push(...(await shippedThemeDiagnostics(project)));\n",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "  if (themes.length === 0) return [];\n",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "new Set(project.config.themes?.keepDefault ?? [])",
+      "to": "new Set<string>()",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "field.type !== \"button\" && !keepDefault.has(field.id)",
+      "to": "!keepDefault.has(field.id)",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "field.type !== \"button\" && !keepDefault.has(field.id)",
+      "to": "field.type !== \"button\"",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "      diagnostics.push(diagnostic(\"error\", \"SHIPPED_THEME_INVALID\", `Shipped theme ${label} is not a JSON object.`));\n",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "diagnostic(\"error\", \"SHIPPED_THEME_INVALID\", `Shipped theme ${label}",
+      "to": "diagnostic(\"warning\", \"SHIPPED_THEME_INVALID\", `Shipped theme ${label}",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "    if (missing.length > 0) {",
+      "to": "    if (missing.length > 1) {",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "          \"error\",\n          \"THEME_FIELDS_MISSING\",",
+      "to": "          \"warning\",\n          \"THEME_FIELDS_MISSING\",",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "FIELDS key${missing.length === 1 ? \"\" : \"s\"}",
+      "to": "FIELDS key${missing.length === 0 ? \"\" : \"s\"}",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "  if (diagnostics.length === 0) {",
+      "to": "  if (diagnostics.length < 0) {",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "shipped theme${themes.length === 1 ? \" sets\" : \"s set\"}",
+      "to": "shipped theme${themes.length === 2 ? \" sets\" : \"s set\"}",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "keepDefault.size > 0 ? \" outside themes.keepDefault\"",
+      "to": "keepDefault.size > 1 ? \" outside themes.keepDefault\"",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/config/catalog.ts",
+      "from": "\"{data.json,themes/**/*.json}\"",
+      "to": "\"themes/**/*.json\"",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/config/catalog.ts",
+      "from": "\"{data.json,themes/**/*.json}\"",
+      "to": "\"{data.json,themes/*.json}\"",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/config/catalog.ts",
+      "from": "    if (shipped.has(filePath.replace(/\\.json$/, \".data.json\"))) continue;\n",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/config/catalog.ts",
+      "from": "isJsonObject(raw.fieldData) ? raw.fieldData : raw",
+      "to": "raw",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": ", keepDefault: z.array(z.string().min(1)).optional()",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/config/init.ts",
+      "from": "- After any change to ${named.at(-1)} or \\`${themes}/\\`, run SE Widget Studio's \\`validate\\` and fix every error: a button label stays within 24 characters, and each shipped theme sets every key with the value that fits its look, unless \\`themes.keepDefault\\` in \\`${CONFIG_FILE_NAME}\\` lists the key because the widget behaves the same without it as with its FIELDS default.\n",
+      "to": "",
+      "test": "tests/unit/init.test.mjs"
+    },
+    {
+      "file": "src/config/init.ts",
+      "from": "- In real StreamElements, after a FIELDS change, check the overlay editor's field panel for overflow (its \\`scrollWidth\\` greater than its \\`clientWidth\\`), and report every visual anomaly you see, even when the feature under test works: a test with an anomaly did not pass.\n",
+      "to": "",
+      "test": "tests/unit/init.test.mjs"
+    },
+    {
+      "file": "src/config/init.ts",
+      "from": "- Say so before each Save in StreamElements. Check a saved change by opening the editor in a new tab, never by forcing a navigation or reload of the tab you edited.\n",
+      "to": "",
+      "test": "tests/unit/init.test.mjs"
+    },
+    {
+      "file": "src/config/init.ts",
+      "from": "within 24 characters",
+      "to": "within 25 characters",
+      "test": "tests/unit/init.test.mjs"
+    }
+  ]
+}
