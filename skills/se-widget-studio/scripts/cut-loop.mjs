@@ -28,7 +28,7 @@
  */
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {existsSync, readFileSync, writeFileSync} from 'node:fs';
+import {existsSync, readFileSync, realpathSync, writeFileSync} from 'node:fs';
 import {basename, dirname, extname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -191,7 +191,18 @@ export function cutLoop(input, {periodMs} = {}) {
     + `original t = loop t + ${(start / fps).toFixed(3)} s; crf ${ENCODING.crf}; record ${basename(recordPath)}`;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node resolves symlinks for the ESM entry point, so import.meta.url is the real path while argv[1] keeps the linked
+// path an installed skill is invoked through (~/.claude/skills/se-widget-studio). Compare real paths.
+function isEntryPoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   const inputs = process.argv.slice(2);
   if (!inputs.length || inputs.includes('--help')) {
     console.log('Usage: cut-loop.mjs [--period <ms>] <video.mp4> [...]\nCuts each Studio MP4 to an exact loop, written as <video>-loop.mp4 (tagged BT.709 H.264, CRF 16) with <video>-loop.json. --period cuts at the widget\'s known period, in milliseconds, instead of finding even cycles. Needs ffmpeg and ffprobe on PATH.');

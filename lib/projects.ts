@@ -7,6 +7,7 @@ import {prepareSnapshot} from './importer';
 import {copyFontLock,prewarmGoogleFonts,staticGoogleFontUrls,type PrewarmOptions} from './fonts';
 import {FONT_CACHE_EPOCH,GOOGLE_FONTS_UA} from '../src/runtime/google-fonts-url';
 import {hostedLimits,jobBudgetMs} from './limits';
+import {failOrphanedLocalJob,localExecution,orphanedLocalJob} from './jobs';
 
 /** Injection for tests: the prewarm upstream and memory. Production passes nothing. */
 export interface RevisionOptions {fonts?:Pick<PrewarmOptions,'memory'|'lookup'|'transport'|'now'|'budgetLimits'>}
@@ -30,12 +31,13 @@ export async function getRevision(store:ObjectStore,id:string,revisionId:string)
 /** One job record: a poll reads only this, never the project's whole job list. */
 export async function getJob(store:ObjectStore,id:string,jobId:string):Promise<Job> {
   const job=await readJson<Job>(store,`projects/${safeId(id)}/jobs/${safeId(jobId)}.json`);
-  if(!job)throw new HttpError(404,'Job not found.');return job;
+  if(!job)throw new HttpError(404,'Job not found.');return failOrphanedLocalJob(store,job);
 }
 export async function listJobs(store:ObjectStore,id:string):Promise<Job[]> {
   const keys=await store.list(`projects/${safeId(id)}/jobs/`);
   const jobs=await Promise.all(keys.filter(k=>k.endsWith('.json')).map(k=>readJson<Job>(store,k)));
-  return jobs.filter((j):j is Job=>j!==null).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  const settled=await Promise.all(jobs.filter((j):j is Job=>j!==null).map(j=>failOrphanedLocalJob(store,j)));
+  return settled.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
 }
 export async function projectView(store:ObjectStore,project:ProjectRecord,etag:string):Promise<ProjectView> {
   const [revision,keys,jobs]=await Promise.all([getRevision(store,project.id,project.revisionId),store.list(`projects/${project.id}/revisions/`),listJobs(store,project.id)]);
@@ -106,13 +108,28 @@ export async function restoreProject(store:ObjectStore,id:string,token:string,ex
   const next={...project,name:revision.snapshot.name,revisionId:revision.id,updatedAt:revision.createdAt};
   const result=await writeJson(store,projectKey(id),next,{ifMatch:etag});return projectView(store,next,result.etag);
 }
+type Lease={id:string;projectId:string;expires:number};
+const TERMINAL:Job['status'][]=['completed','failed','cancelled'];
+/**
+ * Jobs of every project that hold a lease: unexpired, neither finished nor orphaned by a local server that stopped.
+ * Stopping the local Studio kills them. It reads job records only, never a capability, and changes nothing.
+ */
+export async function activeJobs(store:ObjectStore):Promise<number> {
+  let active=0;
+  for(const lease of (await readJson<{leases:Lease[]}>(store,'usage/active.json'))?.leases??[]) {
+    if(!(lease.expires>Date.now()))continue;
+    const job=await readJson<Job>(store,`projects/${lease.projectId}/jobs/${lease.id}.json`);
+    if(!job||(!TERMINAL.includes(job.status)&&!orphanedLocalJob(job)))active++;
+  }
+  return active;
+}
 export async function createJob(store:ObjectStore,id:string,revision:Revision,kind:'test'|'render',selection:string):Promise<Job> {
   if(revision.status!=='ready'||!revision.prepared)throw new HttpError(422,'Resolve preparation errors before running a job.');
   const now=new Date().toISOString();
-  const job:Job={id:randomUUID(),projectId:id,revisionId:revision.id,kind,selection,status:'queued',createdAt:now,updatedAt:now,progress:'Queued',artifacts:[]};
-  type Lease={id:string;projectId:string;expires:number};
+  // A local job runs inside this server process (lib/jobs.ts, startJob): its pid tells a later server the job died with it.
+  const job:Job={id:randomUUID(),projectId:id,revisionId:revision.id,kind,selection,status:'queued',createdAt:now,updatedAt:now,progress:'Queued',artifacts:[],...(localExecution()?{server:{pid:process.pid}}:{})};
   const ledger=await readJson<{leases:Lease[]}>(store,'usage/active.json');const finished=new Set<string>();
-  for(const lease of ledger?.leases??[]) {const previous=await readJson<Job>(store,`projects/${lease.projectId}/jobs/${lease.id}.json`);if(previous&&['completed','failed','cancelled'].includes(previous.status))finished.add(lease.id);}
+  for(const lease of ledger?.leases??[]) {const previous=await readJson<Job>(store,`projects/${lease.projectId}/jobs/${lease.id}.json`);if(previous&&TERMINAL.includes((await failOrphanedLocalJob(store,previous)).status))finished.add(lease.id);}
   await mutateJson(store,'usage/active.json',{leases:[] as Lease[]},v=>{
     const leases=v.leases.filter(l=>l.expires>Date.now()&&!finished.has(l.id));
     if(leases.some(l=>l.projectId===id))throw new HttpError(409,'This project already has an active job.');

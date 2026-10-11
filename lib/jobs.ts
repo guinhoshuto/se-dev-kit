@@ -76,6 +76,29 @@ export function remainingJobTime(job: Pick<Job, 'createdAt'>, now = Date.now()):
   if (!Number.isFinite(remaining) || remaining < 30_000) throw new Error('This job has less than 30 seconds left in its execution budget. Create a new job.');
   return remaining;
 }
+/** Whether this process runs its jobs itself: executionMode() without its checks, for code that only records. */
+export function localExecution(): boolean {
+  return !process.env.VERCEL && (process.env.STUDIO_EXECUTION ?? 'local') === 'local';
+}
+/** Whether a process with this pid exists; EPERM means it does, under another user. */
+export function processAlive(pid: number): boolean {
+  try {process.kill(pid, 0); return true;} catch (error) {return (error as {code?: unknown}).code === 'EPERM';}
+}
+/**
+ * A local job runs inside the server process that accepted it (startJob), so a server that stops takes its jobs along
+ * and nothing marks them failed: the record stays queued or running, and its lease holds the project for the whole
+ * job budget. The job is orphaned once that process is gone. A live pid counts as the server, even when another
+ * process reuses it: the lease then expires as before.
+ */
+export function orphanedLocalJob(job: Job): boolean {
+  const pid = job.server?.pid;
+  return !terminalStatuses.has(job.status) && Number.isSafeInteger(pid) && pid! > 0 && !processAlive(pid!);
+}
+export const ORPHANED_JOB_ERROR = 'The local Studio stopped while this job ran, and the job stopped with it. Run the job again.';
+/** Marks an orphaned local job failed, which releases its lease (lib/projects.ts, createJob). Any other job comes back as it was. */
+export async function failOrphanedLocalJob(store: ObjectStore, job: Job): Promise<Job> {
+  return orphanedLocalJob(job) ? patchJob(store, job, {status: 'failed', progress: 'Job failed.', error: ORPHANED_JOB_ERROR}) : job;
+}
 export function executionMode(): 'local' | 'vercel' {
   const mode = process.env.STUDIO_EXECUTION ?? (process.env.VERCEL ? 'vercel' : 'local');
   if (mode !== 'local' && mode !== 'vercel') throw new Error('STUDIO_EXECUTION must be local or vercel.');

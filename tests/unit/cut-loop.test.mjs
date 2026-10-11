@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {execFile, spawn} from "node:child_process";
 import {createHash} from "node:crypto";
-import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {mkdtemp, readFile, rm, stat, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
@@ -13,6 +13,7 @@ import {detectMediaTooling} from "../../dist/capture/media.js";
 
 const execFileAsync = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL("../../skills/se-widget-studio/scripts/cut-loop.mjs", import.meta.url));
+const SKILL = fileURLToPath(new URL("../../skills/se-widget-studio", import.meta.url));
 // Detected before the first test: a test declared after a top-level await is lost under --test-force-exit.
 const tooling = await detectMediaTooling();
 
@@ -22,6 +23,22 @@ function motion(count, changes, length = 5) {
   for (const onset of changes) for (let index = onset; index < onset + length && index < count; index++) moved[index] = true;
   return moved;
 }
+
+/** The script as an installed skill runs it: through a link to the skill folder, as ~/.claude/skills/se-widget-studio is. */
+async function linkedScript(root) {
+  await symlink(SKILL, join(root, "se-widget-studio"), "dir");
+  return join(root, "se-widget-studio", "scripts", "cut-loop.mjs");
+}
+
+test("cut-loop run through a link to the skill folder prints its usage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-cut-loop-link-"));
+  try {
+    const {stdout} = await execFileAsync(process.execPath, [await linkedScript(root), "--help"]);
+    assert.match(stdout, /^Usage: cut-loop\.mjs \[--period <ms>\] <video\.mp4> \[\.\.\.\]\n/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
 
 test("findLoop ends the loop where the last change settles and starts it whole cycles earlier, inside the first rest", () => {
   assert.deepEqual(findLoop(motion(100, [30, 50, 70])), {start: 15, rest: 75, cycle: 20, changes: [30, 50, 70]});
@@ -136,6 +153,20 @@ test("cut-loop writes the loop as a tagged BT.709 MP4 whose first frame is the p
     await rm(output);
     assert.equal(cutLoop(input), "FAILED listing.mp4: listing-loop.json already exists; move it away first");
     assert.equal(await readFile(join(root, "listing-loop.json"), "utf8"), `${JSON.stringify(record, null, 2)}\n`);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("cut-loop run through a link to the skill folder writes the loop", media, async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-cut-loop-link-"));
+  try {
+    const input = join(root, "listing.mp4");
+    await grayVideo(input, changeLevels(100, 40, [[30, 120], [50, 200], [70, 40]]));
+    const {stdout} = await execFileAsync(process.execPath, [await linkedScript(root), input]);
+    assert.match(stdout, /^LOOP listing\.mp4: frames 15\.\.74 \(60 frames, 2\.000 s, 3 cycles of 20\) -> listing-loop\.mp4;/);
+    assert.ok((await stat(join(root, "listing-loop.mp4"))).size > 0);
+    assert.equal(JSON.parse(await readFile(join(root, "listing-loop.json"), "utf8")).loop.frames, 60);
   } finally {
     await rm(root, {recursive: true, force: true});
   }
