@@ -47,7 +47,7 @@ export const configSchema = z
       })
       .strict(),
     channel: jsonObjectSchema.optional(),
-    themes: z.object({glob: z.string().min(1)}).strict().optional(),
+    themes: z.object({glob: z.string().min(1), keepDefault: z.array(z.string().min(1)).optional()}).strict().optional(),
     fixtures: z.object({glob: z.string().min(1)}).strict().optional(),
     scenarios: z.object({glob: z.string().min(1)}).strict().optional(),
     scenes: z.object({glob: z.string().min(1)}).strict().optional(),

@@ -36,6 +36,16 @@ A theme may be a plain object of partial field values, or a wrapped versioned ob
 
 Plain theme objects derive their id and name from the filename. Theme keys outside the current FIELDS schema produce a warning but are preserved.
 
+### Shipped themes
+
+The widget's `themes/` folder and its root `data.json` ship with the widget, for buyers to paste into the StreamElements DATA tab, whatever the theme glob loads. `validate` treats as shipped the root `data.json`, each `themes/**/<id>.data.json`, and each other `themes/**/<id>.json` without a `<id>.data.json` beside it; beside one, the `.json` is the Studio's view of the same look and may stay partial. A shipped theme sets every FIELDS key except buttons, so a key added to FIELDS gets a value chosen for each look, and `validate` reports each key one leaves out as `THEME_FIELDS_MISSING`, an error. List in `themes.keepDefault` the keys that may stay out because the widget behaves the same without them as with their FIELDS default:
+
+```js
+themes: {glob: "themes/*.json", keepDefault: ["welcomeText", "maxMessages"]}
+```
+
+A Studio-only theme, such as a look made for marketing media, belongs outside `themes/` (for example in `studio/themes/`, added to the glob) and may stay partial.
+
 ## Fixtures
 
 Fixtures contain synthetic context and a deterministic event timeline. Event payloads are passed through without reshaping:

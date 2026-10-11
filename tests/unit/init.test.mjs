@@ -80,7 +80,10 @@ const INDEX_LAYOUT_AGENTS = `# Agent instructions
 
 - Test, preview, capture, and render this widget with SE Widget Studio (the \`se-widget-studio\` skill or CLI), never with a sandbox, preview page, or runtime of your own.
 - \`index.html\`, \`style.css\`, \`script.js\`, and \`fields.json\` are the production source, pasted as they are into the StreamElements Custom Widget tabs: never rewrite or copy them to make the Studio work.
-- Themes are field values, not code: \`themes/<id>.json\` holds partial \`fieldData\`, and \`themes/<id>.data.json\` a DATA-tab payload.
+- Themes are field values, not code, and \`themes/\` ships with the widget for buyers to paste into the DATA tab: \`themes/<id>.data.json\` is a whole DATA-tab payload, and \`themes/<id>.json\` is the Studio theme of the same look, partial when a \`.data.json\` sits beside it and the shipped theme when none does.
+- After any change to \`fields.json\` or \`themes/\`, run SE Widget Studio's \`validate\` and fix every error: a button label stays within 24 characters, and each shipped theme sets every key with the value that fits its look, unless \`themes.keepDefault\` in \`se-widget-studio.config.mjs\` lists the key because the widget behaves the same without it as with its FIELDS default.
+- In real StreamElements, after a FIELDS change, check the overlay editor's field panel for overflow (its \`scrollWidth\` greater than its \`clientWidth\`), and report every visual anomaly you see, even when the feature under test works: a test with an anomaly did not pass.
+- Say so before each Save in StreamElements. Check a saved change by opening the editor in a new tab, never by forcing a navigation or reload of the tab you edited.
 - Studio output goes to \`.se-widget-studio/output/\`; it is regenerable, so keep it out of git.
 `;
 const GITIGNORE = ".DS_Store\n.se-widget-studio/\n.claude/settings.local.json\n";
@@ -165,7 +168,11 @@ test("init --agents keeps an existing config without force and names its widget 
   assert.equal(await readFile(join(root, CONFIG_FILE_NAME), "utf8"), config);
   await assertMissing(join(widgetRoot, "themes"));
   assert.match(agents, /^- `widget-source\/index\.html`, `widget-source\/style\.css`, `widget-source\/script\.js`, and `widget-source\/fields\.json` are/m);
-  assert.match(agents, /`widget-source\/themes\/<id>\.json` holds partial/);
+  assert.match(agents, /`widget-source\/themes\/<id>\.json` is the Studio theme of the same look/);
+  assert.match(
+    agents,
+    /^- After any change to `widget-source\/fields\.json` or `widget-source\/themes\/`, run .+ unless `themes\.keepDefault` in `se-widget-studio\.config\.mjs` lists the key/m
+  );
   assert.match(agents, /^- Studio output goes to `widget-source\/renders\/`;/m);
 
   const replaced = await initializeWidget(root, {agents: true, force: true});

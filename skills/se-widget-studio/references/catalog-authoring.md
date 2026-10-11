@@ -27,10 +27,12 @@ A tutorial `setField` or a scenario `updateFields` reloads the widget with the n
 
 ## Theme files
 
-A widget repository keeps each theme in `themes/` as a pair:
+Everything in a widget's `themes/` folder ships with it, for buyers to paste into the StreamElements DATA tab. A widget repository keeps each look there as a pair:
 
-- `themes/<id>.json` is the Studio theme: partial `fieldData`, only the fields the theme changes. Write it bare (`{"accent": "#a78bfa"}`, the file name gives the ID) or whole (`schemaVersion`, `id`, `name`, `fieldData`).
-- `themes/<id>.data.json` (optional) is the StreamElements DATA tab payload for the same look, with every field filled in. It ships with the widget for buyers to paste; the Studio does not load it.
+- `themes/<id>.data.json` (optional) is the DATA tab payload, with every field filled in. The Studio does not load it.
+- `themes/<id>.json` is the Studio theme. Write it bare (`{"accent": "#a78bfa"}`, the file name gives the ID) or whole (`schemaVersion`, `id`, `name`, `fieldData`). Beside a `.data.json` it may stay partial, only the fields the look changes; without one, it is itself the shipped theme.
+
+A shipped theme (each `.data.json`, each `.json` without one, and a root `data.json`) sets every FIELDS key except buttons, so a key added to FIELDS gets a value chosen for each look: otherwise `validate` fails with `THEME_FIELDS_MISSING`. List in the config's `themes.keepDefault` only the keys the widget handles the same when they are missing as with their FIELDS default; never add a key there to silence the error. A Studio-only look, such as one made for marketing media, goes outside `themes/` (for example in `studio/themes/`, added to the glob) and may stay partial.
 
 `init` writes the theme glob `themes/!(*.data).json`, which loads the first file and skips the second. A widget that ships only `themes/*.data.json` already follows this format: never rename, convert, or rewrite those files. To try one of those looks in the Studio, add `themes/<id>.json` with the partial field data that gives it, or point the config's theme glob at `themes/*.data.json` (the IDs then end in `-data`). A root `data.json`, when present, is the DATA payload of the widget's default look and ships the same way.
 

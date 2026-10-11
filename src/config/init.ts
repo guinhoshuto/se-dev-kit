@@ -81,7 +81,10 @@ function agentInstructions(root: string, widgetRoot: string, files: ResolvedWidg
 
 - Test, preview, capture, and render this widget with SE Widget Studio (the \`se-widget-studio\` skill or CLI), never with a sandbox, preview page, or runtime of your own.
 - ${named.slice(0, -1).join(", ")}, and ${named.at(-1)} are the production source, pasted as they are into the StreamElements Custom Widget tabs: never rewrite or copy them to make the Studio work.
-- Themes are field values, not code: \`${themes}/<id>.json\` holds partial \`fieldData\`, and \`${themes}/<id>.data.json\` a DATA-tab payload.
+- Themes are field values, not code, and \`${themes}/\` ships with the widget for buyers to paste into the DATA tab: \`${themes}/<id>.data.json\` is a whole DATA-tab payload, and \`${themes}/<id>.json\` is the Studio theme of the same look, partial when a \`.data.json\` sits beside it and the shipped theme when none does.
+- After any change to ${named.at(-1)} or \`${themes}/\`, run SE Widget Studio's \`validate\` and fix every error: a button label stays within 24 characters, and each shipped theme sets every key with the value that fits its look, unless \`themes.keepDefault\` in \`${CONFIG_FILE_NAME}\` lists the key because the widget behaves the same without it as with its FIELDS default.
+- In real StreamElements, after a FIELDS change, check the overlay editor's field panel for overflow (its \`scrollWidth\` greater than its \`clientWidth\`), and report every visual anomaly you see, even when the feature under test works: a test with an anomaly did not pass.
+- Say so before each Save in StreamElements. Check a saved change by opening the editor in a new tab, never by forcing a navigation or reload of the tab you edited.
 - Studio output goes to \`${toPortableRelative(root, outputRoot)}/\`; it is regenerable, so keep it out of git.
 `;
 }

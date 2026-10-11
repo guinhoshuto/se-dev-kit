@@ -1,6 +1,8 @@
 import {readFile} from "node:fs/promises";
+import {relative, sep} from "node:path";
 import vm from "node:vm";
 import type {Diagnostic, ResolvedProject} from "../types.js";
+import {loadShippedThemes, type ShippedTheme} from "../config/catalog.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
 import {expandRecipe} from "../capture/matrix.js";
 import {findSensitiveTestData} from "./privacy.js";
@@ -23,6 +25,15 @@ const RECOGNIZED_FIELD_TYPES = new Set([
   "hidden",
   "button"
 ]);
+
+// A 79-character button label pushed the StreamElements editor's field panel out of place (WID-10).
+const BUTTON_LABEL_MAX = 24;
+const graphemes = new Intl.Segmenter("en", {granularity: "grapheme"});
+
+/** Characters as a reader counts them: an emoji, even one built from several code points, is one. */
+function characterCount(text: string): number {
+  return [...graphemes.segment(text)].length;
+}
 
 function diagnostic(
   status: Diagnostic["status"],
@@ -85,6 +96,9 @@ export async function validateProject(project: ResolvedProject): Promise<Diagnos
       );
     }
   }
+
+  diagnostics.push(...buttonLabelDiagnostics(project));
+  diagnostics.push(...(await shippedThemeDiagnostics(project)));
 
   const sensitiveFindings = findSensitiveTestData(project);
   if (sensitiveFindings.length > 0) {
@@ -196,6 +210,65 @@ export async function validateProject(project: ResolvedProject): Promise<Diagnos
       "Local validation covers the Studio's essential simulation only; it does not prove undocumented StreamElements or OBS behavior."
     )
   );
+  return diagnostics;
+}
+
+function buttonLabelDiagnostics(project: ResolvedProject): Diagnostic[] {
+  return project.fields
+    .filter((field) => field.type === "button" && characterCount(field.label) > BUTTON_LABEL_MAX)
+    .map((field) =>
+      diagnostic(
+        "error",
+        "FIELD_BUTTON_LABEL_LONG",
+        `Button field "${field.id}" has a ${characterCount(field.label)}-character label; a button label over ${BUTTON_LABEL_MAX} characters pushes the StreamElements editor's field panel out of place.`,
+        `Shorten it to ${BUTTON_LABEL_MAX} characters or fewer, and explain the button in another field or the README.`
+      )
+    );
+}
+
+/**
+ * A theme that ships is pasted into the DATA tab as it is, so it sets every FIELDS key but buttons: a key
+ * added to FIELDS needs a value chosen for each look. `themes.keepDefault` lists the keys that may stay out.
+ */
+async function shippedThemeDiagnostics(project: ResolvedProject): Promise<Diagnostic[]> {
+  let themes: ShippedTheme[];
+  try {
+    themes = await loadShippedThemes(project.widgetRoot);
+  } catch (error) {
+    return [diagnostic("error", "SHIPPED_THEME_INVALID", error instanceof Error ? error.message : String(error))];
+  }
+  if (themes.length === 0) return [];
+  const keepDefault = new Set(project.config.themes?.keepDefault ?? []);
+  const keys = project.fields.filter((field) => field.type !== "button" && !keepDefault.has(field.id)).map((field) => field.id);
+  const diagnostics: Diagnostic[] = [];
+  for (const theme of themes) {
+    const label = relative(project.widgetRoot, theme.filePath).split(sep).join("/");
+    const fieldData = theme.fieldData;
+    if (!fieldData) {
+      diagnostics.push(diagnostic("error", "SHIPPED_THEME_INVALID", `Shipped theme ${label} is not a JSON object.`));
+      continue;
+    }
+    const missing = keys.filter((key) => !Object.hasOwn(fieldData, key));
+    if (missing.length > 0) {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "THEME_FIELDS_MISSING",
+          `Shipped theme ${label} does not set ${missing.length} FIELDS key${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}.`,
+          "Give each key the value that fits this look, or list it in themes.keepDefault in the Studio configuration when the widget behaves the same without it as with its FIELDS default."
+        )
+      );
+    }
+  }
+  if (diagnostics.length === 0) {
+    diagnostics.push(
+      diagnostic(
+        "ok",
+        "SHIPPED_THEMES",
+        `${themes.length} shipped theme${themes.length === 1 ? " sets" : "s set"} every FIELDS key${keepDefault.size > 0 ? " outside themes.keepDefault" : ""}.`
+      )
+    );
+  }
   return diagnostics;
 }
 

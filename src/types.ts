@@ -41,7 +41,14 @@ export interface StudioConfig {
     adapter?: string;
   };
   channel?: JsonObject & {username?: string};
-  themes?: {glob: string};
+  themes?: {
+    glob: string;
+    /**
+     * FIELDS keys a shipped theme may leave out, because the widget behaves the same without the key as with
+     * its FIELDS default. `validate` reports every other key a shipped theme does not set.
+     */
+    keepDefault?: string[];
+  };
   fixtures?: {glob: string};
   scenarios?: {glob: string};
   scenes?: {glob: string};
