@@ -464,12 +464,36 @@ export function fontIssues(name, bytes) {
   } catch {return [];}
 }
 
+/**
+ * Before a job on a local Studio, waits while the machine check every repo shares says to wait (another session's
+ * render or held render slot, the game, memory, swap, disk), up to 4 hours like the local CLI, and prints why. The
+ * job's own worker waits 30 minutes at most, inside its two-hour life, so a long wait belongs here, before the job
+ * exists. It never takes the render slot: the job takes it, or runs under the hold of a Studio started with
+ * RENDER_SLOT_HELD=<hold pid>, which this command then needs too, or the check counts that hold as another
+ * session's. A remote Studio renders on another machine. A skill copied without the checkout's engine build, or a
+ * machine without the check, submits at once and leaves the render slot to the job.
+ * SE_WIDGET_STUDIO_MACHINE_POLL_MS shortens the 20 s between checks for the tests.
+ */
+export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, check} = {}) {
+  if (!isLoopback(origin)) return;
+  let machine;
+  try {machine = await import(pathToFileURL(resolve(engineDist, 'shared/machine-check.js')).href);} catch {return;}
+  const pollMs = Number(process.env.SE_WIDGET_STUDIO_MACHINE_POLL_MS);
+  const say = message => message.replace(/^Waiting for the machine: /, 'Waiting for the machine before submitting: ').replace(/^The machine is free; rendering\.$/, 'The machine is free; submitting the job.');
+  try {
+    await machine.waitForMachine({...(check ? {check} : {}), ...(Number.isSafeInteger(pollMs) && pollMs >= 50 && pollMs <= 20_000 ? {pollMs} : {}), log: message => process.stderr.write(`[se-widget-studio] ${say(message)}\n`)});
+  } catch (error) {
+    fail([error instanceof Error ? error.message : String(error), error?.hint, 'No job was submitted.'].filter(Boolean).join(' '));
+  }
+}
+
 async function runJob(flags) {
   const access = await readPrivate(required(flags, '--access'));
   const kind = required(flags, '--kind'); const selection = required(flags, '--selection');
   check(['test', 'render'].includes(kind), '--kind must be test or render.');
   check(ID.test(selection) || /^(scene|video):[a-zA-Z0-9_-]{1,100}$/.test(selection), '--selection must be all, a catalog ID, scene:<id>, or video:<id>.');
   const output = await ensureOutputAbsent(required(flags, '--output-dir'));
+  await waitBeforeSubmitting(access.origin);
   const created = expect(await api(access.origin, `/api/studio/projects/${access.projectId}/jobs`, {method: 'POST', token: access.token, body: {kind, selection}}), [202], 'Job submission');
   check(ID.test(created.id), 'Job submission returned an invalid ID.');
   let job = created; let lastProgress = '';

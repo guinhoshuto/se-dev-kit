@@ -218,11 +218,13 @@ function discoveredFonts(result: WorkerResult): string[] {
 /**
  * STUDIO_EXECUTION=local tells the worker to take the render slot, ask the machine check, keep the disk
  * guard, and skip the hosted limits. RENDER_SLOT_DIR and MACHINE_CHECK pass through, so a test's own
- * slot and machine check reach its workers (scripts/run-tests.mjs gives every suite both).
+ * slot and machine check reach its workers (scripts/run-tests.mjs gives every suite both). So does
+ * RENDER_SLOT_HELD: a Studio started under a held slot (`render-slot.ts hold`, then the server with
+ * RENDER_SLOT_HELD=<hold pid>) runs its jobs under that hold, instead of queueing them behind it.
  */
 export function localWorkerEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {PATH: process.env.PATH, TMPDIR: tmpdir(), NODE_ENV: 'production', STUDIO_EXECUTION: 'local'};
-  for (const name of ['SE_WIDGET_STUDIO_BROWSER', 'STUDIO_FFMPEG_PATH', 'STUDIO_FFPROBE_PATH', 'RENDER_SLOT_DIR', 'MACHINE_CHECK']) if (process.env[name]) environment[name] = process.env[name];
+  for (const name of ['SE_WIDGET_STUDIO_BROWSER', 'STUDIO_FFMPEG_PATH', 'STUDIO_FFPROBE_PATH', 'RENDER_SLOT_DIR', 'RENDER_SLOT_HELD', 'MACHINE_CHECK']) if (process.env[name]) environment[name] = process.env[name];
   return environment;
 }
 /** A worker's stdout line {"progress": "…"}, such as why it waits for the machine; anything else is no progress. */

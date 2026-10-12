@@ -45,17 +45,19 @@ const result = {ok: false, artifacts: [], progress: '', error: undefined, pass};
 const needsFonts = urls => { result.needsFonts = urls.slice(0, FONTS_MISSING_MAX_URLS); result.progress = `Fetching Google Fonts (pass ${pass + 1}).`; };
 try {
   // On the owner's machine a job is one more heavy render: it waits for the machine-wide slot like the CLI
-  // does, and holds it until this process exits. Holding it, it waits while the machine check every repo
-  // shares says busy (the game, memory, swap, disk), and each line of that wait is also a stdout line
-  // {"progress": …}, which the host shows on the job (lib/jobs.ts). A job has two hours from its creation,
+  // does, and holds it until this process exits; under a Studio started with RENDER_SLOT_HELD=<hold pid>
+  // (lib/jobs.ts passes it on), it runs under that hold instead. Holding it, it waits while the machine
+  // check every repo shares says busy (the game, memory, swap, disk). Each line of either wait (who holds
+  // the slot and since when, the place in its queue, the machine's reasons) goes to stderr and is also a
+  // stdout line {"progress": …}, which the host shows on the job. A job has two hours from its creation,
   // so it waits 30 minutes at most for the two together, never the CLI's 4 hours: past its life it would
-  // render for a job already failed.
+  // render for a job already failed. The skill client waits for the machine before it submits a job.
   if (local) {
     const waitStarted = Date.now();
     const waitLimitMs = 30 * 60_000;
-    const log = message => process.stderr.write(`${message}\n`);
+    const log = message => { process.stderr.write(`${message}\n`); process.stdout.write(`${JSON.stringify({progress: message})}\n`); };
     await acquireRenderSlot({command: `studio ${job.kind} job ${job.id} pass ${pass}`, waitLimitMs, log});
-    await waitForMachine({startedAt: waitStarted, waitLimitMs, log: message => { log(message); process.stdout.write(`${JSON.stringify({progress: message})}\n`); }});
+    await waitForMachine({startedAt: waitStarted, waitLimitMs, log});
   }
   const fonts = await FontResolver.load(resolve(jobDirectory, 'fonts'), pass);
   // Samples the revision pinned must still have identical bytes in this build (append-only catalog).
