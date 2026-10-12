@@ -641,7 +641,7 @@ the widget source references it. --recipes keeps only those recipes and the scen
 leaves scenarios out.
 Catalog writes that flattened catalog, the JSON that import --catalog takes, without contacting any Studio.
 Import and push check sws-sample: references against the selected deployment before any change; a blocked import prints its diagnostics.
-Run refuses an existing output directory, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.
+Run refuses an existing output directory, waits for the machine on a local Studio before submitting, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.
 Active prints how many jobs of every project the Studio runs, without a capability. A local job runs inside the server
 process: stop a local Studio you started only when it prints "activeJobs":0.`);
 }
