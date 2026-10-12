@@ -100,6 +100,14 @@ node "$SKILL_DIR/scripts/studio-client.mjs" push \
 
 Use `status --access ...` for a safe summary of the current revision, diagnostics, and jobs. It never prints source or capabilities.
 
+To find which access file belongs to which project, list them; never `cat`, `jq`, or otherwise print an access file, since its `editorUrl` carries the project key:
+
+```sh
+node "$SKILL_DIR/scripts/studio-client.mjs" projects
+```
+
+It reads every `access-*.json` in `~/.se-widget-studio` (`--dir` selects another folder) and prints, for each, the file path, `projectId`, `origin`, `createdAt`, and the project `name` (with `updatedAt`), which it asks the project's Studio for with the key in a request header. When the Studio cannot say, `name` is `null` and `nameUnavailable` says why (`No Studio is running at …`, an HTTP status for a project the Studio no longer has). A file it cannot read is listed under `unreadable` with its path and the reason, never its content.
+
 ## Test and render
 
 Use a scenario ID or `all` for tests. Use a recipe ID, `scene:<scene-id>`, or `video:<scene-id>` for rendering.
@@ -118,14 +126,22 @@ node "$SKILL_DIR/scripts/studio-client.mjs" run \
   --output-dir /absolute/new/render-output
 ```
 
-The output directory must not exist. The command never cleans or overwrites it. It stops on a terminal job status, verifies every download against server metadata, and writes a capability-free `job.json` report beside the artifacts. When the render manifest or the test report lists Google Fonts issues, it prints them on one stderr line and adds them as `fontIssues` to its JSON and to `job.json`; read them before using the media. A local job has two hours from its creation, including up to 30 minutes waiting for the render slot while another render holds it; `run` polls for the same time. Do not submit a replacement job merely because polling was interrupted; use `status` to find the accepted job first. `run` polls every 5 s and reads only that job's record; never watch a job by calling `status` in a loop, because each `status` reads the project's whole revision and job history.
+The output directory must not exist. The command never cleans or overwrites it. It stops on a terminal job status, verifies every download against server metadata, and writes a capability-free `job.json` report beside the artifacts. When the render manifest or the test report lists Google Fonts issues, it prints them on one stderr line and adds them as `fontIssues` to its JSON and to `job.json`; read them before using the media. A local job has two hours from its creation, including up to 30 minutes waiting for the render slot while another render holds it; `run` polls for the same time. On a local Studio, `run` first waits for the machine before it submits the job (see the limits below), and that wait does not count. Do not submit a replacement job merely because polling was interrupted; use `status` to find the accepted job first. `run` polls every 5 s and reads only that job's record; never watch a job by calling `status` in a loop, because each `status` reads the project's whole revision and job history.
+
+Each downloaded file is `<NNN>-<basename>` (`000-manifest.json`, `001-a.png`), and `job.json` gives its path in the job as `name` (`listing-video/a.png`), the path the render manifest uses. To show a render job's media, write the review page over the output directory with the Studio checkout's CLI:
+
+```sh
+node "$STUDIO_DIR/dist/cli/index.js" review /absolute/review/index.html /absolute/new/render-output
+```
+
+Each render manifest in the folder becomes a section, every image and video under its review code (`LT-03`), linked to its downloaded file relative to the page; the test report stays out. Several output directories, or a folder that holds them, go on one page. A folder written by a client that predates `name` is matched by basename and refused with `REVIEW_JOB_AMBIGUOUS` or `REVIEW_JOB_FILE_MISSING` when one is shared or absent: run the job again with the current client.
 
 ## Plan a large batch
 
 A local job has no daily quota and no video length, frame-rate, or variant cap beyond the revision limits below. The machine is the limit:
 
 - Estimate the peak disk use before submitting a video job: the final media plus the frames of its largest variant, at 1.2 bytes per output pixel per frame (0.3 in tutorial mode). A 15-second, 30 fps full-HD variant estimates about 1.1 GiB. The job is refused, after it is accepted, with `OUTPUT_DISK_LOW: Recipe … needs an estimated peak of … which has … free` when that exceeds 70% of the free space; free disk or shorten the variant rather than retrying. Frames are deleted after each validated encode.
-- A job waits for the machine-wide render slot and holds it while it renders. Holding it, the job waits while the machine check says to wait (the game, memory, a render from another tool), and its progress gives the reason: `Waiting for the machine: <reasons>`. It waits 30 minutes at most for the two together, then fails with `RENDER_SLOT_TIMEOUT` or `MACHINE_BUSY_TIMEOUT`. The client prints the job's progress meanwhile. Submit one job at a time, and render several variants in one recipe rather than one job each.
+- A job waits for the machine-wide render slot and holds it while it renders. Holding it, the job waits while the machine check says to wait (the game, memory, a render from another tool), and its progress gives the reason: `Waiting for the machine: <reasons>`; waiting for the slot, it names the holder, since when, and its place in the queue: `Waiting for the render slot, held by pid …`. It waits 30 minutes at most for the two together, then fails with `RENDER_SLOT_TIMEOUT` or `MACHINE_BUSY_TIMEOUT`. So on a local Studio, `run` first waits, up to 4 hours like the local CLI, while the machine check says to wait, printing `[se-widget-studio] Waiting for the machine before submitting: <reasons>`, and only then submits the job; it never takes the slot. A Studio started under a held slot (`render-slot.ts hold`, then `RENDER_SLOT_HELD=<hold pid> npm run serve`) runs its jobs under that hold, without queueing; run the client with the same `RENDER_SLOT_HELD`, or the check counts the hold as another session's. The client prints the job's progress meanwhile. Submit one job at a time, and render several variants in one recipe rather than one job each.
 - Keep every artifact within 512 MiB and a job's artifacts within 1 GiB in total.
 - When the catalog exceeds a per-revision limit, group recipes so that each group's scenes, themes, and assets fit one revision. Import once; for each later group, `pull`, replace the catalog arrays in `snapshot`, `push`, and run that group's jobs. Each job stays pinned to the revision it was submitted against. Prefer this to one project per group, because projects cannot be listed or deleted.
 - `scene:<id>` renders one still of a catalog scene, and `video:<id>` always records a 5-second, 30 fps H.264 MP4 without alpha. Use a recipe for any other duration, a WebM, a transparent video, or a matrix.

@@ -574,7 +574,7 @@ program
   .command("review")
   .description("Write one HTML page over render folders, each image and video under a short code (LT-03) to quote in a review.")
   .argument("<page>", "Page to write, ending in .html")
-  .argument("<folders...>", "Recipe folders (with manifest.json), or output roots that hold them")
+  .argument("<folders...>", "Recipe folders (with manifest.json), output folders of studio-client.mjs run (with job.json), or folders that hold them")
   .option("--title <text>", "Page title", "Review")
   .option("--force", "Replace an existing page")
   .action(async (page: string, folders: string[], options: {title: string; force?: boolean}, command: Command) => {

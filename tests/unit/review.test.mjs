@@ -161,3 +161,94 @@ test("se-widget-studio review writes the page and needs --force to replace it", 
     await rm(root, {recursive: true, force: true});
   }
 });
+
+/**
+ * A job folder as `studio-client.mjs run` writes it: each artifact downloaded as `<NNN>-<basename>`, and job.json
+ * listing them, with each one's path in the job as `name` unless `names` is false (an older client).
+ */
+async function jobFolder(directory, artifacts, {names = true} = {}) {
+  await mkdir(directory, {recursive: true});
+  const listed = [];
+  for (const [index, {name, body = ""}] of artifacts.entries()) {
+    const file = `${String(index).padStart(3, "0")}-${name.split("/").pop()}`;
+    await writeFile(join(directory, file), body);
+    listed.push({id: `job-1--${index}`, ...(names ? {name} : {}), file, contentType: "application/octet-stream", bytes: 1, sha256: "0".repeat(64)});
+  }
+  await writeFile(join(directory, "job.json"), JSON.stringify({schemaVersion: 1, origin: "http://127.0.0.1:4310", projectId: "p", jobId: "job-1", revisionId: "r", kind: "render", selection: "all", status: "completed", artifacts: listed}));
+}
+
+const renderManifest = (recipe, artifacts, contactSheet = null) => JSON.stringify({schemaVersion: 1, generatedAt: "2026-10-12T10:00:00.000Z", recipe: {id: recipe}, contactSheet, artifacts});
+
+test("the review page reads a run job folder, each code linked to the file the job wrote under that path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-review-job-"));
+  try {
+    // Two recipes whose files share basenames: only the paths in the job tell them apart.
+    const job = join(root, "render-output");
+    await jobFolder(job, [
+      {name: "cover/manifest.json", body: renderManifest("cover", [{id: "a", screenshot: "cover/a.png", video: "cover/a.mp4"}], {file: "cover/contact-sheet.png"})},
+      {name: "cover/a.png"},
+      {name: "cover/a.mp4"},
+      {name: "cover/contact-sheet.png"},
+      {name: "listing-tutorial/manifest.json", body: renderManifest("listing-tutorial", [{id: "a", screenshot: "listing-tutorial/a.png"}])},
+      {name: "listing-tutorial/a.png"},
+      {name: "test-report.json", body: JSON.stringify({schemaVersion: 1, scenarios: []})}
+    ]);
+    const page = join(root, "review", "index.html");
+    await mkdir(join(root, "review"));
+    const result = await writeReviewPage({page, folders: [job]});
+    assert.deepEqual(result.sections.map((section) => `${section.tag} ${section.recipe} ${section.items}`), ["C cover 3", "LT listing-tutorial 1"]);
+    assert.deepEqual(result.missing, []);
+    const html = await readFile(page, "utf8");
+    assert.match(html, /<figure id="C-01"><a href="\.\.\/render-output\/001-a\.png"><img src="\.\.\/render-output\/001-a\.png" alt="C-01 · a · screenshot"/);
+    assert.match(html, /<figure id="C-02"><video src="\.\.\/render-output\/002-a\.mp4" controls/);
+    assert.match(html, /<figure id="C-03"><a href="\.\.\/render-output\/003-contact-sheet\.png">.*<figcaption>C-03 · contact sheet<\/figcaption>/);
+    assert.match(html, /<figure id="LT-01"><a href="\.\.\/render-output\/005-a\.png">/);
+    assert.equal(html.match(/<figure /g).length, 4, "the test report is not a section");
+
+    // The output root that holds job folders works too.
+    const parent = await writeReviewPage({page: join(root, "all.html"), folders: [root]});
+    assert.deepEqual(parent.sections.map((section) => section.tag), ["C", "LT"]);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("a job folder from a client that did not record names matches by a unique basename and refuses an ambiguous or absent one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-review-job-"));
+  try {
+    const unique = join(root, "unique");
+    await jobFolder(unique, [
+      {name: "cover/manifest.json", body: renderManifest("cover", [{id: "a", screenshot: "cover/a.png"}, {id: "b", screenshot: "cover/b.png"}])},
+      {name: "cover/b.png"},
+      {name: "cover/a.png"}
+    ], {names: false});
+    await writeReviewPage({page: join(root, "unique.html"), folders: [unique]});
+    const html = await readFile(join(root, "unique.html"), "utf8");
+    assert.match(html, /<figure id="C-01"><a href="unique\/002-a\.png">/);
+    assert.match(html, /<figure id="C-02"><a href="unique\/001-b\.png">/);
+
+    const ambiguous = join(root, "ambiguous");
+    await jobFolder(ambiguous, [
+      {name: "cover/manifest.json", body: renderManifest("cover", [{id: "a", screenshot: "cover/a.png"}])},
+      {name: "cover/a.png"},
+      {name: "listing-tutorial/a.png"}
+    ], {names: false});
+    await assert.rejects(
+      writeReviewPage({page: join(root, "ambiguous.html"), folders: [ambiguous]}),
+      (error) => error.code === "REVIEW_JOB_AMBIGUOUS" && /001-a\.png, 002-a\.png/.test(error.message) && /Run the job again/.test(error.hint)
+    );
+
+    const absent = join(root, "absent");
+    await jobFolder(absent, [{name: "cover/manifest.json", body: renderManifest("cover", [{id: "a", screenshot: "cover/a.png"}])}], {names: false});
+    await assert.rejects(
+      writeReviewPage({page: join(root, "absent.html"), folders: [absent]}),
+      (error) => error.code === "REVIEW_JOB_FILE_MISSING" && /Run the job again/.test(error.hint)
+    );
+
+    const tests = join(root, "tests");
+    await jobFolder(tests, [{name: "test-report.json", body: "{}"}]);
+    await assert.rejects(writeReviewPage({page: join(root, "tests.html"), folders: [tests]}), (error) => error.code === "REVIEW_FOLDER_EMPTY");
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});

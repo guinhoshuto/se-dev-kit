@@ -85,9 +85,23 @@ export interface ReviewSection {
   outputRoot: string;
   generatedAt: string | null;
   items: ReviewItem[];
+  /**
+   * A job folder's downloaded file for each manifest path (`listing-tutorial/a.png` → `<job>/001-a.png`); a recipe
+   * folder has none, and its files sit at their manifest paths under `outputRoot`.
+   */
+  files?: ReadonlyMap<string, string>;
 }
 
 const MANIFEST = "manifest.json";
+/** The report `studio-client.mjs run` writes beside the artifacts it downloads, each as `<NNN>-<basename>`. */
+const JOB = "job.json";
+const JOB_FILE = /^\d{3}-[a-zA-Z0-9._-]{1,120}$/;
+const RERUN_HINT = "Run the job again with the current studio-client.mjs, whose job.json records each file's path in the job, and review that folder.";
+
+/** Where a review item's file is on disk. */
+export function reviewItemPath(section: ReviewSection, item: ReviewItem): string {
+  return section.files?.get(item.file) ?? join(section.outputRoot, item.file);
+}
 
 async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
@@ -98,7 +112,10 @@ function asObject(value: unknown): JsonObject | undefined {
 }
 
 async function readSection(directory: string): Promise<ReviewSection> {
-  const path = join(directory, MANIFEST);
+  return {...(await readManifest(join(directory, MANIFEST))), directory, outputRoot: dirname(directory)};
+}
+
+async function readManifest(path: string): Promise<Omit<ReviewSection, "directory" | "outputRoot">> {
   let manifest: JsonObject;
   try {
     manifest = JSON.parse(await readFile(path, "utf8")) as JsonObject;
@@ -116,26 +133,79 @@ async function readSection(directory: string): Promise<ReviewSection> {
   const items = recorded
     ? (review!.items as unknown as ReviewItem[])
     : reviewItems(tag, manifest.artifacts as unknown as ReviewEntry[], asObject(manifest.contactSheet)?.file as string | undefined);
-  return {
-    tag,
-    recipe,
-    directory,
-    outputRoot: dirname(directory),
-    generatedAt: typeof manifest.generatedAt === "string" ? manifest.generatedAt : null,
-    items
-  };
+  return {tag, recipe, generatedAt: typeof manifest.generatedAt === "string" ? manifest.generatedAt : null, items};
+}
+
+/** The name `run` gives a downloaded artifact, without its `<NNN>-` prefix: the path's basename, made safe. */
+function downloadedBasename(path: string): string {
+  return basename(path).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "artifact";
 }
 
 /**
- * One section per recipe folder: a folder that holds manifest.json, or each subfolder that does, by name.
+ * The sections of a job folder that `studio-client.mjs run` wrote: one per render manifest it downloaded, each
+ * manifest path matched to its downloaded file by the artifact's `name` in job.json. A folder from an older client
+ * has no names: a path then matches the one artifact with its basename, and an ambiguous or absent one is refused.
+ * Test reports and other JSON files are not render manifests and stay out.
+ */
+async function readJobSections(directory: string): Promise<ReviewSection[]> {
+  const path = join(directory, JOB);
+  let job: JsonObject | undefined;
+  try {
+    job = asObject(JSON.parse(await readFile(path, "utf8")));
+  } catch (error) {
+    throw new StudioError("REVIEW_JOB_INVALID", `Cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const artifacts = Array.isArray(job?.artifacts) ? job.artifacts.map(asObject) : [];
+  if (job?.schemaVersion !== 1 || !Array.isArray(job.artifacts) || artifacts.some((entry) => typeof entry?.file !== "string" || !JOB_FILE.test(entry.file) || (entry.name !== undefined && typeof entry.name !== "string"))) {
+    throw new StudioError("REVIEW_JOB_INVALID", `${path} is not the job report of studio-client.mjs run.`);
+  }
+  const entries = artifacts.map((entry) => ({file: entry!.file as string, name: entry!.name as string | undefined}));
+  const named = entries.every((entry) => entry.name !== undefined);
+  const manifests = named
+    ? entries.filter((entry) => basename(entry.name!) === MANIFEST)
+    : entries.filter((entry) => entry.file.slice(4) === MANIFEST);
+  if (manifests.length === 0) {
+    throw new StudioError("REVIEW_FOLDER_EMPTY", `${path} lists no render manifest.`, "A test job has none; review the folder of a render job.");
+  }
+  const sections: ReviewSection[] = [];
+  for (const manifest of manifests) {
+    const section = await readManifest(join(directory, manifest.file));
+    const files = new Map<string, string>();
+    for (const item of section.items) {
+      if (named) {
+        const match = entries.find((entry) => entry.name === item.file);
+        if (match) files.set(item.file, join(directory, match.file));
+        continue;
+      }
+      const matches = entries.filter((entry) => entry.file.slice(4) === downloadedBasename(item.file));
+      if (matches.length !== 1) {
+        throw new StudioError(
+          matches.length === 0 ? "REVIEW_JOB_FILE_MISSING" : "REVIEW_JOB_AMBIGUOUS",
+          matches.length === 0
+            ? `${item.code} (${item.file}) has no downloaded file in ${directory}, and its job.json does not name the files.`
+            : `${item.code} (${item.file}) could be any of ${matches.map((entry) => entry.file).join(", ")} in ${directory}: its job.json does not name the files.`,
+          RERUN_HINT
+        );
+      }
+      files.set(item.file, join(directory, matches[0]!.file));
+    }
+    sections.push({...section, directory, outputRoot: directory, files});
+  }
+  return sections;
+}
+
+/**
+ * One section per recipe folder: a folder that holds manifest.json, or each subfolder that does, by name. A job
+ * folder of `studio-client.mjs run` (job.json) gives one section per render manifest it downloaded.
  * Sections of the same recipe may share a tag (two rounds of one recipe); different recipes may not.
  */
 export async function reviewSections(folders: readonly string[]): Promise<ReviewSection[]> {
   const sections: ReviewSection[] = [];
+  const read = async (directory: string) => (await exists(join(directory, MANIFEST)) ? [await readSection(directory)] : readJobSections(directory));
   for (const folder of folders) {
     const directory = resolve(folder);
-    if (await exists(join(directory, MANIFEST))) {
-      sections.push(await readSection(directory));
+    if ((await exists(join(directory, MANIFEST))) || (await exists(join(directory, JOB)))) {
+      sections.push(...(await read(directory)));
       continue;
     }
     const children = await readdir(directory, {withFileTypes: true}).catch(() => {
@@ -143,16 +213,16 @@ export async function reviewSections(folders: readonly string[]): Promise<Review
     });
     const found: string[] = [];
     for (const child of children.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()) {
-      if (await exists(join(directory, child, MANIFEST))) found.push(join(directory, child));
+      if ((await exists(join(directory, child, MANIFEST))) || (await exists(join(directory, child, JOB)))) found.push(join(directory, child));
     }
     if (found.length === 0) {
       throw new StudioError(
         "REVIEW_FOLDER_EMPTY",
-        `${folder} has no ${MANIFEST}, and no folder inside it has one.`,
-        "Pass a recipe folder written by render, capture, or record, or the output root that holds them."
+        `${folder} has no ${MANIFEST} or ${JOB}, and no folder inside it has one.`,
+        "Pass a recipe folder written by render, capture, or record, the output folder of studio-client.mjs run, or a folder that holds them."
       );
     }
-    for (const child of found) sections.push(await readSection(child));
+    for (const child of found) sections.push(...(await read(child)));
   }
   const owners = new Map<string, ReviewSection>();
   for (const section of sections) {
@@ -186,7 +256,7 @@ export function renderReviewPage(page: string, title: string, sections: readonly
     rounds.set(section.tag, round);
     const anchor = (code: string) => (round === 1 ? code : `${code}.${round}`);
     const figures = section.items.map((item) => {
-      const path = href(page, join(section.outputRoot, item.file));
+      const path = href(page, reviewItemPath(section, item));
       const caption = escapeHtml(reviewCaption(item));
       const media = item.kind === "video"
         ? `<video src="${path}" controls muted preload="metadata"></video>`
@@ -272,7 +342,7 @@ export async function writeReviewPage(options: {
   const missing: string[] = [];
   for (const section of sections) {
     for (const item of section.items) {
-      const path = join(section.outputRoot, item.file);
+      const path = reviewItemPath(section, item);
       if (!(await exists(path))) missing.push(path);
     }
   }

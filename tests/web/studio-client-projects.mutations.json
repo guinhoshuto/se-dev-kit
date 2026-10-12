@@ -1,0 +1,53 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "projects.push({accessFile, projectId: access.projectId,",
+      "to": "projects.push({accessFile, editorUrl: access.editorUrl, projectId: access.projectId,",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^projects lists"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "projects.push({accessFile, projectId: access.projectId,",
+      "to": "projects.push({accessFile, token: access.token, projectId: access.projectId,",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^projects lists"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "try {value = JSON.parse(await readFile(target, 'utf8'));} catch {fail('Access bundle is not valid JSON.');}",
+      "to": "value = JSON.parse(await readFile(target, 'utf8'));",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^projects lists"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "signal: AbortSignal.timeout(10_000), headers: {Authorization: `Bearer ${access.token}`}}",
+      "to": "signal: AbortSignal.timeout(10_000)}",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^projects lists"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "isLoopback(access.origin) && (code === 'ECONNREFUSED' || code === 'ECONNRESET')",
+      "to": "false",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^projects lists"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "function defaultAccessDir() {return resolve(homedir(), '.se-widget-studio');}",
+      "to": "function defaultAccessDir() {return resolve(homedir(), '.se-widget-studio-other');}",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^projects lists"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "filter(name => /^access-.+\\.json$/.test(name))",
+      "to": "filter(name => /\\.json$/.test(name))",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^projects lists"
+    }
+  ]
+}
