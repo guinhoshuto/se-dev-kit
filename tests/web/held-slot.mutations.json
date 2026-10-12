@@ -1,0 +1,46 @@
+{
+  "mutations": [
+    {
+      "file": "lib/jobs.ts",
+      "from": "'RENDER_SLOT_DIR', 'RENDER_SLOT_HELD', 'MACHINE_CHECK'",
+      "to": "'RENDER_SLOT_DIR', 'MACHINE_CHECK'",
+      "test": "tests/web/held-slot.test.ts",
+      "name": "a job of a Studio started under a live hold runs under it"
+    },
+    {
+      "file": "scripts/job-worker.mjs",
+      "from": "await acquireRenderSlot({command: `studio ${job.kind} job ${job.id} pass ${pass}`, waitLimitMs, log});",
+      "to": "await acquireRenderSlot({command: `studio ${job.kind} job ${job.id} pass ${pass}`, waitLimitMs, log: message => process.stderr.write(`${message}\\n`)});",
+      "test": "tests/web/held-slot.test.ts",
+      "name": "its progress names who holds the slot"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "  await waitBeforeSubmitting(access.origin);\n",
+      "to": "",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "submits the job only once the machine check says free"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "  if (!isLoopback(origin)) return;\n  let machine;",
+      "to": "  let machine;",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "asks the machine check only for a loopback Studio"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "message.replace(/^Waiting for the machine: /, 'Waiting for the machine before submitting: ')",
+      "to": "message",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "says why it waits"
+    },
+    {
+      "file": "scripts/job-worker.mjs",
+      "from": "await waitForMachine({startedAt: waitStarted, waitLimitMs, log});",
+      "to": "await waitForMachine({startedAt: waitStarted, waitLimitMs, log: message => process.stderr.write(`${message}\\n`)});",
+      "test": "tests/web/held-slot.test.ts",
+      "name": "a job waiting for the machine says why on its progress"
+    }
+  ]
+}
