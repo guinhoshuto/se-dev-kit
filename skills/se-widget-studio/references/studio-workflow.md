@@ -100,6 +100,14 @@ node "$SKILL_DIR/scripts/studio-client.mjs" push \
 
 Use `status --access ...` for a safe summary of the current revision, diagnostics, and jobs. It never prints source or capabilities.
 
+To find which access file belongs to which project, list them; never `cat`, `jq`, or otherwise print an access file, since its `editorUrl` carries the project key:
+
+```sh
+node "$SKILL_DIR/scripts/studio-client.mjs" projects
+```
+
+It reads every `access-*.json` in `~/.se-widget-studio` (`--dir` selects another folder) and prints, for each, the file path, `projectId`, `origin`, `createdAt`, and the project `name` (with `updatedAt`), which it asks the project's Studio for with the key in a request header. When the Studio cannot say, `name` is `null` and `nameUnavailable` says why (`No Studio is running at …`, an HTTP status for a project the Studio no longer has). A file it cannot read is listed under `unreadable` with its path and the reason, never its content.
+
 ## Test and render
 
 Use a scenario ID or `all` for tests. Use a recipe ID, `scene:<scene-id>`, or `video:<scene-id>` for rendering.
@@ -119,6 +127,14 @@ node "$SKILL_DIR/scripts/studio-client.mjs" run \
 ```
 
 The output directory must not exist. The command never cleans or overwrites it. It stops on a terminal job status, verifies every download against server metadata, and writes a capability-free `job.json` report beside the artifacts. When the render manifest or the test report lists Google Fonts issues, it prints them on one stderr line and adds them as `fontIssues` to its JSON and to `job.json`; read them before using the media. A local job has two hours from its creation, including up to 30 minutes waiting for the render slot while another render holds it; `run` polls for the same time. Do not submit a replacement job merely because polling was interrupted; use `status` to find the accepted job first. `run` polls every 5 s and reads only that job's record; never watch a job by calling `status` in a loop, because each `status` reads the project's whole revision and job history.
+
+Each downloaded file is `<NNN>-<basename>` (`000-manifest.json`, `001-a.png`), and `job.json` gives its path in the job as `name` (`listing-video/a.png`), the path the render manifest uses. To show a render job's media, write the review page over the output directory with the Studio checkout's CLI:
+
+```sh
+node "$STUDIO_DIR/dist/cli/index.js" review /absolute/review/index.html /absolute/new/render-output
+```
+
+Each render manifest in the folder becomes a section, every image and video under its review code (`LT-03`), linked to its downloaded file relative to the page; the test report stays out. Several output directories, or a folder that holds them, go on one page. A folder written by a client that predates `name` is matched by basename and refused with `REVIEW_JOB_AMBIGUOUS` or `REVIEW_JOB_FILE_MISSING` when one is shared or absent: run the job again with the current client.
 
 ## Plan a large batch
 

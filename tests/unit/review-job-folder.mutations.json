@@ -1,0 +1,61 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "artifacts.push({id: artifact.id, name, file,",
+      "to": "artifacts.push({id: artifact.id, file,",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run records"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "const name = artifactName(artifact.name);",
+      "to": "const name = String(artifact.name);",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run accepts only"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "!value.split('/').some(part => !part || part.startsWith('.'))",
+      "to": "true",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run accepts only"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "const JOB = \"job.json\";",
+      "to": "const JOB = \"job-missing.json\";",
+      "test": "tests/unit/review.test.mjs"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "const named = entries.every((entry) => entry.name !== undefined);",
+      "to": "const named = false;",
+      "test": "tests/unit/review.test.mjs"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "entries.find((entry) => entry.name === item.file)",
+      "to": "entries.find((entry) => basename(entry.name!) === basename(item.file))",
+      "test": "tests/unit/review.test.mjs"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "if (matches.length !== 1) {",
+      "to": "if (matches.length === 0) {",
+      "test": "tests/unit/review.test.mjs"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "entries.filter((entry) => basename(entry.name!) === MANIFEST)",
+      "to": "entries.filter((entry) => entry.name!.endsWith(\".json\"))",
+      "test": "tests/unit/review.test.mjs"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "return section.files?.get(item.file) ?? join(section.outputRoot, item.file);",
+      "to": "return join(section.outputRoot, item.file);",
+      "test": "tests/unit/review.test.mjs"
+    }
+  ]
+}

@@ -2,9 +2,9 @@
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {realpathSync} from 'node:fs';
-import {lstat, mkdir, readFile, realpath, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, readdir, readFile, realpath, writeFile} from 'node:fs/promises';
 import {homedir, platform} from 'node:os';
-import {basename, dirname, extname, isAbsolute, posix, relative, resolve} from 'node:path';
+import {basename, dirname, extname, isAbsolute, join, posix, relative, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 // The local Studio that `npm run serve` starts in the Studio checkout. The hosted deployment is paused.
@@ -296,14 +296,67 @@ async function readPrivate(path, {purposes = [ACCESS_PURPOSE]} = {}) {
   const info = await lstat(target);
   check(info.isFile() && !info.isSymbolicLink() && info.size < 64 * 1024, 'Access bundle must be a bounded regular file.');
   if (platform() !== 'win32') check((info.mode & 0o077) === 0, 'Access bundle permissions must be 0600.');
-  const value = JSON.parse(await readFile(target, 'utf8'));
-  check(value.schemaVersion === 1 && purposes.includes(value.purpose), 'Access bundle has an unsupported format.');
+  // JSON.parse quotes the text around a syntax error, which may be part of the key: report a fixed message instead.
+  let value;
+  try {value = JSON.parse(await readFile(target, 'utf8'));} catch {fail('Access bundle is not valid JSON.');}
+  check(value && typeof value === 'object' && value.schemaVersion === 1 && purposes.includes(value.purpose), 'Access bundle has an unsupported format.');
   check(ID.test(value.projectId) && typeof value.token === 'string' && /^[a-zA-Z0-9_-]{24,256}$/.test(value.token), 'Access bundle identifiers are invalid.');
   value.origin = normalizeOrigin(value.origin);
   // The verification file has no editorUrl; the Studio's editing link is always /p/<project>#key=<token>.
   if (value.purpose === VERIFICATION_PURPOSE && value.editorUrl === undefined) value.editorUrl = `/p/${value.projectId}#key=${value.token}`;
   check(typeof value.editorUrl === 'string' && value.editorUrl.startsWith(`/p/${value.projectId}#key=`), 'Access bundle editor URL is invalid.');
   return value;
+}
+
+/** The folder import saves access files in when no --access-out is given. */
+function defaultAccessDir() {return resolve(homedir(), '.se-widget-studio');}
+
+const CREATED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
+
+/** The project's name, asked of its Studio with the key in the Authorization header; why not, when the Studio cannot say. */
+async function projectName(access, offline) {
+  if (offline.has(access.origin)) return {nameUnavailable: offline.get(access.origin)};
+  let response;
+  try {
+    response = await fetch(new URL(`/api/v1/projects/${access.projectId}`, access.origin), {redirect: 'manual', signal: AbortSignal.timeout(10_000), headers: {Authorization: `Bearer ${access.token}`}});
+  } catch (error) {
+    const code = error?.cause?.code ?? error?.code;
+    const reason = isLoopback(access.origin) && (code === 'ECONNREFUSED' || code === 'ECONNRESET') ? `No Studio is running at ${access.origin}.` : `The Studio at ${access.origin} did not answer.`;
+    offline.set(access.origin, reason);
+    return {nameUnavailable: reason};
+  }
+  if (response.status !== 200) {
+    await response.body?.cancel().catch(() => {});
+    return {nameUnavailable: `The Studio at ${access.origin} answered HTTP ${response.status} for this project.`};
+  }
+  let project;
+  try {project = JSON.parse((await boundedBody(response, JSON_LIMIT)).toString('utf8'))?.project;} catch {project = undefined;}
+  if (project?.id !== access.projectId || typeof project.name !== 'string') return {nameUnavailable: `The Studio at ${access.origin} returned an invalid project.`};
+  return {name: project.name.slice(0, 200), ...(typeof project.updatedAt === 'string' && CREATED_AT.test(project.updatedAt) ? {updatedAt: project.updatedAt} : {})};
+}
+
+/**
+ * The access files of a folder, without their keys: each entry is built from the fields that may be shown
+ * (an allowlist), never by removing the ones that may not. A file that cannot be read gives its path and why.
+ */
+async function listProjects(flags) {
+  const directory = resolve(flags['--dir'] ?? defaultAccessDir());
+  let names = [];
+  try {names = (await readdir(directory)).filter(name => /^access-.+\.json$/.test(name)).sort();}
+  catch (error) {if (error?.code !== 'ENOENT') throw error;}
+  const projects = []; const unreadable = []; const offline = new Map();
+  for (const name of names) {
+    const accessFile = join(directory, name);
+    let access;
+    try {access = await readPrivate(accessFile);} catch (error) {
+      unreadable.push({accessFile, reason: error?.code ? `Cannot read the file (${error.code}).` : error instanceof Error ? error.message : 'Cannot read the file.'});
+      continue;
+    }
+    const createdAt = typeof access.createdAt === 'string' && CREATED_AT.test(access.createdAt) ? access.createdAt : null;
+    const studio = await projectName(access, offline);
+    projects.push({accessFile, projectId: access.projectId, origin: access.origin, createdAt, name: studio.name ?? null, ...(studio.updatedAt ? {updatedAt: studio.updatedAt} : {}), ...(studio.nameUnavailable ? {nameUnavailable: studio.nameUnavailable} : {})});
+  }
+  console.log(JSON.stringify({directory, projects, unreadable}, null, 2));
 }
 
 async function importWidget(flags) {
@@ -328,7 +381,7 @@ async function importWidget(flags) {
     schemaVersion: 1, purpose: ACCESS_PURPOSE, origin, projectId: created.projectId,
     token: created.token, editorUrl: created.editorUrl, createdAt: new Date().toISOString()
   };
-  const accessFile = await writePrivate(flags['--access-out'] ?? resolve(homedir(), '.se-widget-studio', `access-${created.projectId}.json`), access);
+  const accessFile = await writePrivate(flags['--access-out'] ?? join(defaultAccessDir(), `access-${created.projectId}.json`), access);
   let status = created.status; let revisionId = created.revisionId; let diagnostics;
   try {
     if (localAssets.length) {
@@ -455,6 +508,12 @@ async function downloadArtifact(access, artifact) {
   return {bytes, sha256};
 }
 
+/** An artifact's path inside its job, as the server checked it: relative, `/`-separated, no empty, `.` or `..` part. */
+export function artifactName(value) {
+  check(typeof value === 'string' && value.length > 0 && value.length <= 512 && !value.startsWith('/') && !value.includes('\\') && !/[\u0000-\u001f\u007f]/.test(value) && !value.split('/').some(part => !part || part.startsWith('.')), 'The job returned an artifact with an unsafe path; nothing more was downloaded.');
+  return value;
+}
+
 /** The `fonts.issues` of a render manifest or test report, so a font warning is not left unread in the files. */
 export function fontIssues(name, bytes) {
   if (!/(?:^|[/\\])(?:manifest|test-report)\.json$/.test(String(name))) return [];
@@ -491,11 +550,13 @@ async function runJob(flags) {
   const artifacts = [];
   const fonts = new Set();
   for (const [index, artifact] of job.artifacts.entries()) {
+    const name = artifactName(artifact.name);
     const downloaded = await downloadArtifact(access, artifact);
-    const safe = basename(String(artifact.name)).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
+    const safe = basename(name).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
     const file = `${String(index).padStart(3, '0')}-${safe}`;
     await writeFile(resolve(output, file), downloaded.bytes, {flag: 'wx', mode: 0o600});
-    artifacts.push({id: artifact.id, file, contentType: artifact.contentType, bytes: downloaded.bytes.length, sha256: downloaded.sha256});
+    // `name` is the path the job wrote, as a render manifest names its files: `review` matches them by it.
+    artifacts.push({id: artifact.id, name, file, contentType: artifact.contentType, bytes: downloaded.bytes.length, sha256: downloaded.sha256});
     for (const issue of fontIssues(artifact.name, downloaded.bytes)) fonts.add(issue);
   }
   const fontSummary = fonts.size ? {fontIssues: [...fonts]} : {};
@@ -534,6 +595,7 @@ Usage:
   studio-client.mjs import --widget-root <absolute-dir> [--name <name>] [--catalog <json>] [--origin <url>] [--access-out <private-json>]
   studio-client.mjs import --config <se-widget-studio.config.mjs> [--recipes <id,...>] [--name <name>] [--origin <url>] [--access-out <private-json>]
   studio-client.mjs catalog --config <se-widget-studio.config.mjs> [--recipes <id,...>] --out <new-json>
+  studio-client.mjs projects [--dir <access-dir>]
   studio-client.mjs status --access <private-json>
   studio-client.mjs open-editor --access <private-json>
   studio-client.mjs pull --access <private-json> --draft-out <new-json>
@@ -544,6 +606,8 @@ Usage:
 The default origin is ${DEFAULT_ORIGIN}, the local Studio that \`npm run serve\` starts in the Studio checkout.
 Set SE_WIDGET_STUDIO_URL or pass --origin to select another Studio.
 Creation reads STUDIO_CREATE_KEY from the environment when configured. Capabilities are never printed.
+Projects lists the access files in ~/.se-widget-studio (or --dir) with each project's ID, origin, creation time, and
+name, which it asks the project's Studio for; never print an access file itself, since its editorUrl carries the key.
 Open-editor also accepts the access.private.json that scripts/verify-hosted.mjs writes; no other command does.
 Import reads but never modifies production widget files. Pull/push use complete snapshots and optimistic concurrency.
 --config reads a local Studio config with the engine of the Studio checkout this client belongs to, as the local CLI does:
@@ -563,6 +627,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (!command || command === '--help' || command === '-h') return help();
   if (command === 'import') return importWidget(parseFlags(args, new Set(['--widget-root', '--name', '--catalog', '--config', '--recipes', '--origin', '--access-out'])));
   if (command === 'catalog') return writeCatalog(parseFlags(args, new Set(['--config', '--recipes', '--out'])));
+  if (command === 'projects') return listProjects(parseFlags(args, new Set(['--dir'])));
   if (command === 'status') return status(parseFlags(args, new Set(['--access'])));
   if (command === 'open-editor') return openEditor(parseFlags(args, new Set(['--access'])));
   if (command === 'pull') return pull(parseFlags(args, new Set(['--access', '--draft-out'])));

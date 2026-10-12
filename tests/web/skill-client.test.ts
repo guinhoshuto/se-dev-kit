@@ -5,9 +5,10 @@ import {createServer} from 'node:http';
 import {mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
 import {createHash} from 'node:crypto';
-import {buildSnapshot, configCatalog, DEFAULT_ORIGIN, fontIssues, main, normalizeOrigin, originLimits, studioFetch} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
+import {artifactName, buildSnapshot, configCatalog, DEFAULT_ORIGIN, fontIssues, main, normalizeOrigin, originLimits, studioFetch} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
 
 const exec = promisify(execFile);
 const script = resolve('skills/se-widget-studio/scripts/studio-client.mjs');
@@ -291,6 +292,121 @@ async function runAgainst(poll: (respond: (status: number, body: string) => void
   }
 }
 
+test('run records each artifact\'s path in job.json, and review reads that folder with every code on its own file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-run-names-'));
+  const token = 'private_capability_12345678901234567890';
+  const manifest = (recipe: string) => Buffer.from(JSON.stringify({schemaVersion: 1, generatedAt: '2026-10-12T10:00:00.000Z', recipe: {id: recipe}, contactSheet: null, artifacts: [{id: 'a', screenshot: `${recipe}/a.png`}]}));
+  // Two recipes whose images share a basename: only the recorded path tells their files apart.
+  const files: [string, string, Buffer][] = [
+    ['m-cover', 'cover/manifest.json', manifest('cover')],
+    ['i-cover', 'cover/a.png', Buffer.from('cover image')],
+    ['m-tutorial', 'listing-tutorial/manifest.json', manifest('listing-tutorial')],
+    ['i-tutorial', 'listing-tutorial/a.png', Buffer.from('tutorial image')]
+  ];
+  const artifacts = files.map(([id, name, bytes]) => ({id, name, key: `k/${id}`, contentType: 'application/octet-stream', bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex')}));
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* drain */ }
+    if (request.method === 'POST' && request.url === '/api/studio/projects/project-test/jobs') {
+      response.statusCode = 202; response.setHeader('Content-Type', 'application/json');
+      return response.end(JSON.stringify({id: 'job-test', projectId: 'project-test', revisionId: 'revision-test', kind: 'render', selection: 'all', status: 'completed', createdAt: new Date().toISOString(), progress: 'Done', artifacts}));
+    }
+    const file = files.find(([id]) => request.url === `/api/studio/projects/project-test/artifacts/${id}`);
+    if (request.method === 'GET' && file) return response.end(file[2]);
+    response.statusCode = 500; response.end('{}');
+  });
+  try {
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const access = join(root, 'access.private.json');
+    await writeFile(access, JSON.stringify({schemaVersion: 1, purpose: 'se-widget-studio-access', origin: `http://127.0.0.1:${address.port}`, projectId: 'project-test', token, editorUrl: `/p/project-test#key=${token}`}), {mode: 0o600});
+    const output = join(root, 'render-output');
+    await exec(process.execPath, [script, 'run', '--access', access, '--kind', 'render', '--selection', 'all', '--output-dir', output]);
+    const job = JSON.parse(await readFile(join(output, 'job.json'), 'utf8'));
+    assert.deepEqual(job.artifacts.map((entry: {name: string; file: string}) => `${entry.name} ${entry.file}`), [
+      'cover/manifest.json 000-manifest.json', 'cover/a.png 001-a.png', 'listing-tutorial/manifest.json 002-manifest.json', 'listing-tutorial/a.png 003-a.png'
+    ]);
+    const {writeReviewPage} = await import(pathToFileURL(resolve('dist/capture/review.js')).href);
+    const page = join(root, 'index.html');
+    await writeReviewPage({page, folders: [output]});
+    const html = await readFile(page, 'utf8');
+    assert.match(html, /<figure id="C-01"><a href="render-output\/001-a\.png">/);
+    assert.match(html, /<figure id="LT-01"><a href="render-output\/003-a\.png">/);
+  } finally {
+    await new Promise<void>(done => server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('run accepts only relative artifact paths without empty, dot, or parent parts', async () => {
+  assert.equal(artifactName('cover/stills/a-still-poster.png'), 'cover/stills/a-still-poster.png');
+  for (const unsafe of ['../a.png', 'cover/../../a.png', '/tmp/a.png', 'cover//a.png', 'cover/./a.png', 'cover\\a.png', '', 7]) {
+    assert.throws(() => artifactName(unsafe), /unsafe path/, String(unsafe));
+  }
+  // A job whose artifact path climbs out is refused before its file is downloaded or its path recorded.
+  const escaping = await runAgainst((respond, job, artifact) => respond(200, job('completed', [{...(artifact as object), name: 'stills/../../escape.png'}])));
+  assert.match(escaping.stderr, /The job returned an artifact with an unsafe path; nothing more was downloaded\./);
+  assert.equal(escaping.requests.some(line => line.includes('/artifacts/')), false);
+});
+
+test('projects lists the access files with each project\'s name and never their keys', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-projects-'));
+  const token = 'KEYSECRET_projects_1234567890abcdef';
+  const requests: string[] = [];
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* drain */ }
+    const authorized = request.headers.authorization === `Bearer ${token}`;
+    requests.push(`${request.method} ${request.url} ${authorized ? 'authorized' : 'anonymous'}`);
+    response.setHeader('Content-Type', 'application/json');
+    if (request.method === 'GET' && request.url === '/api/v1/projects/project-named' && authorized) {
+      return response.end(JSON.stringify({project: {id: 'project-named', name: 'Midnight chat', revisionId: 'revision-1', createdAt: '2026-10-10T08:00:00.000Z', updatedAt: '2026-10-11T09:30:00.000Z'}, revision: {id: 'revision-1', status: 'ready'}, etag: 'etag-1', revisions: [], jobs: []}));
+    }
+    response.statusCode = 404; response.end(JSON.stringify({error: 'Project not found.'}));
+  });
+  // A loopback port that nothing listens on: a Studio that is not running.
+  const closed = createServer();
+  try {
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    await new Promise<void>(done => closed.listen(0, '127.0.0.1', done));
+    const address = server.address(); const closedAddress = closed.address();
+    assert.ok(address && typeof address === 'object' && closedAddress && typeof closedAddress === 'object');
+    await new Promise<void>(done => closed.close(() => done()));
+    const origin = `http://127.0.0.1:${address.port}`; const offline = `http://127.0.0.1:${closedAddress.port}`;
+    const dir = join(root, 'access'); await mkdir(dir, {mode: 0o700});
+    const access = (projectId: string, at: string, studio = origin) => JSON.stringify({schemaVersion: 1, purpose: 'se-widget-studio-access', origin: studio, projectId, token, editorUrl: `/p/${projectId}#key=${token}`, createdAt: at});
+    await writeFile(join(dir, 'access-project-named.json'), access('project-named', '2026-10-10T08:00:00.000Z'), {mode: 0o600});
+    await writeFile(join(dir, 'access-project-gone.json'), access('project-gone', '2026-10-09T08:00:00.000Z'), {mode: 0o600});
+    await writeFile(join(dir, 'access-project-offline.json'), access('project-offline', '2026-10-08T08:00:00.000Z', offline), {mode: 0o600});
+    // Not JSON, with the key where the parser stops: a parse error would quote it.
+    await writeFile(join(dir, 'access-broken.json'), `{"schemaVersion": 1, "token": ${token}}`, {mode: 0o600});
+    await writeFile(join(dir, 'access-shared.json'), access('project-shared', '2026-10-07T08:00:00.000Z'), {mode: 0o644});
+    await writeFile(join(dir, 'notes.json'), access('project-notes', '2026-10-06T08:00:00.000Z'), {mode: 0o600});
+
+    const {stdout, stderr} = await exec(process.execPath, [script, 'projects', '--dir', dir]);
+    assert.equal(stderr, '');
+    for (const secret of [token, 'KEYSECRET', '#key=', 'editorUrl', 'token']) assert.equal(stdout.includes(secret), false, `projects printed ${secret}`);
+    assert.deepEqual(JSON.parse(stdout), {
+      directory: dir,
+      projects: [
+        {accessFile: join(dir, 'access-project-gone.json'), projectId: 'project-gone', origin, createdAt: '2026-10-09T08:00:00.000Z', name: null, nameUnavailable: `The Studio at ${origin} answered HTTP 404 for this project.`},
+        {accessFile: join(dir, 'access-project-named.json'), projectId: 'project-named', origin, createdAt: '2026-10-10T08:00:00.000Z', name: 'Midnight chat', updatedAt: '2026-10-11T09:30:00.000Z'},
+        {accessFile: join(dir, 'access-project-offline.json'), projectId: 'project-offline', origin: offline, createdAt: '2026-10-08T08:00:00.000Z', name: null, nameUnavailable: `No Studio is running at ${offline}.`}
+      ],
+      unreadable: [
+        {accessFile: join(dir, 'access-broken.json'), reason: 'Access bundle is not valid JSON.'},
+        {accessFile: join(dir, 'access-shared.json'), reason: 'Access bundle permissions must be 0600.'}
+      ]
+    });
+    assert.deepEqual(requests, ['GET /api/v1/projects/project-gone authorized', 'GET /api/v1/projects/project-named authorized']);
+
+    // The default folder is the one import saves access files in; a missing folder lists nothing.
+    const home = await exec(process.execPath, [script, 'projects'], {env: {...process.env, HOME: root}});
+    assert.deepEqual(JSON.parse(home.stdout), {directory: join(root, '.se-widget-studio'), projects: [], unreadable: []});
+  } finally {
+    await new Promise<void>(done => server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('run polls the accepted job on its own route, never the project job list', async () => {
   const {stdout, stderr, requests} = await runAgainst((respond, job, artifact) => respond(200, job('completed', [artifact])));
   assert.equal(JSON.parse(stdout).status, 'completed', stderr);
@@ -463,7 +579,7 @@ test('open-editor opens a verify-hosted access file through the system opener wi
 
 test('hosted skill client exposes complete English command help', async () => {
   const {stdout} = await exec(process.execPath, [script, '--help']);
-  for (const command of ['import', 'status', 'open-editor', 'pull', 'push', 'run']) assert.match(stdout, new RegExp(`\\b${command}\\b`));
+  for (const command of ['import', 'projects', 'status', 'open-editor', 'pull', 'push', 'run']) assert.match(stdout, new RegExp(`\\b${command}\\b`));
   assert.match(stdout, /Capabilities are never printed/);
 });
 
