@@ -4,9 +4,10 @@ import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {lstat, mkdir, mkdtemp, readdir, readFile, realpath, writeFile} from 'node:fs/promises';
 import {basename, dirname, isAbsolute, relative, resolve} from 'node:path';
-import {fileURLToPath, pathToFileURL} from 'node:url';
+import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {inflateSync} from 'node:zlib';
+import {isEntryPoint} from './lib/entry-point.mjs';
 import {SUITES, nodeArgs} from './run-tests.mjs';
 
 const exec = promisify(execFile);
@@ -632,6 +633,6 @@ saved under ignored .studio-data/sandbox-integration-*/.`);
   if (report.status !== 'passed') process.exitCode = 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isEntryPoint(import.meta.url)) {
   main().catch(error => {console.error(redact(error instanceof Error ? error.message : 'Verification failed.', [process.env.STUDIO_CREATE_KEY])); process.exitCode = 1;});
 }

@@ -101,6 +101,36 @@
       "from": "  sweep();\n  const path",
       "to": "  const path",
       "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "      if (distMutant && !rebuildsDist) {await build(root); distMutant = false;}\n",
+      "to": "",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "{await build(root); distMutant = false;}",
+      "to": "{await build(root);}",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "if (distMutant && !rebuildsDist)",
+      "to": "if (distMutant)",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "if (distMutant && !rebuildsDist)",
+      "to": "if (!rebuildsDist)",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "    if (distMutant) await build(root);\n",
+      "to": "",
+      "test": "tests/unit/mutate.test.mjs"
     }
   ]
 }

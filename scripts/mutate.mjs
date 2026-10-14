@@ -26,7 +26,8 @@ import {createHash} from 'node:crypto';
 import {existsSync, rmSync, writeFileSync} from 'node:fs';
 import {lstat, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {dirname, isAbsolute, relative, resolve, sep} from 'node:path';
-import {fileURLToPath, pathToFileURL} from 'node:url';
+import {fileURLToPath} from 'node:url';
+import {isEntryPoint} from './lib/entry-point.mjs';
 import {SUITES, gate, takeBrowserSlot} from './run-tests.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -47,6 +48,8 @@ Options: --timeout <ms>      per-test timeout (--test-timeout), default ${DEFAUL
 Swaps a literal (split/join, so $ patterns stay literal), checks the swap landed, rebuilds dist/ when the
 file is under src/, runs the test file with --test-timeout and --test-force-exit ([browser] tests skipped),
 and restores the file, checked byte for byte, and git diff. The named test must be green before the swap.
+dist/ built from a src/ mutant is rebuilt from the restored sources before the next mutation outside src/
+runs, so that mutant cannot kill it, and at the end.
 A mutation is killed when the run is not green: a failure, a cancellation (a timeout), a crash or a hang.
 A test under tests/integration starts Chrome: the run then holds the render slot, taken without waiting,
 once the machine check says the machine is free, as a browser suite of npm test does; otherwise it stops
@@ -272,6 +275,8 @@ function describe(result) {
 /**
  * Runs each mutation in turn: every `from` is found and every named test is green before any file
  * changes; each file is backed up under .cache/mutate/, mutated, tested, and restored before the next.
+ * A src/ mutation rebuilds dist/ with its mutant; dist/ is built again from the restored sources before
+ * the next mutation outside src/ runs, and at the end.
  * When a test starts Chrome, nothing runs until `machine()` allows it, and what it returns is held
  * until the last test ends. Returns {code, results}; throws UsageError for a setup problem or a refusal
  * and RestoreError when a file stays changed.
@@ -296,7 +301,9 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
   }
   const diff = gitDiff(root);
   const chrome = checked.find(mutation => opensChrome(mutation.test));
-  let distChanged = false;
+  // From a src/ mutant's build until the next build, dist/ holds that mutant: a mutation that does not rebuild
+  // dist/ must not run against it, or the previous mutant could kill it without its own change being tested.
+  let distMutant = false;
   let slot;
   const results = [];
   try {
@@ -315,6 +322,8 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
       baselines.add(key);
     }
     for (const mutation of checked) {
+      const rebuildsDist = mutation.file.startsWith('src/');
+      if (distMutant && !rebuildsDist) {await build(root); distMutant = false;}
       const path = resolve(root, mutation.file);
       const original = originals.get(mutation.file);
       const mutant = Buffer.from(applySwap(original.toString('utf8'), mutation.from, mutation.to, mutation.occurrences), 'utf8');
@@ -325,7 +334,7 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
       try {
         await writeFile(path, mutant);
         usage((await readFile(path)).equals(mutant), `The mutation of ${mutation.file} did not land.`);
-        if (mutation.file.startsWith('src/')) {distChanged = true; await build(root);}
+        if (rebuildsDist) {distMutant = true; await build(root);}
         const run = await runTest({root, test: mutation.test, name: mutation.name, timeoutMs});
         const result = {...mutation, killed: !isGreen(run), exitCode: run.exitCode, timedOut: run.timedOut, tests: run.tests, pass: run.pass, fail: run.fail, cancelled: run.cancelled, failed: run.failed};
         results.push(result);
@@ -339,7 +348,7 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
     // The rebuild below starts no Chrome.
     slot?.release();
     // dist/ goes back to the restored sources even when a step failed.
-    if (distChanged) await build(root);
+    if (distMutant) await build(root);
   }
   if (gitDiff(root) !== diff) throw new RestoreError('git diff changed during the run although every mutated file was restored: another process edited this checkout, or a test wrote to tracked files.');
   return {code: results.some(result => !result.killed) ? EXIT.survived : EXIT.killed, results};
@@ -370,4 +379,4 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();
+if (isEntryPoint(import.meta.url)) await main();
