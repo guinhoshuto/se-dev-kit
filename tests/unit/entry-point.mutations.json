@@ -1,0 +1,40 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/lib/entry-point.mjs",
+      "from": "realpathSync(resolve(process.argv[1]))",
+      "to": "resolve(process.argv[1])",
+      "test": "tests/unit/entry-point.test.mjs"
+    },
+    {
+      "file": "scripts/lib/entry-point.mjs",
+      "from": "=== realpathSync(fileURLToPath(moduleUrl))",
+      "to": "=== fileURLToPath(moduleUrl)",
+      "test": "tests/unit/entry-point.test.mjs"
+    },
+    {
+      "file": "scripts/kill-stale.mjs",
+      "from": "if (isEntryPoint(import.meta.url)) {",
+      "to": "if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {",
+      "test": "tests/unit/entry-point.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "if (isEntryPoint(import.meta.url)) await main();",
+      "to": "if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();",
+      "test": "tests/unit/entry-point.test.mjs"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "if (isEntryPoint(import.meta.url)) {",
+      "to": "if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {",
+      "test": "tests/unit/entry-point.test.mjs"
+    },
+    {
+      "file": "scripts/verify-hosted.mjs",
+      "from": "if (isEntryPoint(import.meta.url)) {",
+      "to": "if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {",
+      "test": "tests/unit/entry-point.test.mjs"
+    }
+  ]
+}

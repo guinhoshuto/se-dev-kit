@@ -15,6 +15,7 @@ import {tmpdir} from 'node:os';
 import {dirname, join, relative, resolve} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
+import {isEntryPoint} from './lib/entry-point.mjs';
 import {browserGate} from './lib/machine.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -216,7 +217,7 @@ async function repeat(file, countText) {
   return {failed, ran: count, code: failed.length ? 1 : 0};
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntryPoint(import.meta.url)) {
   const args = process.argv.slice(2);
   try {
     process.exitCode = args[0] === '--repeat' ? (await repeat(args[1], args[2])).code : await runSuites(args.length ? args : Object.keys(SUITES));

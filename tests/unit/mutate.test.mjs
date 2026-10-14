@@ -111,6 +111,23 @@ test("a src/ mutation rebuilds dist/ before its test and after the restore, and 
   assert.equal(await read("dist/answer.mjs"), FILES["src/answer.mjs"], "dist/ is rebuilt from the restored source");
 });
 
+test("after src/ mutations, dist/ is rebuilt from the restored source before a mutation outside src/, so a src/ mutant cannot kill it", async t => {
+  const {root, read} = await checkout(t);
+  let builds = 0;
+  const build = async () => {builds += 1; await copyFile(join(root, "src/answer.mjs"), join(root, "dist/answer.mjs"));};
+  // The test reads dist/ and never skills/: it kills both src/ mutations and cannot see the skills/ one.
+  const {code, results} = await mutate([
+    {file: "src/answer.mjs", from: "42", to: "41", test: "tests/answer.test.mjs"},
+    {file: "src/answer.mjs", from: "42", to: "43", test: "tests/answer.test.mjs"},
+    {file: "skills/tool.mjs", from: "tool = 1", to: "tool = 2", test: "tests/answer.test.mjs"}
+  ], {root, build, allowLiveCheckout: true, timeoutMs: 5000, log: quiet});
+  assert.deepEqual(results.map(result => result.killed), [true, true, false], "the skills/ mutation survives: its own change was tested, not the last src/ mutant");
+  assert.equal(code, 1, "exit code 1: a mutation survived");
+  assert.equal(builds, 4, "dist/ was built for the baselines, for each src/ mutant, and from the restored source before the skills/ mutation, and not again at the end");
+  assert.equal(await read("dist/answer.mjs"), FILES["src/answer.mjs"]);
+  assert.equal(await read("skills/tool.mjs"), FILES["skills/tool.mjs"]);
+});
+
 test("setup errors change nothing: a missing literal, a red baseline, a backup left by a crashed run", async t => {
   const {root, read} = await checkout(t);
   const math = await read("lib/math.mjs");
@@ -130,7 +147,7 @@ const CHROME_TEST = "import assert from 'node:assert/strict';\nimport {writeFile
 /** A throwaway checkout holding copies of the scripts the mutate CLI loads, so the CLI's ROOT is that checkout. */
 async function cliCheckout(t) {
   const root = await folder(t, "sws-mutate-cli-");
-  for (const path of ["scripts/mutate.mjs", "scripts/run-tests.mjs", "scripts/lib/machine.mjs", "dist/shared/render-slot.js"]) {
+  for (const path of ["scripts/mutate.mjs", "scripts/run-tests.mjs", "scripts/lib/entry-point.mjs", "scripts/lib/machine.mjs", "dist/shared/render-slot.js"]) {
     await mkdir(dirname(join(root, path)), {recursive: true});
     await copyFile(new URL(`../../${path}`, import.meta.url), join(root, path));
   }
