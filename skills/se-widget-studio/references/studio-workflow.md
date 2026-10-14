@@ -134,7 +134,7 @@ Each downloaded file is `<NNN>-<basename>` (`000-manifest.json`, `001-a.png`), a
 node "$STUDIO_DIR/dist/cli/index.js" review /absolute/review/index.html /absolute/new/render-output
 ```
 
-Each render manifest in the folder becomes a section, every image and video under its review code (`LT-03`), linked to its downloaded file relative to the page; the test report stays out. Several output directories, or a folder that holds them, go on one page. A folder written by a client that predates `name` is matched by basename and refused with `REVIEW_JOB_AMBIGUOUS` or `REVIEW_JOB_FILE_MISSING` when one is shared or absent: run the job again with the current client.
+Each render manifest in the folder becomes a section, every image and video under its review code (`LT-03`), linked to its downloaded file relative to the page; the test report stays out. A code is the file's position in its recipe, so every render of an unchanged recipe gives a file the same code; a review round that drops, adds, or reorders scenes takes a new recipe ID (`data-templates-2` gives `DT2-01`), so that no code already quoted in a review names another file. Several output directories, or a folder that holds them, go on one page. A folder written by a client that predates `name` is matched by basename and refused with `REVIEW_JOB_AMBIGUOUS` or `REVIEW_JOB_FILE_MISSING` when one is shared or absent: run the job again with the current client.
 
 ## Plan a large batch
 
