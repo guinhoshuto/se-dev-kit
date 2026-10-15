@@ -10,8 +10,12 @@
 // Command line (HAR-80, 2026-10-08): `node render-slot.ts run -- <cmd> [args]` runs one heavy step
 // under the slot, for a repo or a one-off render that does not import this module. It waits in the
 // queue, takes the slot named after the command, runs it with RENDER_SLOT_HELD (so a render inside
-// runs under the same slot), forwards SIGINT, SIGTERM and SIGHUP to it, and releases the slot only
-// when the command has exited, however it ends. It exits with the command's status (128 + the signal
+// runs under the same slot) in a process group of its own, forwards SIGINT, SIGTERM and SIGHUP to that
+// whole group, and releases the slot only when the command has exited, however it ends, and, after a
+// forwarded signal, only once nothing of its group runs (HAR-166, 2026-10-14: a SIGTERM to the outer
+// `run` of an npm script `node -e 0 && render-slot.ts run -- sleep 15` ended npm and its shell, and the
+// nested step went on with the slot free). A command that exits by itself gives the slot back at once,
+// even with a process it left in the background. It exits with the command's status (128 + the signal
 // number when the command died of a signal), 2 on a usage error or a refused command, and 75 when the
 // wait gave up. It refuses a .sh script, run directly or through a shell: the slot covers each heavy
 // step, never the script that chains them (2026-10-06, a chain held it 50 minutes through light steps).
@@ -28,9 +32,20 @@
 // 10 seconds for it to let go, and exits 0; 1 when no live hold has that label (it never touches the slot
 // of anything else).
 //
+// `node render-slot.ts status` (HAR-167, 2026-10-14) says who holds the slot and who waits in the queue,
+// without touching either: for each, the pid, the repo, the command, since when (local time), the id8 of
+// the Claude Code session above the pid (the first of its ancestors with a <pid>.json in
+// ~/.claude/sessions, the file `sessoes.py --eu` reads) and the last line of the log of the first job band
+// entry (~/.claude/watch.json, `watch_job.py add --log`) whose pid is that pid, an ancestor or a
+// descendant of it; "free" when nothing holds it. CLAUDE_CONFIG_DIR moves ~/.claude, as for Claude Code.
+// It exits 0.
+//
 // Protocol: the slot is the directory ~/.cache/render-slot (RENDER_SLOT_DIR overrides it). Taking it
-// is an atomic mkdir; inside, owner.json holds {protocol, pid, repo, command, startedAt}. A slot
-// whose pid is gone, or whose startedAt is before the last boot (the pid was reused), is taken over,
+// is an atomic mkdir; inside, owner.json holds {protocol, pid, repo, command, startedAt}, and `run`
+// adds commandPgid, the process group of its command, as soon as it starts it. A slot whose pid is
+// gone, and the commandPgid group too when there is one (HAR-166: a `run` killed by SIGKILL leaves its
+// command running in that group; without commandPgid, the pid alone decides), or whose startedAt is
+// before the last boot (the pid was reused), is taken over,
 // under the mutex <slot>.takeover (an atomic mkdir), and only after checking again under it that the
 // same dead owner still holds it. Only the owner removes it. A child process started by the owner
 // finds RENDER_SLOT_HELD=<owner pid> in its environment and runs under the parent's slot instead of
@@ -93,14 +108,14 @@
 // claim. Only then, for a few syscalls, can a live mutex be off its path (so two processes share the
 // critical section), and the move back can replace a mutex that was just made and is still an empty
 // directory (whose maker then gives up, as above).
-import {spawn, type ChildProcess} from 'node:child_process';
+import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
-import {mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync} from 'node:fs';
+import {closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-export type SlotOwner = {protocol?: number; pid: number; repo: string; command: string; startedAt: string};
+export type SlotOwner = {protocol?: number; pid: number; repo: string; command: string; startedAt: string; commandPgid?: number};
 export type SlotHandle = {release: () => void; inherited: boolean};
 export type SlotOptions = {
   command: string;
@@ -183,11 +198,19 @@ const alive = (pid: number) => {
 /** When this machine booted, in ms since the epoch. */
 const bootTimeMs = () => Date.now() - os.uptime() * 1000;
 
+/** Whether a process of the group `pgid` still runs (EPERM counts as running). */
+const groupAlive = (pgid: number) => {
+  try { process.kill(-pgid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+};
+
 /**
- * Whether the owner still runs. A slot written before the last boot is dead even when its pid is
- * alive again: after a reboot the pid belongs to another process (EPERM counts as alive).
+ * Whether the owner still runs: its pid or, under `run`, the process group of its command (HAR-166: a
+ * `run` killed by SIGKILL leaves its command running there). A slot written before the last boot is
+ * dead even when its pid is alive again: after a reboot the pid belongs to another process (EPERM
+ * counts as alive).
  */
-const ownerAlive = (owner: SlotOwner) => !(Date.parse(owner.startedAt) < bootTimeMs()) && alive(owner.pid);
+const ownerAlive = (owner: SlotOwner) => !(Date.parse(owner.startedAt) < bootTimeMs())
+  && (alive(owner.pid) || (typeof owner.commandPgid === 'number' && owner.commandPgid > 1 && groupAlive(owner.commandPgid)));
 
 const readOwner = (dir: string): SlotOwner | null => {
   try {
@@ -705,9 +728,32 @@ export const refusedCommand = (command: string[]) => {
   return `Refused: ${script} is a chain of steps. The render slot covers each heavy step, never the script that chains them: run each heavy step inside it with render-slot run.`;
 };
 
+/** Sends `signal` to the process group `child` leads (`run` spawns it detached), else to `child` alone. */
+const signalGroup = (child: ChildProcess, signal: NodeJS.Signals) => {
+  if (child.pid !== undefined && child.pid > 1) {
+    try { process.kill(-child.pid, signal); return; } catch { /* no group of its own: the command alone */ }
+  }
+  try { child.kill(signal); } catch { /* gone meanwhile */ }
+};
+
+/**
+ * Writes the process group of the command into owner.json (commandPgid), when this process owns the
+ * slot: a SIGKILL to `run` leaves the command running in it, and the slot stays held until it ends.
+ */
+const recordCommandGroup = (dir: string, pgid: number) => {
+  try {
+    const owner = readOwner(dir);
+    if (owner?.pid !== process.pid) return;
+    const temporary = path.join(dir, `${OWNER_FILE}.tmp`);
+    writeFileSync(temporary, `${JSON.stringify({...owner, commandPgid: pgid}, null, 2)}\n`);
+    renameSync(temporary, path.join(dir, OWNER_FILE));
+  } catch { /* best effort: without it, the pid alone decides, as before */ }
+};
+
 /**
  * `render-slot run -- <cmd> [args]`: waits for the slot, runs the command holding it, and resolves to
- * the exit status. The slot is released only once the command has exited.
+ * the exit status. The slot is released only once the command has exited and, after a signal, once
+ * nothing of its process group runs.
  */
 export const runCommand = async (command: string[], options: Partial<SlotOptions> = {}): Promise<number> => {
   const refusal = refusedCommand(command);
@@ -717,11 +763,14 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
   }
   const [program = '', ...args] = command;
   let child: ChildProcess | null = null;
+  const forwarded = new Set<NodeJS.Signals>();
   // Registered before the slot's own handlers: while waiting, a signal leaves the queue (the 'exit'
-  // handlers take the ticket and the slot out); while the command runs, it goes to the command.
+  // handlers take the ticket and the slot out); while the command runs, it goes to the command's whole
+  // process group, a step nested under a shell too (HAR-166).
   const onSignal = (signal: NodeJS.Signals) => {
     if (child === null) process.exit(128 + (os.constants.signals[signal] ?? 15));
-    child.kill(signal);
+    forwarded.add(signal);
+    signalGroup(child, signal);
   };
   for (const signal of SIGNALS) process.on(signal, onSignal);
   try {
@@ -737,12 +786,18 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
     // onSignal stays, and the slot is released below, or by its 'exit' handler.
     for (const signal of SIGNALS) for (const listener of process.listeners(signal)) if (listener !== onSignal) process.off(signal, listener);
     try {
-      const started = spawn(program, args, {stdio: 'inherit'});
+      // Detached: the command leads a process group of its own, which a forwarded signal reaches whole.
+      const started = spawn(program, args, {stdio: 'inherit', detached: true});
       child = started;
-      return await new Promise<number>((resolve) => {
+      if (started.pid !== undefined) recordCommandGroup(options.dir ?? slotDir(), started.pid);
+      const status = await new Promise<number>((resolve) => {
         started.on('error', (error: Error) => { console.error(`Could not run ${program}: ${error.message}`); resolve(127); });
         started.on('exit', (status: number | null, signal: NodeJS.Signals | null) => resolve(status ?? 128 + (signal ? os.constants.signals[signal] ?? 15 : 0)));
       });
+      // After a signal, a step nested under a shell that died can still be rendering: the slot waits for
+      // the whole group. A command that exits by itself gives the slot back at once.
+      if (forwarded.size > 0 && started.pid !== undefined) while (groupAlive(started.pid)) await sleep(50);
+      return status;
     } finally {
       slot.release();
     }
@@ -836,6 +891,127 @@ export const releaseHold = async (label: string, dir = slotDir(), waitMs = 10_00
   return 0;
 };
 
+/** Claude Code's folder, with sessions/<pid>.json and the job band watch.json: CLAUDE_CONFIG_DIR, else ~/.claude. */
+const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+
+/** The parent of every pid that runs, from `ps`; empty when `ps` cannot run. */
+const processTable = () => {
+  const parents = new Map<number, number>();
+  const listed = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], {encoding: 'utf8'});
+  for (const line of (listed.stdout ?? '').split('\n')) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (pid !== undefined && ppid !== undefined && Number.isInteger(pid) && Number.isInteger(ppid) && pid > 0) parents.set(pid, ppid);
+  }
+  return parents;
+};
+
+/** `pid` and its ancestors, nearest first, down to (not including) pid 1. */
+const lineage = (pid: number, parents: Map<number, number>) => {
+  const line: number[] = [];
+  for (let at = pid; at > 1 && !line.includes(at); at = parents.get(at) ?? 0) line.push(at);
+  return line;
+};
+
+/** Every pid under `pid`, at any depth. */
+const progeny = (pid: number, parents: Map<number, number>) => {
+  const found = new Set<number>([pid]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [child, parent] of parents) {
+      if (found.has(parent) && !found.has(child)) { found.add(child); grew = true; }
+    }
+  }
+  found.delete(pid);
+  return found;
+};
+
+const SESSION_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{7,}$/;
+
+/** The id8 of the Claude Code session above `pid`: the first of its line with a <pid>.json in sessions/. */
+const sessionAbove = (pid: number, parents: Map<number, number>, home = claudeDir()) => {
+  for (const at of lineage(pid, parents)) {
+    try {
+      const {sessionId} = JSON.parse(readFileSync(path.join(home, 'sessions', `${at}.json`), 'utf8')) as {sessionId?: unknown};
+      if (typeof sessionId === 'string' && SESSION_ID.test(sessionId)) return sessionId.slice(0, 8);
+    } catch { /* no session at this pid */ }
+  }
+  return null;
+};
+
+/** The log of the first job band entry (watch.json) whose pid is `pid`, one of its ancestors or one under it. */
+const jobLog = (pid: number, parents: Map<number, number>, home = claudeDir()) => {
+  let band: unknown;
+  try { band = JSON.parse(readFileSync(path.join(home, 'watch.json'), 'utf8')); } catch { return null; }
+  const jobs: unknown = Array.isArray(band) ? band : (band as {jobs?: unknown} | null)?.jobs;
+  if (!Array.isArray(jobs)) return null;
+  const related = new Set([...lineage(pid, parents), ...progeny(pid, parents)]);
+  for (const job of jobs as ({pid?: unknown; log?: unknown} | null)[]) {
+    if (typeof job?.pid === 'number' && related.has(job.pid) && typeof job.log === 'string') return job.log;
+  }
+  return null;
+};
+
+/** The last line of `file` that says something, after the last carriage return of a progress bar; null when unreadable. */
+const lastLogLine = (file: string) => {
+  let fd: number;
+  try { fd = openSync(file, 'r'); } catch { return null; }
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, 8192);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.toString('utf8').split(/[\r\n]+/).map((line) => line.trim()).filter((line) => line !== '');
+    return (lines[lines.length - 1] ?? '(empty)').slice(0, 200);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+};
+
+/** `ms` as local "YYYY-MM-DD HH:MM", with the whole minutes since then. */
+const localSince = (ms: number, now: number) => {
+  const at = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())} (${Math.max(0, Math.floor((now - ms) / 60_000))} min ago)`;
+};
+
+/**
+ * `render-slot status` (HAR-167): who holds the slot and who waits in the queue, each with the pid, the
+ * repo, the command, since when, the Claude Code session and the last line of its job's log. Read only.
+ */
+export const slotStatus = (dir = slotDir(), now = Date.now()) => {
+  const parents = processTable();
+  const about = (pid: number, since: number, repo: string, command: string) => {
+    const head = `pid ${pid} (${repo}: ${command}) since ${localSince(since, now)}, session ${sessionAbove(pid, parents) ?? 'unknown'}`;
+    const log = jobLog(pid, parents);
+    return log === null ? [head] : [head, `    log ${log}: ${lastLogLine(log) ?? '(cannot be read)'}`];
+  };
+  const lines: string[] = [];
+  const owner = exists(dir) ? readOwner(dir) : null;
+  if (!exists(dir)) {
+    lines.push(`The render slot (${dir}) is free.`);
+  } else if (renderSlotHolder(dir) === undefined) {
+    const gone = owner === null ? 'its owner never wrote owner.json' : `pid ${owner.pid} (${owner.repo}: ${owner.command}), which took it at ${localSince(Date.parse(owner.startedAt), now)}, is gone`;
+    lines.push(`The render slot (${dir}) is free: ${gone}; the next render takes it over.`);
+  } else if (owner === null) {
+    lines.push(`The render slot (${dir}) is ${describeSlotHolder(null)}.`);
+  } else {
+    const [head, ...log] = about(owner.pid, Date.parse(owner.startedAt), owner.repo, owner.command);
+    lines.push(`The render slot (${dir}) is held by ${head}.`, ...log);
+    if (!alive(owner.pid) && typeof owner.commandPgid === 'number') lines.push(`  Its pid is gone, but its command still runs in process group ${owner.commandPgid}.`);
+    if (newerProtocol(owner)) lines.push(`  Written by render-slot protocol ${owner.protocol}, while this copy speaks ${PROTOCOL}: update this copy from ~/obsidian/AI/scripts/render-slot.ts.`);
+  }
+  const queue = renderSlotQueue(dir);
+  lines.push(queue.length === 0 ? 'Nobody waits in the queue.' : `${queue.length} waiting in the queue, in the order they take the slot:`);
+  queue.forEach((ticket, index) => {
+    const [head, ...log] = about(ticket.pid, ticket.enqueuedAt, ticket.repo, ticket.command);
+    lines.push(`  ${index + 1}. ${head}.`, ...log);
+  });
+  return lines.join('\n');
+};
+
 /** The value of `--name <value>` in `args`, or undefined. */
 const optionValue = (args: string[], name: string) => {
   const at = args.indexOf(name);
@@ -860,8 +1036,10 @@ if (isMain()) {
     process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max));
   } else if (verb === 'release') {
     process.exitCode = await releaseHold(optionValue(args, '--rotulo') ?? '');
+  } else if (verb === 'status' && separator === undefined) {
+    console.log(slotStatus());
   } else {
-    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> | release --rotulo <label>');
+    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> | release --rotulo <label> | status');
     process.exitCode = EXIT_USAGE;
   }
 }
