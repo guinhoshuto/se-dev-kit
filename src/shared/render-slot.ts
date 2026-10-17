@@ -20,6 +20,20 @@
 // wait gave up. It refuses a .sh script, run directly or through a shell: the slot covers each heavy
 // step, never the script that chains them (2026-10-06, a chain held it 50 minutes through light steps).
 //
+// With the slot in hand, `run` asks the machine check about what the slot does not cover (HAR-32,
+// 2026-10-16): `python3 ~/obsidian/AI/scripts/maquina_livre.py --json --fora-da-trava --familia <its pid>`,
+// without RENDER_SLOT_HELD (under the slot it names, the check looks only at the disk and at renders
+// outside the slot), so the slot counts as its own, and renders outside it, the game, memory and disk
+// count. On the answer 3 (busy) it gives the slot back before running anything, says why on stderr (once
+// per reason), leaves the slot to the next in the queue for 20 seconds, without a ticket, and asks again
+// with `since`, the moment it first came: it never goes ahead of anyone who came before it, and the wait
+// limit (4 hours) counts from that moment too, so a machine that stays busy ends the wait with 75. Any
+// other answer runs the command: 0 (free) and, with a note on stderr, 4 ("not sure", a sandbox that denies
+// ps) and a check that is missing, fails or takes over 60 seconds, so a broken check never keeps a render
+// from running. A run under a slot it inherits (RENDER_SLOT_HELD) does not ask: its parent took the slot.
+// RENDER_SLOT_CHECK=off skips the check; another value is the program asked in its place, with the same
+// arguments (the tests).
+//
 // `node render-slot.ts hold --rotulo <label> --max <minutes>` (HAR-109, 2026-10-09) holds the slot for a
 // heavy task that is not one shell command: an E2E driven step by step through an MCP (Chrome, the SE
 // Widget Studio), which could only wait for the machine and let another session start a render in the
@@ -139,6 +153,10 @@ export const PROTOCOL = 2;
 const POLL_MS = 2000;
 /** Long enough to wait out a whole kit of a pack chain (about 2.4 hours in 2026-10), which then gives way. */
 const WAIT_LIMIT_MS = 4 * 60 * 60 * 1000;
+/** How long `run` leaves the slot to the next in the queue when the machine is busy outside it (HAR-32). */
+const BUSY_BACKOFF_MS = 20_000;
+/** A machine check that takes longer than this tells nothing, and `run` goes on without it. */
+const CHECK_TIMEOUT_MS = 60_000;
 /** A ticket not touched for this long stops counting: its waiter is stuck, or its pid was reused. */
 const TICKET_FRESH_MS = 60_000;
 /** A ticket silent for this long is removed; a waiter that still runs writes it again in its place. */
@@ -750,12 +768,91 @@ const recordCommandGroup = (dir: string, pgid: number) => {
   } catch { /* best effort: without it, the pid alone decides, as before */ }
 };
 
+/** The machine check `run` asks with the slot in hand (HAR-32): the vault's, which every copy reaches. */
+const machineCheckScript = () => path.join(os.homedir(), 'obsidian', 'AI', 'scripts', 'maquina_livre.py');
+
 /**
- * `render-slot run -- <cmd> [args]`: waits for the slot, runs the command holding it, and resolves to
+ * Asks the machine check, with the slot in hand, about what the slot does not cover (HAR-32). `busy` is
+ * its reason on the answer 3, and null on any other: 0 (free), 4 (not sure) or a check that is missing,
+ * fails or times out, which `note` names, so a broken check never keeps a render from running.
+ */
+const checkMachine = async (dir: string, timeoutMs: number): Promise<{busy: string | null; note: string | null}> => {
+  const own = process.env.RENDER_SLOT_CHECK ?? '';
+  if (own === 'off') return {busy: null, note: null};
+  const script = machineCheckScript();
+  if (own === '' && !exists(script)) return {busy: null, note: `The machine check ${script} is missing: running without it.`};
+  const [program, first] = own === '' ? ['python3', [script]] : [own, []];
+  const env: NodeJS.ProcessEnv = {...process.env, RENDER_SLOT_DIR: dir};
+  // Under the slot RENDER_SLOT_HELD names, the check looks only at the disk and at renders outside the
+  // slot; without it, the slot of this process counts as its family's, and memory and the game count too.
+  delete env[HELD_ENV];
+  const answer = await new Promise<{status: number | null; out: string; failure: string | null}>((resolve) => {
+    let out = '';
+    const check = spawn(program, [...first, '--json', '--fora-da-trava', '--familia', String(process.pid)], {env, stdio: ['ignore', 'pipe', 'ignore']});
+    // Not spawn's own timeout: its timer outlives a check that never started, and kept `run` alive 60 s after its command.
+    const timer = setTimeout(() => check.kill('SIGKILL'), timeoutMs);
+    const done = (status: number | null, failure: string | null) => { clearTimeout(timer); resolve({status, out, failure}); };
+    check.stdout?.on('data', (chunk: Buffer) => { out += String(chunk); });
+    check.on('error', (error: Error) => done(null, error.message));
+    check.on('close', (status: number | null, signal: NodeJS.Signals | null) => done(status, signal === null ? null : `stopped by ${signal} after ${timeoutMs / 1000} s`));
+  });
+  let said: {reasons?: unknown; nao_sei?: unknown} = {};
+  try { said = JSON.parse(answer.out) as typeof said; } catch { /* not JSON: its last line is the reason */ }
+  const lastLine = answer.out.trim().split('\n').pop() ?? '';
+  if (answer.status === 3) return {busy: Array.isArray(said.reasons) && said.reasons.length > 0 ? said.reasons.join('; ') : lastLine || 'no reason given', note: null};
+  if (answer.status === 0) return {busy: null, note: null};
+  if (answer.status === 4) return {busy: null, note: `The machine check could not tell${typeof said.nao_sei === 'string' ? ` (${said.nao_sei})` : ''}: running anyway.`};
+  return {busy: null, note: `The machine check failed (${answer.failure ?? `exit ${answer.status}`}): running without it.`};
+};
+
+/** What only `run` takes (HAR-32): how long it leaves the slot to the next when the machine is busy, and how long the check may take. */
+export type RunOptions = {backoffMs?: number; checkTimeoutMs?: number};
+
+/**
+ * Takes the slot for `run` on a machine free besides it (HAR-32). With the slot in hand it asks the machine
+ * check; on busy it gives the slot back, says why (once per reason), leaves the slot to the next in the
+ * queue for backoffMs, without a ticket, and asks again with `since`, the moment it first came, which keeps
+ * its place: it never goes ahead of anyone who came before it. The wait limit counts from that moment, so a
+ * machine that stays busy ends in RENDER_SLOT_TIMEOUT, as a slot that stays held does; with wait false, in
+ * RENDER_SLOT_BUSY at once. A slot it inherits is not checked: its parent took it.
+ */
+const takeSlotToRun = async (options: SlotOptions & RunOptions): Promise<SlotHandle> => {
+  const {backoffMs = BUSY_BACKOFF_MS, checkTimeoutMs = CHECK_TIMEOUT_MS, ...slotOptions} = options;
+  const log = slotOptions.log ?? ((message: string) => console.log(message));
+  const since = slotOptions.since ?? Date.now();
+  const waitLimitMs = slotOptions.waitLimitMs ?? WAIT_LIMIT_MS;
+  let gaveBack = 0;
+  let said = '';
+  for (;;) {
+    let slot: SlotHandle;
+    try {
+      slot = await acquireRenderSlot({...slotOptions, since, waitLimitMs: Math.max(0, waitLimitMs - (Date.now() - since))});
+    } catch (error) {
+      if (!(error instanceof RenderSlotError) || gaveBack === 0) throw error;
+      throw new RenderSlotError(error.code, `${error.detail} It had given the slot back ${gaveBack}× since ${new Date(since).toISOString()}, the machine busy outside it: ${said}.`, error.hint);
+    }
+    if (slot.inherited) return slot;
+    const {busy, note} = await checkMachine(slotOptions.dir ?? slotDir(), checkTimeoutMs);
+    if (note !== null) log(note);
+    if (busy === null) return slot;
+    slot.release();
+    gaveBack += 1;
+    const waited = Date.now() - since;
+    if (slotOptions.wait === false || waited >= waitLimitMs) {
+      throw new RenderSlotError(slotOptions.wait === false ? 'RENDER_SLOT_BUSY' : 'RENDER_SLOT_TIMEOUT', `The machine is busy outside the render slot (${busy}): gave the slot back ${gaveBack}× since ${new Date(since).toISOString()}.`, 'Run again once it is free; python3 ~/obsidian/AI/scripts/maquina_livre.py says what keeps it busy.');
+    }
+    if (busy !== said) log(`The machine is busy outside the render slot: ${busy}. Gave the slot back; asking again in ${backoffMs / 1000} s, in the place it first came (${new Date(since).toISOString()}).`);
+    said = busy;
+    await sleep(Math.min(backoffMs, waitLimitMs - waited));
+  }
+};
+
+/**
+ * `render-slot run -- <cmd> [args]`: waits for the slot and a machine free besides it (takeSlotToRun), runs the command holding it, and resolves to
  * the exit status. The slot is released only once the command has exited and, after a signal, once
  * nothing of its process group runs.
  */
-export const runCommand = async (command: string[], options: Partial<SlotOptions> = {}): Promise<number> => {
+export const runCommand = async (command: string[], options: Partial<SlotOptions> & RunOptions = {}): Promise<number> => {
   const refusal = refusedCommand(command);
   if (refusal !== null) {
     console.error(refusal);
@@ -776,7 +873,7 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
   try {
     let slot: SlotHandle;
     try {
-      slot = await acquireRenderSlot({command: command.join(' ').slice(0, 200), log: (message) => console.error(message), ...options});
+      slot = await takeSlotToRun({command: command.join(' ').slice(0, 200), log: (message) => console.error(message), ...options});
     } catch (error) {
       if (!(error instanceof RenderSlotError)) throw error;
       console.error(error.message);
