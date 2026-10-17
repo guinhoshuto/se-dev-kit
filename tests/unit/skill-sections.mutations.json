@@ -1,0 +1,34 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "(references/studio-workflow.md#boundaries)",
+      "to": "(references/studio-workflow.md)",
+      "test": "tests/unit/skill-sections.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "#known-gaps)",
+      "to": "#known-gap)",
+      "test": "tests/unit/skill-sections.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "(references/studio-workflow.md#open-and-manipulate)",
+      "to": "(references/studio-workflow.md#studio-workflow)",
+      "test": "tests/unit/skill-sections.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "[references/known-limits.md](references/known-limits.md#known-limits)",
+      "to": "`references/known-limits.md`",
+      "test": "tests/unit/skill-sections.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "(references/local-workflow.md#commands)",
+      "to": "(references/local-workflow.md#recipe)",
+      "test": "tests/unit/skill-sections.test.mjs"
+    }
+  ]
+}
