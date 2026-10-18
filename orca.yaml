@@ -1,0 +1,5 @@
+# Orca reads this file from the repo root. A new worktree has nothing that git ignores, so Orca links
+# these folders of the main checkout into it (each one must exist there and be ignored by git).
+worktree:
+  sharedDirectories:
+    - node_modules
