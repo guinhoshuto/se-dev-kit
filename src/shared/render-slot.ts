@@ -449,10 +449,26 @@ const takeOverStale = (dir: string, stalePid: number | null) => {
   return true;
 };
 
+/**
+ * Takes the slot away in one step for every reader, then deletes it (BGC-36, 2026-10-17): a recursive rm of
+ * the slot itself unlinks owner.json before the directory, and a waiter that looked in between logged a slot
+ * "still writing its owner file" that was only being released (the second wait message, with the machine full).
+ */
+const removeSlotDir = (dir: string) => {
+  const gone = `${dir}.released-${process.pid}-${Date.now()}`;
+  try {
+    renameSync(dir, gone);
+  } catch {
+    rmSync(dir, {recursive: true, force: true});
+    return;
+  }
+  rmSync(gone, {recursive: true, force: true});
+};
+
 /** Removes the slot only when this process owns it. */
 export const releaseRenderSlot = (dir = slotDir()) => {
   if (readOwner(dir)?.pid !== process.pid) return false;
-  rmSync(dir, {recursive: true, force: true});
+  removeSlotDir(dir);
   if (process.env[HELD_ENV] === String(process.pid)) delete process.env[HELD_ENV];
   return true;
 };
@@ -685,6 +701,8 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
           };
         }
         const owner = readOwner(dir);
+        // Freed between the mkdir above and this read (BGC-36): the next round takes it, at once and without a message.
+        if (owner === null && !exists(dir)) continue;
         const stale = isStale(dir, owner);
         if (stale && takeOverStale(dir, owner?.pid ?? null)) continue;
         // A dead owner's slot whose takeover waits on an old mutex of a pid that still runs.
