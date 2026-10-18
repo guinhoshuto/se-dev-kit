@@ -1,0 +1,16 @@
+{
+  "mutations": [
+    {
+      "file": "tests/fixtures/two-copies/clock-widget.js",
+      "from": "return (clockOffset + now) / 1000;",
+      "to": "return (now - startedAt) / 1000;",
+      "test": "tests/integration/two-copies.test.mjs"
+    },
+    {
+      "file": "tests/integration/two-copies.test.mjs",
+      "from": "const b = read(\"b\");",
+      "to": "const b = read(\"a\");",
+      "test": "tests/integration/two-copies.test.mjs"
+    }
+  ]
+}
