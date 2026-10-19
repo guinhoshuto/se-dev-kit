@@ -213,8 +213,51 @@ const alive = (pid: number) => {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 };
 
-/** When this machine booted, in ms since the epoch. */
-const bootTimeMs = () => Date.now() - os.uptime() * 1000;
+/** The boot time in the `{ sec = 1791383599, usec = 388610 } Wed Oct  7 10:33:19 2026` of `sysctl -n kern.boottime`. */
+export const parseSysctlBoot = (out: string): number | null => {
+  const match = /sec = (\d+), usec = (\d+)/.exec(out);
+  return match ? Number(match[1]) * 1000 + Math.floor(Number(match[2]) / 1000) : null;
+};
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * The boot time in the `system boot  Oct  7 10:33` of `LC_ALL=C who -b`: local time, to the minute (floored,
+ * so never after the boot), in the last 12 months up to `now`, as `who` prints no year.
+ */
+export const parseWhoBoot = (out: string, now = Date.now()): number | null => {
+  const [, name = '', day = '', hour = '', minute = ''] = /system boot\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}):(\d{2})/.exec(out) ?? [];
+  const month = MONTHS.indexOf(name);
+  if (month < 0) return null;
+  const year = new Date(now).getFullYear();
+  const at = (y: number) => new Date(y, month, Number(day), Number(hour), Number(minute)).getTime();
+  return at(year) <= now ? at(year) : at(year - 1);
+};
+
+const readBoot = (file: string, args: string[], parse: (out: string) => number | null) => {
+  const result = spawnSync(file, args, {encoding: 'utf8', timeout: 5_000, env: {...process.env, LC_ALL: 'C'}});
+  return result.status === 0 ? parse(result.stdout) : null;
+};
+
+let bootReserve: number | undefined;
+
+/**
+ * When this machine booted, in ms since the epoch. In the Codex sandbox, os.uptime() throws EPERM (HAR-68,
+ * 2026-10-16: its seatbelt denies the kern.boottime sysctl, and every render-slot call died on it); then the
+ * boot comes from `sysctl -n kern.boottime` (the same sysctl, for a sandbox that denies only libuv), else from
+ * `who -b` (it reads utmpx, which that sandbox lets through), read once per process. With neither, it is 0:
+ * nothing counts as from before the boot, and a slot or a ticket is judged by its pid alone, as before the
+ * boot check, so the slot still keeps one render at a time.
+ */
+const bootTimeMs = () => {
+  try {
+    return Date.now() - os.uptime() * 1000;
+  } catch {
+    bootReserve ??= readBoot('/usr/sbin/sysctl', ['-n', 'kern.boottime'], parseSysctlBoot)
+      ?? readBoot('/usr/bin/who', ['-b'], parseWhoBoot) ?? 0;
+    return bootReserve;
+  }
+};
 
 /** Whether a process of the group `pgid` still runs (EPERM counts as running). */
 const groupAlive = (pgid: number) => {
