@@ -140,6 +140,92 @@ export function otherSessionsWork(processes, ownRoots) {
   return processes.filter(item => !own.has(item.pid) && isHeavy(item.command));
 }
 
+// A stalled render (HAR-143, 2026-10-20), the rule of candidato_a_parado, sem_cpu and separar_parados in the
+// machine check every repo shares: a render with PPID 1, alive for 30 min or more and below 50 MiB, whose family
+// (it and everything it started) sums under 1% of CPU now and a CPU time under 1% of its age, holds nothing. It
+// becomes a warning with a `! kill` line for the owner, since nothing here kills another session's process. On
+// 2026-10-13 a review-notes test's Chrome (`--headless=new ... --dump-dom`, 0.0% CPU, 112 KiB, 2 h 10 min) held
+// the check for 141 min. CPU counts because age and memory alone would catch a light, long, legitimate
+// `nohup ffmpeg -f image2 ...` with PPID 1. A render whose working directory, age or memory was not read still
+// counts.
+const STALLED_MIN_AGE_S = 30 * 60;
+const STALLED_MAX_RSS_KIB = 50 * 1024;
+const STALLED_MAX_PCPU = 1;
+const STALLED_MAX_CPU_FRACTION = 0.01;
+
+// ps's etime is [[dd-]hh:]mm:ss; its cputime is mm:ss.cc on macOS, with minutes past 60, and [dd-]hh:mm:ss on Linux.
+function seconds(text) {
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:[.,]\d+)?)$/.exec(text);
+  if (!match) return undefined;
+  const [days, hours, minutes] = [match[1], match[2], match[3]].map(part => Number(part ?? 0));
+  return ((days * 24 + hours) * 60 + minutes) * 60 + Number(match[4].replace(',', '.'));
+}
+
+/** Lines of `ps -o pid=,rss=,etime=,pcpu=,cputime=` as a Map of PID to {rssKib, ageS, pcpu, cpuS}. */
+export function parseUsage(text) {
+  const usage = new Map();
+  for (const line of text.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\d+(?:[.,]\d+)?)\s+(\S+)\s*$/.exec(line);
+    if (!match) continue;
+    const ageS = seconds(match[3]);
+    const cpuS = seconds(match[5]);
+    if (ageS !== undefined && cpuS !== undefined) usage.set(Number(match[1]), {rssKib: Number(match[2]), ageS, pcpu: Number(match[4].replace(',', '.')), cpuS});
+  }
+  return usage;
+}
+
+/** What ps reads of `pids`: a PID that is gone is missing from the answer. */
+export async function readUsage(pids) {
+  if (!pids.length) return new Map();
+  try {
+    const {stdout} = await run('ps', ['-o', 'pid=,rss=,etime=,pcpu=,cputime=', '-p', pids.join(',')]);
+    return parseUsage(stdout);
+  } catch {
+    // ps exits 1 when every PID is gone.
+    return new Map();
+  }
+}
+
+// A missing reading compares false, so a render ps no longer lists still counts.
+const stalledCandidate = info => Boolean(info.cwd) && info.ageS >= STALLED_MIN_AGE_S && info.rssKib < STALLED_MAX_RSS_KIB;
+
+/** Both: what works now, or worked in its life, still renders. */
+const withoutCpu = (pcpu, cpuS, ageS) => pcpu < STALLED_MAX_PCPU && cpuS < ageS * STALLED_MAX_CPU_FRACTION;
+
+/**
+ * `heavy` (another session's work, from otherSessionsWork) as {busy, stalled}: the renders that hold the
+ * machine, and the stalled ones, each with its working directory, age, own memory, and its family's CPU.
+ * ps and lsof read only the PPID-1 renders and their families.
+ */
+export async function splitStalled(heavy, processes, {usage = readUsage, cwd = cwdOf} = {}) {
+  const orphaned = heavy.filter(item => item.ppid === 1);
+  if (!orphaned.length) return {busy: heavy, stalled: []};
+  const families = new Map(orphaned.map(item => [item.pid, familyOf(processes, [item.pid])]));
+  const readings = await usage([...new Set([...families.values()].flatMap(family => [...family]))].sort((a, b) => a - b));
+  const stalled = [];
+  for (const item of orphaned) {
+    const info = {...readings.get(item.pid), cwd: await cwd(item.pid)};
+    if (!stalledCandidate(info)) continue;
+    const family = [...families.get(item.pid)].flatMap(pid => (readings.has(pid) ? [readings.get(pid)] : []));
+    const pcpu = family.reduce((sum, reading) => sum + reading.pcpu, 0);
+    const cpuS = family.reduce((sum, reading) => sum + reading.cpuS, 0);
+    if (withoutCpu(pcpu, cpuS, info.ageS)) stalled.push({...item, ...info, pcpu, cpuS});
+  }
+  const out = new Set(stalled.map(item => item.pid));
+  return {busy: heavy.filter(item => !out.has(item.pid)), stalled};
+}
+
+// ha_quanto and numero of the machine check; a stalled render is below 50 MiB.
+const age = s => (s < 3600 ? `${Math.max(1, Math.floor(s / 60))} min` : s < 2 * 86400 ? `${Math.floor(s / 3600)} h` : `${Math.floor(s / 86400)} days`);
+const decimal = value => String(Number(value.toFixed(1)));
+const tilde = path => (isInside(homedir(), path) ? join('~', relative(homedir(), path)) : path);
+
+/** The warning for a stalled render (aviso_do_render_parado), with the `! kill` line for the owner to run. */
+export function stalledWarning(item) {
+  const memory = item.rssKib < 1024 ? `${item.rssKib} KiB` : `${Math.round(item.rssKib / 1024)} MiB`;
+  return `orphan render (PPID 1) stalled for ${age(item.ageS)}, without CPU (${decimal(item.pcpu)}% now, ${decimal(item.cpuS)} s of CPU in its life), ${memory}; it does not count as a render: PID ${item.pid} (${shortCommand(item.command)}), in ${tilde(item.cwd)}; you end it: \`! kill ${item.pid}\``;
+}
+
 export async function freeBytes(path) {
   const info = await statfs(path);
   return Number(info.bavail) * Number(info.bsize);
@@ -190,9 +276,10 @@ export const shortCommand = command => (command.length > 110 ? `${command.slice(
 /**
  * Whether a suite that starts Chrome may run now. It refuses below MIN_FREE_BYTES, when this checkout
  * left an orphan (which `npm run kill-stale` removes), and when the machine check says to wait; where
- * that check is missing, when another session renders.
+ * that check is missing, when another session renders. A stalled render does not refuse: it comes back
+ * in `warnings`, which is there only when there is one.
  */
-export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FREE_BYTES, processes, free = freeBytes, cwd = cwdOf, machine = machineVerdict}) {
+export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FREE_BYTES, processes, free = freeBytes, cwd = cwdOf, usage = readUsage, machine = machineVerdict}) {
   for (const path of paths) {
     const bytes = await free(path);
     if (bytes < minFreeBytes) return {ok: false, reason: `only ${gib(bytes)} free on the volume of ${path}; browser suites need ${gib(minFreeBytes)}`};
@@ -202,9 +289,9 @@ export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FRE
   if (orphans.length) return {ok: false, reason: `this checkout left ${orphans.length} orphan process(es) (PID ${orphans.map(item => item.pid).join(', ')}); run npm run kill-stale`};
   const verdict = await machine(ownRoots);
   if (verdict) return verdict.free ? {ok: true} : {ok: false, reason: `the machine check says to wait: ${verdict.reasons.join('; ')}`};
-  const busy = otherSessionsWork(list, ownRoots);
-  if (busy.length) return {ok: false, reason: `another session is rendering: PID ${busy[0].pid} ${shortCommand(busy[0].command)}${busy.length > 1 ? ` (+${busy.length - 1} more)` : ''}`};
-  return {ok: true};
+  const {busy, stalled} = await splitStalled(otherSessionsWork(list, ownRoots), list, {usage, cwd});
+  const result = busy.length ? {ok: false, reason: `another session is rendering: PID ${busy[0].pid} ${shortCommand(busy[0].command)}${busy.length > 1 ? ` (+${busy.length - 1} more)` : ''}`} : {ok: true};
+  return stalled.length ? {...result, warnings: stalled.map(stalledWarning)} : result;
 }
 
 /** SIGKILL, by process group first, since Playwright starts Chrome as the leader of its own group. */

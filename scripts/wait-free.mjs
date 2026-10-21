@@ -2,13 +2,13 @@
 // machine (~/obsidian/AI/scripts/maquina_livre.py, see machineVerdict), free is what it says: no other
 // render, nobody else holding the render slot, the game closed, enough free memory and disk. Elsewhere,
 // nobody else holds the machine-wide render slot (~/.cache/render-slot), and no headless or automated
-// Chrome, Remotion render, or local Studio render runs outside this process tree. It first kills this
-// checkout's own orphans, which would otherwise hold the wait forever. Ported from the waitfree.sh of
-// 2026-09-27 (one check a minute, 30 minutes at most). Exit 0 when the machine is free, 1 when it is
-// still busy. Needs the built engine (dist/).
+// Chrome, Remotion render, or local Studio render runs outside this process tree; a stalled one
+// (splitStalled) is only a warning. It first kills this checkout's own orphans, which would otherwise
+// hold the wait forever. Ported from the waitfree.sh of 2026-09-27 (one check a minute, 30 minutes at
+// most). Exit 0 when the machine is free, 1 when it is still busy. Needs the built engine (dist/).
 import {setTimeout as sleep} from 'node:timers/promises';
 import {killStale} from './kill-stale.mjs';
-import {freeBytes, listProcesses, machineVerdict, MIN_FREE_BYTES, otherSessionsWork, shortCommand} from './lib/machine.mjs';
+import {freeBytes, listProcesses, machineVerdict, MIN_FREE_BYTES, otherSessionsWork, shortCommand, splitStalled, stalledWarning} from './lib/machine.mjs';
 
 const option = (name, fallback) => {
   const index = process.argv.indexOf(name);
@@ -20,12 +20,20 @@ const {describeSlotHolder, renderSlotHolder, slotDir} = await import('../dist/sh
 const minutes = option('--timeout-min', 30);
 const interval = option('--interval-s', 60);
 
+// A stalled render does not hold the wait; its warning is printed once.
+const warned = new Set();
+
 /** Why to wait now, or undefined when the machine is free; `checked` says whether the shared check answered. */
 async function busyReason() {
   const verdict = await machineVerdict([process.pid]);
   if (verdict) return {checked: true, reason: verdict.free ? undefined : verdict.reasons.join('; ')};
   const holder = renderSlotHolder();
-  const busy = otherSessionsWork(await listProcesses(), [process.pid]);
+  const processes = await listProcesses();
+  const {busy, stalled} = await splitStalled(otherSessionsWork(processes, [process.pid]), processes);
+  for (const item of stalled.filter(item => !warned.has(item.pid))) {
+    warned.add(item.pid);
+    console.log(`Warning: ${stalledWarning(item)}`);
+  }
   const reason = holder
     ? `the render slot ${slotDir()} is ${describeSlotHolder(holder.owner)}`
     : busy.length ? `PID ${busy[0].pid} ${shortCommand(busy[0].command)}${busy.length > 1 ? ` (+${busy.length - 1} more)` : ''}` : undefined;

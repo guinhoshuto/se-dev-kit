@@ -10,7 +10,7 @@ import test from "node:test";
 import {fileURLToPath} from "node:url";
 
 import {BROWSER_MARKER as ENGINE_MARKER} from "../../dist/capture/browser.js";
-import {BROWSER_MARKER, HEAVY_PATTERNS, WRAPPERS, browserGate, checkoutOrphans, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseVerdict} from "../../scripts/lib/machine.mjs";
+import {BROWSER_MARKER, HEAVY_PATTERNS, WRAPPERS, browserGate, checkoutOrphans, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseUsage, parseVerdict, readUsage, splitStalled} from "../../scripts/lib/machine.mjs";
 import {killStale} from "../../scripts/kill-stale.mjs";
 
 const ROOT = "/work/se-dev-kit";
@@ -186,7 +186,8 @@ test("the caller's ancestors, and a shell or pgrep that only mentions a pattern,
 
 test("the browser gate refuses below 3 GiB free, for orphans and for another session's render, and passes otherwise", async () => {
   const quiet = [{pid: 900, ppid: 1, command: "/opt/homebrew/bin/node scripts/run-tests.mjs"}];
-  const gate = (options) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, machine: async () => null, ...options});
+  // No usage readings: a real `ps -p 11` would read whatever runs as PID 11 on this machine.
+  const gate = (options) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, usage: async () => new Map(), machine: async () => null, ...options});
   assert.deepEqual(await gate({processes: quiet, free: async () => 3 * 1024 ** 3}), {ok: true});
   const low = await gate({processes: quiet, free: async () => 3 * 1024 ** 3 - 1});
   assert.equal(low.ok, false);
@@ -195,6 +196,95 @@ test("the browser gate refuses below 3 GiB free, for orphans and for another ses
   assert.match(orphaned.reason, /orphan process\(es\) \(PID 10, 20, 21\); run npm run kill-stale/);
   const busy = await gate({processes: [...quiet, processes()[1]], free: async () => 10 * 1024 ** 3});
   assert.match(busy.reason, /another session is rendering: PID 11 /);
+});
+
+const HEADLESS = `${CHROME} --headless=new --dump-dom file:///work/page.html`;
+const RENDERER = `${CHROME} Helper (Renderer) --type=renderer`;
+
+/** Another session's renders, each with what ps reads of it (`use`) and its working directory. */
+function stalledScene() {
+  const rows = [
+    // The review-notes test's Chrome of 2026-10-13: 2 h 10 min, 112 KiB, no CPU, with a big renderer child.
+    {pid: 100, ppid: 1, command: HEADLESS, use: {rssKib: 112, ageS: 7800, pcpu: 0, cpuS: 0.4}, cwd: "/work/review-notes"},
+    {pid: 101, ppid: 100, command: RENDERER, use: {rssKib: 900_000, ageS: 7800, pcpu: 0, cpuS: 0}},
+    // Just old and small enough: exactly 30 min, and 1 KiB under 50 MiB.
+    {pid: 110, ppid: 1, command: HEADLESS, use: {rssKib: 300, ageS: 1800, pcpu: 0, cpuS: 0}, cwd: "/work/a"},
+    {pid: 120, ppid: 1, command: HEADLESS, use: {rssKib: 51_199, ageS: 7200, pcpu: 0, cpuS: 0}, cwd: "/work/b"},
+    // Still renders: a second short of 30 min, and exactly 50 MiB.
+    {pid: 200, ppid: 1, command: HEADLESS, use: {rssKib: 300, ageS: 1799, pcpu: 0, cpuS: 0}, cwd: "/work/c"},
+    {pid: 210, ppid: 1, command: HEADLESS, use: {rssKib: 51_200, ageS: 7200, pcpu: 0, cpuS: 0}, cwd: "/work/d"},
+    // Its family uses exactly 1% of CPU now, half of it in a child.
+    {pid: 220, ppid: 1, command: HEADLESS, use: {rssKib: 300, ageS: 7200, pcpu: 0.5, cpuS: 0}, cwd: "/work/e"},
+    {pid: 221, ppid: 220, command: RENDERER, use: {rssKib: 300, ageS: 7200, pcpu: 0.5, cpuS: 0}},
+    // Its family spent exactly 1% of its age on CPU (36 s in 1 h), all in a child.
+    {pid: 230, ppid: 1, command: HEADLESS, use: {rssKib: 300, ageS: 3600, pcpu: 0, cpuS: 0}, cwd: "/work/f"},
+    {pid: 231, ppid: 230, command: RENDERER, use: {rssKib: 300, ageS: 3600, pcpu: 0, cpuS: 36}},
+    // A light, long `nohup ffmpeg -f image2` that works: little CPU now, 300 s of it in 2 h.
+    {pid: 240, ppid: 1, command: "/opt/homebrew/bin/ffmpeg -i in.mp4 -f image2 out/%06d.png", use: {rssKib: 20_000, ageS: 7200, pcpu: 0.4, cpuS: 300}, cwd: "/work/g"},
+    // Its session is alive; its working directory was not read; ps no longer lists it.
+    {pid: 250, ppid: 4242, command: HEADLESS, use: {rssKib: 300, ageS: 7200, pcpu: 0, cpuS: 0}, cwd: "/work/h"},
+    {pid: 260, ppid: 1, command: HEADLESS, use: {rssKib: 300, ageS: 7200, pcpu: 0, cpuS: 0}},
+    {pid: 270, ppid: 1, command: HEADLESS, cwd: "/work/i"}
+  ];
+  const asked = [];
+  return {
+    asked,
+    list: rows.map(({pid, ppid, command}) => ({pid, ppid, command})),
+    usage: async (pids) => { asked.push(pids); return new Map(rows.filter((row) => row.use && pids.includes(row.pid)).map((row) => [row.pid, row.use])); },
+    cwd: async (pid) => rows.find((row) => row.pid === pid)?.cwd
+  };
+}
+
+test("a PPID-1 render 30 min or older, below 50 MiB, whose family has no CPU now nor in its life, is stalled; any other still renders", async () => {
+  const {asked, list, usage, cwd} = stalledScene();
+  const {busy, stalled} = await splitStalled(otherSessionsWork(list, [900]), list, {usage, cwd});
+  assert.deepEqual(stalled.map((item) => item.pid), [100, 110, 120]);
+  assert.deepEqual(busy.map((item) => item.pid), [200, 210, 220, 230, 240, 250, 260, 270]);
+  // The memory is the render's own, not its renderer's; the CPU is the family's.
+  assert.deepEqual(stalled[0], {pid: 100, ppid: 1, command: HEADLESS, rssKib: 112, ageS: 7800, pcpu: 0, cpuS: 0.4, cwd: "/work/review-notes"});
+  // One ps call, for the PPID-1 renders and their families only.
+  assert.deepEqual(asked, [[100, 101, 110, 120, 200, 210, 220, 221, 230, 231, 240, 260, 270]]);
+});
+
+test("the browser gate passes a stalled render with a warning and its `! kill` line, and still refuses for a live one", async () => {
+  const {list, usage, cwd} = stalledScene();
+  const quiet = {pid: 900, ppid: 1, command: "/opt/homebrew/bin/node scripts/run-tests.mjs"};
+  const gate = (pids) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], processes: [quiet, ...list.filter((item) => pids.includes(item.pid))], free: async () => 10 * 1024 ** 3, cwd, usage, machine: async () => null});
+  const warning = "orphan render (PPID 1) stalled for 2 h, without CPU (0% now, 0.4 s of CPU in its life), 112 KiB; it does not count as a render: " +
+    "PID 100 (/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --dump-dom file:///work/page.html), in /work/review-notes; you end it: `! kill 100`";
+  assert.deepEqual(await gate([100, 101]), {ok: true, warnings: [warning]});
+  assert.deepEqual(await gate([100, 101, 200]), {ok: false, reason: `another session is rendering: PID 200 ${HEADLESS}`, warnings: [warning]});
+  assert.deepEqual(await gate([200]), {ok: false, reason: `another session is rendering: PID 200 ${HEADLESS}`});
+});
+
+test("ps usage parses the macOS and Linux times and a decimal comma, and skips what it cannot read", () => {
+  const usage = parseUsage([
+    "63153    112   02:10:05   0.0   0:00.41",
+    "    7   2048 1-02:03:04  12,5  75:12,50",
+    "    8    100      05:00   0.3  00:01:23",
+    "  PID    RSS    ELAPSED  %CPU   TIME",
+    ""
+  ].join("\n"));
+  assert.deepEqual([...usage], [
+    [63153, {rssKib: 112, ageS: 7805, pcpu: 0, cpuS: 0.41}],
+    [7, {rssKib: 2048, ageS: 93_784, pcpu: 12.5, cpuS: 4512.5}],
+    [8, {rssKib: 100, ageS: 300, pcpu: 0.3, cpuS: 83}]
+  ]);
+});
+
+test("ps reads a live process's usage and leaves out one that is gone", {timeout: 30_000}, async (t) => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio: "ignore"});
+  t.after(() => child.kill("SIGKILL"));
+  const gone = spawn(process.execPath, ["-e", ""], {stdio: "ignore"});
+  await once(gone, "exit");
+  assert.ok(child.pid > 1 && gone.pid > 1, `PIDs ${child.pid} and ${gone.pid}`);
+  const usage = await readUsage([child.pid, gone.pid]);
+  assert.deepEqual([...usage.keys()], [child.pid]);
+  const own = usage.get(child.pid);
+  assert.ok(own.rssKib > 0 && Number.isInteger(own.ageS) && own.ageS >= 0 && own.pcpu >= 0 && own.cpuS >= 0, JSON.stringify(own));
+  assert.equal((await readUsage([gone.pid])).size, 0);
+  child.kill("SIGKILL");
+  await once(child, "exit");
 });
 
 test("kill-stale kills a real marked orphan of this checkout and leaves one from another folder alone", {timeout: 30_000}, async (t) => {
@@ -264,7 +354,7 @@ test("the browser gate follows the machine check, and the process list only wher
   const quiet = [{pid: 900, ppid: 1, command: "/opt/homebrew/bin/node scripts/run-tests.mjs"}];
   const rendering = [...quiet, processes()[1]];
   const asked = [];
-  const gate = (machine) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, processes: rendering, free: async () => 10 * 1024 ** 3, machine: async (roots) => { asked.push(roots); return machine; }});
+  const gate = (machine) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, usage: async () => new Map(), processes: rendering, free: async () => 10 * 1024 ** 3, machine: async (roots) => { asked.push(roots); return machine; }});
   assert.deepEqual(await gate({free: true, reasons: []}), {ok: true}, "the check already looked at the renders");
   assert.deepEqual(await gate({free: false, reasons: ["12% of memory free, below 30%", "the game (Client-Mac-Shipping) is open"]}), {ok: false, reason: "the machine check says to wait: 12% of memory free, below 30%; the game (Client-Mac-Shipping) is open"});
   assert.match((await gate(null)).reason, /another session is rendering: PID 11 /);

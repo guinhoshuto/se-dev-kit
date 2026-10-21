@@ -111,6 +111,174 @@
       "to": "",
       "test": "tests/unit/machine.test.mjs",
       "name": "^ugrep, caffeinate"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "const STALLED_MIN_AGE_S = 30 * 60;",
+      "to": "const STALLED_MIN_AGE_S = 31 * 60;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "const STALLED_MIN_AGE_S = 30 * 60;",
+      "to": "const STALLED_MIN_AGE_S = 29 * 60;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "info.ageS >= STALLED_MIN_AGE_S",
+      "to": "info.ageS > STALLED_MIN_AGE_S",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "const STALLED_MAX_RSS_KIB = 50 * 1024;",
+      "to": "const STALLED_MAX_RSS_KIB = 51 * 1024;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "const STALLED_MAX_RSS_KIB = 50 * 1024;",
+      "to": "const STALLED_MAX_RSS_KIB = 49 * 1024;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "info.rssKib < STALLED_MAX_RSS_KIB",
+      "to": "info.rssKib <= STALLED_MAX_RSS_KIB",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "const STALLED_MAX_PCPU = 1;",
+      "to": "const STALLED_MAX_PCPU = 2;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "pcpu < STALLED_MAX_PCPU &&",
+      "to": "pcpu <= STALLED_MAX_PCPU &&",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "const STALLED_MAX_CPU_FRACTION = 0.01;",
+      "to": "const STALLED_MAX_CPU_FRACTION = 0.02;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "cpuS < ageS * STALLED_MAX_CPU_FRACTION",
+      "to": "cpuS <= ageS * STALLED_MAX_CPU_FRACTION",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "pcpu < STALLED_MAX_PCPU && cpuS < ageS * STALLED_MAX_CPU_FRACTION",
+      "to": "pcpu < STALLED_MAX_PCPU",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "pcpu < STALLED_MAX_PCPU && cpuS < ageS * STALLED_MAX_CPU_FRACTION",
+      "to": "cpuS < ageS * STALLED_MAX_CPU_FRACTION",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "familyOf(processes, [item.pid])",
+      "to": "new Set([item.pid])",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "heavy.filter(item => item.ppid === 1)",
+      "to": "heavy.filter(() => true)",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "Boolean(info.cwd) && ",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "return {busy: heavy.filter(item => !out.has(item.pid)), stalled};",
+      "to": "return {busy: heavy, stalled};",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a PPID-1 render 30 min or older"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "return stalled.length ? {...result, warnings: stalled.map(stalledWarning)} : result;",
+      "to": "return result;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the browser gate passes a stalled render"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "const result = busy.length ?",
+      "to": "const result = busy.concat(stalled).length ?",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the browser gate passes a stalled render"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "you end it: \\`! kill ${item.pid}\\`",
+      "to": "you end it: \\`kill ${item.pid}\\`",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the browser gate passes a stalled render"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "pcpu: Number(match[4].replace(',', '.'))",
+      "to": "pcpu: Number(match[4])",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ps usage parses"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "* 60 + Number(match[4].replace(',', '.'))",
+      "to": "* 60 + Number(match[4])",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ps usage parses"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "(days * 24 + hours)",
+      "to": "(hours)",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ps usage parses"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "    return parseUsage(stdout);",
+      "to": "    return new Map();",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ps reads a live process"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "    // ps exits 1 when every PID is gone.\n    return new Map();",
+      "to": "    // ps exits 1 when every PID is gone.\n    return undefined;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^ps reads a live process"
     }
   ]
 }
