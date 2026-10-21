@@ -523,6 +523,16 @@ export function fontIssues(name, bytes) {
   } catch {return [];}
 }
 
+/** The smoke check and scenarios a test report records as not passed, each with its ID and errors. */
+function failedChecks(name, bytes) {
+  if (!/(?:^|[/\\])test-report\.json$/.test(String(name))) return [];
+  let report;
+  try {report = JSON.parse(Buffer.from(bytes).toString('utf8'));} catch {return [];}
+  const checks = [report?.smoke, ...(Array.isArray(report?.scenarios) ? report.scenarios : [])];
+  return checks.filter(item => item && typeof item === 'object' && item.status !== 'passed')
+    .map(item => ({id: String(item.id), errors: Array.isArray(item.errors) ? item.errors.filter(error => typeof error === 'string') : []}));
+}
+
 /**
  * Before a job on a local Studio, waits while the machine check every repo shares says to wait (another session's
  * render or held render slot, the game, memory, swap, disk), up to 4 hours like the local CLI, and prints why. The
@@ -569,10 +579,13 @@ async function runJob(flags) {
     job = expect(polled, [200], 'Job poll');
     check(job?.id === created.id, 'Job poll returned a different job.');
   }
-  check(job.status === 'completed', `Job ended with ${job.status}. ${job.error ?? ''}`);
+  // A failed test still publishes its report, which names the failing check, so it is downloaded too.
+  const failedTest = kind === 'test' && job.status === 'failed' && job.artifacts.length > 0;
+  check(job.status === 'completed' || failedTest, `Job ended with ${job.status}. ${job.error ?? ''}`);
   await mkdir(output, {recursive: false, mode: 0o700});
   const artifacts = [];
   const fonts = new Set();
+  const failures = [];
   for (const [index, artifact] of job.artifacts.entries()) {
     const name = artifactName(artifact.name);
     const downloaded = await downloadArtifact(access, artifact);
@@ -582,12 +595,16 @@ async function runJob(flags) {
     // `name` is the path the job wrote, as a render manifest names its files: `review` matches them by it.
     artifacts.push({id: artifact.id, name, file, contentType: artifact.contentType, bytes: downloaded.bytes.length, sha256: downloaded.sha256});
     for (const issue of fontIssues(artifact.name, downloaded.bytes)) fonts.add(issue);
+    failures.push(...failedChecks(artifact.name, downloaded.bytes));
   }
   const fontSummary = fonts.size ? {fontIssues: [...fonts]} : {};
   if (fonts.size) process.stderr.write(`[se-widget-studio] Google Fonts issues: ${[...fonts].join(' | ')}\n`);
   const report = {schemaVersion: 1, origin: access.origin, projectId: access.projectId, jobId: job.id, revisionId: job.revisionId, kind, selection, status: job.status, artifacts, ...fontSummary};
   await writeFile(resolve(output, 'job.json'), JSON.stringify(report, null, 2) + '\n', {flag: 'wx', mode: 0o600});
   console.log(JSON.stringify({status: job.status, projectId: access.projectId, jobId: job.id, output, artifacts, ...fontSummary}));
+  if (!failedTest) return;
+  for (const {id, errors} of failures) process.stderr.write(`[se-widget-studio] Failed check ${id}: ${errors.join(' | ') || 'no error recorded'}\n`);
+  fail(`Job ended with failed. ${job.error ?? ''} The report was downloaded to ${output}.`);
 }
 
 /**
@@ -642,6 +659,7 @@ leaves scenarios out.
 Catalog writes that flattened catalog, the JSON that import --catalog takes, without contacting any Studio.
 Import and push check sws-sample: references against the selected deployment before any change; a blocked import prints its diagnostics.
 Run refuses an existing output directory, waits for the machine on a local Studio before submitting, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.
+A failed test still downloads its report, prints each failed check with its errors, and exits with 1.
 Active prints how many jobs of every project the Studio runs, without a capability. A local job runs inside the server
 process: stop a local Studio you started only when it prints "activeJobs":0.`);
 }

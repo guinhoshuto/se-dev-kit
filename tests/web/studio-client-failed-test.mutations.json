@@ -1,0 +1,53 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "check(job.status === 'completed' || failedTest, `Job ended with ${job.status}. ${job.error ?? ''}`);",
+      "to": "check(job.status === 'completed', `Job ended with ${job.status}. ${job.error ?? ''}`);",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run downloads the report of a failed test"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "for (const [index, artifact] of job.artifacts.entries()) {",
+      "to": "for (const [index, artifact] of (failedTest ? [] : job.artifacts).entries()) {",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run downloads the report of a failed test"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "const failedTest = kind === 'test' && job.status === 'failed'",
+      "to": "const failedTest = job.status === 'failed'",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run downloads the report of a failed test"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "if (!failedTest) return;",
+      "to": "return;",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run downloads the report of a failed test"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "for (const {id, errors} of failures) process.stderr.write(",
+      "to": "for (const {id, errors} of []) process.stderr.write(",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run downloads the report of a failed test"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "item && typeof item === 'object' && item.status !== 'passed'",
+      "to": "item && typeof item === 'object'",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run downloads the report of a failed test"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "kind, selection, status: job.status, artifacts",
+      "to": "kind, selection, status: 'completed', artifacts",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "^run downloads the report of a failed test"
+    }
+  ]
+}

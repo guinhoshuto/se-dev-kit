@@ -262,6 +262,50 @@ test('run prints the Google Fonts issues of the manifest it downloads, on one li
   }
 });
 
+test('run downloads the report of a failed test, prints each failed check, and exits with 1', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-run-failed-test-'));
+  const token = 'private_capability_12345678901234567890';
+  const error = 'Expected selector "[data-message-id=\\"b01\\"]" existence to be true, received count 0.';
+  const check = (id: string, status: string, errors: string[]) => ({id, name: id, status, durationMs: 400, errors, warnings: []});
+  const report = Buffer.from(JSON.stringify({schemaVersion: 1, revisionId: 'revision-test', simulationOnly: true, fonts: {mode: 'cache', served: []}, smoke: check('browser-smoke', 'passed', []), scenarios: [check('native-loaded', 'failed', [error]), check('burst-trims', 'passed', [])]}, null, 2));
+  const requests: string[] = [];
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* drain */ }
+    requests.push(`${request.method} ${request.url}`);
+    if (request.method === 'POST' && request.url === '/api/studio/projects/project-test/jobs') {
+      response.statusCode = 202; response.setHeader('Content-Type', 'application/json');
+      return response.end(JSON.stringify({id: 'job-test', projectId: 'project-test', revisionId: 'revision-test', kind: 'test', selection: 'all', status: 'failed', createdAt: new Date().toISOString(), progress: 'One or more browser checks failed. See the test report.', error: 'One or more browser checks failed. See the test report.', artifacts: [{id: 'report', name: 'test-report.json', key: 'k/report', contentType: 'application/json', bytes: report.length, sha256: createHash('sha256').update(report).digest('hex')}]}));
+    }
+    if (request.method === 'GET' && request.url === '/api/studio/projects/project-test/artifacts/report') return response.end(report);
+    response.statusCode = 500; response.end('{}');
+  });
+  try {
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const access = join(root, 'access.private.json');
+    await writeFile(access, JSON.stringify({schemaVersion: 1, purpose: 'se-widget-studio-access', origin: `http://127.0.0.1:${address.port}`, projectId: 'project-test', token, editorUrl: `/p/project-test#key=${token}`}), {mode: 0o600});
+    const run = (kind: string, output: string) => exec(process.execPath, [script, 'run', '--access', access, '--kind', kind, '--selection', 'all', '--output-dir', output]).then(() => ({code: 0, stderr: ''}), (failure: {code: number; stderr: string}) => failure);
+    const output = join(root, 'test-output');
+    const result = await run('test', output);
+    assert.equal(result.code, 1);
+    assert.equal(result.stderr, `[se-widget-studio] Failed check native-loaded: ${error}\nJob ended with failed. One or more browser checks failed. See the test report. The report was downloaded to ${output}.\n`);
+    assert.deepEqual(await readFile(join(output, '000-test-report.json')), report);
+    const job = JSON.parse(await readFile(join(output, 'job.json'), 'utf8'));
+    assert.equal(job.status, 'failed');
+    assert.deepEqual(job.artifacts.map((entry: {name: string; file: string}) => `${entry.name} ${entry.file}`), ['test-report.json 000-test-report.json']);
+    // A failed render still stops before any download, and leaves no output directory.
+    requests.length = 0;
+    const render = await run('render', join(root, 'render-output'));
+    assert.equal(render.code, 1);
+    assert.equal(render.stderr, 'Job ended with failed. One or more browser checks failed. See the test report.\n');
+    assert.deepEqual(requests, ['POST /api/studio/projects/project-test/jobs']);
+    await assert.rejects(stat(join(root, 'render-output')), {code: 'ENOENT'});
+  } finally {
+    await new Promise<void>(done => server.close(() => done()));
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 async function runAgainst(poll: (respond: (status: number, body: string) => void, job: (status: string, artifacts?: unknown[], id?: string) => string, artifact: unknown) => void) {
   const root = await mkdtemp(join(tmpdir(), 'sws-skill-run-poll-'));
   const token = 'private_capability_12345678901234567890';
