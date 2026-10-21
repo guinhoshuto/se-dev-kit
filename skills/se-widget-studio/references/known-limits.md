@@ -10,6 +10,10 @@ What the Studio does not do yet, or does differently from StreamElements, and wh
 - **Unproven font paths.** Canvas text (`fillText`) with a Google Font and a widget that reassigns the same stylesheet `href` have not been verified: look at the render before using it.
 - **Clock in UTC.** Jobs format dates and times in UTC, where StreamElements uses the viewer's time zone: a fixture message `time` written as 09:34 at -04:00 showed "1:34 PM" (se-imessage-chat, 2026-10-15). Write fixture times in UTC for the clock you want on screen. A message with no `time` takes the Studio's own clock, which showed "12:00 PM" after a tutorial `setField` reloaded the widget.
 
+## Tests
+
+- **A failed test's report stays in the Studio.** `run --kind test` stops at `Job ended with failed. One or more browser checks failed. See the test report.` before it downloads anything, so the output directory is never created and the report that names the failing assertion is not in it (`runJob` in `scripts/studio-client.mjs` checks for `completed` first; se-jelly-chat job `cbaa3cce`, 2026-10-21). On a local Studio, read it at `.studio-data/projects/<projectId>/artifacts/<jobId>/test-report.json` in the live checkout, with the job ID from `status`.
+
 ## Video
 
 - **Store length.** An Etsy listing video lasts 5 to 15 seconds, at most 100 MB, between 2:1 and 1:2 (square included), and Etsy removes its audio (`presets/marketplaces/etsy-listing-2026-09.json`). The local Studio itself has no length cap: keep listing recipes within the preset, and set `marketplacePreset` so `validate` checks them.

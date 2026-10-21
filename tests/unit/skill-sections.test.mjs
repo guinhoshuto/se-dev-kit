@@ -53,6 +53,6 @@ test("the anchors follow the headings", () => {
   assert.equal(slug("Auto zoom"), "auto-zoom");
   assert.deepEqual(
     headings("references/known-limits.md").map(({ anchor }) => anchor),
-    ["known-limits", "capture", "video", "machine"]
+    ["known-limits", "capture", "tests", "video", "machine"]
   );
 });
