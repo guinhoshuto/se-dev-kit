@@ -166,6 +166,7 @@ async function runSuites(names) {
     const files = await suiteFiles(suite);
     if (!files.length) { results.push({name, status: 'passed', detail: 'no files'}); continue; }
     const allowed = suite.browser ? await gate() : {ok: true, release: () => {}};
+    for (const warning of allowed.warnings ?? []) console.log(`\nWarning: ${warning}`);
     if (!allowed.ok) {
       console.log(`\nSkipped ${name}: ${allowed.reason}`);
       results.push({name, status: 'skipped', detail: allowed.reason});
@@ -202,6 +203,7 @@ async function repeat(file, countText) {
   const failed = [];
   for (let run = 1; run <= count; run += 1) {
     const allowed = browser ? await gate() : {ok: true, release: () => {}};
+    for (const warning of allowed.warnings ?? []) console.log(`Warning: ${warning}`);
     if (!allowed.ok) { console.log(`Stopped before run ${run}: ${allowed.reason}`); return {failed, ran: run - 1, code: 1}; }
     let outcome;
     try {
