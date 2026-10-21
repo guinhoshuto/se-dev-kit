@@ -2,11 +2,10 @@
 // machine (~/obsidian/AI/scripts/maquina_livre.py, see machineVerdict), free is what it says: no other
 // render, nobody else holding the render slot, the game closed, enough free memory and disk. Elsewhere,
 // nobody else holds the machine-wide render slot (~/.cache/render-slot), and no headless or automated
-// Chrome, Remotion render, or local Studio render runs outside this process tree, except a stalled one
-// (splitStalled), which is only a warning. It first kills this
-// checkout's own orphans, which would otherwise hold the wait forever. Ported from the waitfree.sh of
-// 2026-09-27 (one check a minute, 30 minutes at most). Exit 0 when the machine is free, 1 when it is
-// still busy. Needs the built engine (dist/).
+// Chrome, Remotion render, or local Studio render runs outside this process tree; a stalled one
+// (splitStalled) is only a warning. It first kills this checkout's own orphans, which would otherwise
+// hold the wait forever. Ported from the waitfree.sh of 2026-09-27 (one check a minute, 30 minutes at
+// most). Exit 0 when the machine is free, 1 when it is still busy. Needs the built engine (dist/).
 import {setTimeout as sleep} from 'node:timers/promises';
 import {killStale} from './kill-stale.mjs';
 import {freeBytes, listProcesses, machineVerdict, MIN_FREE_BYTES, otherSessionsWork, shortCommand, splitStalled, stalledWarning} from './lib/machine.mjs';
