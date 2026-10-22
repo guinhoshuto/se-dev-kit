@@ -25,6 +25,8 @@ Use a pinned CLI, never an unpinned remote package, and do not recreate the runt
 
 `<cli>` below stands for either form. The CLI runs without `se-widget-studio.config.mjs` and detects the widget layout. Run `init` in a consumer repository only when the user asks, because it writes files there: `se-widget-studio.config.mjs` and empty catalog folders, plus, with `--agents`, an `AGENTS.md` and a `.gitignore` for the widget repository. It never replaces an existing `AGENTS.md` or `.gitignore`; with `--agents` it keeps an existing config, and only `--force` replaces it. Report each file it wrote and each it kept.
 
+In a new widget repository, after `init --agents`, run `python3 ~/obsidian/AI/scripts/aprendizado.py armadilhas --dominio se-widget --agents <widget-root>` on the folder that received the `AGENTS.md`, when that script exists on this machine; where it is missing, skip this step. The script adds the known pitfalls of StreamElements widgets from the owner's log to that `AGENTS.md`, between `<!-- pitfalls:se-widget begin … -->` and `<!-- pitfalls:se-widget end -->`, and leaves the rest of the file as it was. Keep the block, report the line it printed, and commit only with the owner's yes.
+
 ## Commands
 
 ```text
