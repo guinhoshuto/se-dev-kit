@@ -52,7 +52,16 @@
 // ~/.claude/sessions, the file `sessoes.py --eu` reads) and the last line of the log of the first job band
 // entry (~/.claude/watch.json, `watch_job.py add --log`) whose pid is that pid, an ancestor or a
 // descendant of it; "free" when nothing holds it. CLAUDE_CONFIG_DIR moves ~/.claude, as for Claude Code.
-// It exits 0.
+// It exits 0. `status --json` (2026-10-23) says the same in one JSON document, for the job band: {free,
+// holder, queue}, the holder null when no owner.json names it, each with pid, repo, command, since (ms),
+// session and job, the id of the job band entry nearest to the pid (the pid itself, else its nearest
+// ancestor, else one under it), and each waiter with its position and whether it was moved.
+//
+// `node render-slot.ts move --pid <pid> --up|--down` (2026-10-23) changes who takes the slot first, from
+// the job band or by hand: it trades the place of that pid's live ticket with the live ticket right ahead
+// of it (--up) or right behind it (--down), as the queue paragraph below says. It exits 0 when it moved, 1
+// when the pid has no live ticket, is already first (--up) or last (--down), or order.json cannot be
+// written, and 2 on a usage error.
 //
 // Protocol: the slot is the directory ~/.cache/render-slot (RENDER_SLOT_DIR overrides it). Taking it
 // is an atomic mkdir; inside, owner.json holds {protocol, pid, repo, command, startedAt}, and `run`
@@ -85,6 +94,18 @@
 // The queue sits next to the slot, never inside it, and only orders the takers: the slot is still
 // taken by the atomic mkdir, so two holders stay impossible, and a copy older than the queue, which
 // ignores the tickets, can only jump it. That is why the queue did not raise PROTOCOL.
+//
+// Places (2026-10-23): the queue goes in the order of the places, and between the same places, of the
+// names. A ticket's place is its arrival, unless <slot>.queue/order.json ({"keys": {<ticket name>: <place,
+// in ms>}}) gives it another. Only `move` writes the file, through a temporary file and a rename (of two
+// moves at once, the last one stays); the waiters read it every round. A move takes the live tickets in
+// order, trades the two, and writes the place of every live ticket in the new order: the places they had,
+// in another order, a tie (two tickets of the same ms) made 0.01 ms apart. It drops the keys of dead pids
+// and of an earlier boot, and keeps the key of a live pid whose ticket is away, so a waiter that gives the
+// slot back and asks again with `since` (the same ticket name) comes back to the place it was moved to; a
+// newcomer, whose arrival is now, comes after everyone. A move decides only who takes a free slot next,
+// never who holds it, and the wait limit still counts from the arrival. A copy older than the places reads
+// order.json as no ticket and the queue in arrival order, so it can only jump it: PROTOCOL stays.
 //
 // `protocol` is PROTOCOL below. Raise it whenever a change would let an older copy break the slot of
 // a newer one (a new file in the slot, another way to clear the mutex). An owner.json without it was
@@ -162,6 +183,11 @@ const TICKET_FRESH_MS = 60_000;
 /** A ticket silent for this long is removed; a waiter that still runs writes it again in its place. */
 const TICKET_FORGET_MS = 15 * 60_000;
 const TICKET_NAME = /^(\d{15})-(\d{7})\.json$/;
+/** The places that `move` gave to tickets, in the queue folder (see the top of this file). */
+const ORDER_FILE = 'order.json';
+/** How far apart a move sets two tickets that had the same place, in ms. */
+const PLACE_STEP_MS = 0.01;
+const MOVE_USAGE = 'Usage: render-slot move --pid <pid> --up|--down; the pid is one that `status` lists in the queue.';
 /** An owner.json still missing after this long means its writer died between mkdir and write. */
 const UNWRITTEN_GRACE_MS = 10_000;
 const OWNER_FILE = 'owner.json';
@@ -540,8 +566,11 @@ export const renderSlotHolder = (dir = slotDir()): {owner: SlotOwner | null} | u
 /** The folder of the queue of waiters, next to the slot (see the top of this file). */
 export const queueDir = (dir = slotDir()) => `${dir}.queue`;
 
-/** A waiter in the queue: arrival in ms since the epoch, and how long its ticket has gone untouched. */
-export type QueueTicket = {name: string; pid: number; enqueuedAt: number; repo: string; command: string; silentMs: number};
+/**
+ * A waiter in the queue: arrival in ms since the epoch, its place in the queue (the arrival, unless a
+ * move gave it another), and how long its ticket has gone untouched.
+ */
+export type QueueTicket = {name: string; pid: number; enqueuedAt: number; place: number; repo: string; command: string; silentMs: number};
 
 const ticketName = (at: number, pid: number) => `${String(at).padStart(15, '0')}-${String(pid).padStart(7, '0')}.json`;
 
@@ -549,10 +578,30 @@ const removeQuietly = (file: string) => {
   try { rmSync(file, {force: true}); } catch { /* left for the next waiter to judge */ }
 };
 
-/** The tickets in arrival order, and the temporary files that dead writers left over 15 minutes ago. */
-const readQueue = (queue: string): {tickets: QueueTicket[]; strays: string[]} => {
+/** The places that moves gave, by ticket name; empty without order.json or when it cannot be read. */
+const readOrder = (queue: string) => {
+  const order = new Map<string, number>();
+  let keys: unknown;
+  try { keys = (JSON.parse(readFileSync(path.join(queue, ORDER_FILE), 'utf8')) as {keys?: unknown} | null)?.keys; } catch { return order; }
+  if (typeof keys !== 'object' || keys === null) return order;
+  for (const [name, place] of Object.entries(keys)) {
+    if (TICKET_NAME.test(name) && typeof place === 'number' && Number.isFinite(place)) order.set(name, place);
+  }
+  return order;
+};
+
+/** A ticket's place: the one order.json gives it, else its arrival. */
+const placeOf = (name: string, order: Map<string, number>) => order.get(name) ?? Number(name.slice(0, 15));
+
+/** The order of the queue: by place, and by name between the same places. */
+const byPlace = (a: {name: string; place: number}, b: {name: string; place: number}) =>
+  a.place - b.place || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+/** The tickets in queue order, the temporary files that dead writers left over 15 minutes ago, and the places of order.json. */
+const readQueue = (queue: string): {tickets: QueueTicket[]; strays: string[]; order: Map<string, number>} => {
   let names: string[];
-  try { names = readdirSync(queue).sort(); } catch { return {tickets: [], strays: []}; }
+  try { names = readdirSync(queue).sort(); } catch { return {tickets: [], strays: [], order: new Map()}; }
+  const order = readOrder(queue);
   const tickets: QueueTicket[] = [];
   const strays: string[] = [];
   for (const name of names) {
@@ -570,9 +619,9 @@ const readQueue = (queue: string): {tickets: QueueTicket[]; strays: string[]} =>
       if (typeof data.repo === 'string') repo = data.repo;
       if (typeof data.command === 'string') command = data.command;
     } catch { /* the name alone places it */ }
-    tickets.push({name, pid: Number(match[2]), enqueuedAt: Number(match[1]), repo, command, silentMs});
+    tickets.push({name, pid: Number(match[2]), enqueuedAt: Number(match[1]), place: placeOf(name, order), repo, command, silentMs});
   }
-  return {tickets, strays};
+  return {tickets: tickets.sort(byPlace), strays, order};
 };
 
 /**
@@ -587,7 +636,7 @@ const judgeTicket = (ticket: QueueTicket, judgeSilence: boolean): 'live' | 'quie
   return ticket.silentMs > TICKET_FRESH_MS ? 'quiet' : 'live';
 };
 
-/** The live waiters, in the order they came. Read only: nothing is removed. */
+/** The live waiters, in the order they take the slot. Read only: nothing is removed. */
 export const renderSlotQueue = (dir = slotDir()): QueueTicket[] =>
   readQueue(queueDir(dir)).tickets.filter((ticket) => judgeTicket(ticket, true) === 'live');
 
@@ -596,11 +645,13 @@ export const renderSlotQueue = (dir = slotDir()): QueueTicket[] =>
  * temporary files are removed on the way; quiet tickets are skipped.
  */
 const ticketsAhead = (queue: string, own: string | null, judgeSilence: boolean): QueueTicket[] => {
-  const {tickets, strays} = readQueue(queue);
+  const {tickets, strays, order} = readQueue(queue);
   for (const stray of strays) removeQuietly(path.join(queue, stray));
+  // Its place holds while its ticket is away (removed by another waiter, and not written again yet).
+  const mine = own === null ? null : {name: own, place: placeOf(own, order)};
   const ahead: QueueTicket[] = [];
   for (const ticket of tickets) {
-    if (own !== null && ticket.name >= own) break;
+    if (mine !== null && byPlace(ticket, mine) >= 0) break;
     const verdict = judgeTicket(ticket, judgeSilence);
     if (verdict === 'gone') removeQuietly(path.join(queue, ticket.name));
     else if (verdict === 'live') ahead.push(ticket);
@@ -1049,6 +1100,55 @@ export const releaseHold = async (label: string, dir = slotDir(), waitMs = 10_00
   return 0;
 };
 
+/**
+ * `render-slot move --pid <pid> --up|--down`: trades the place of that pid's live ticket with the live
+ * ticket right ahead of it or right behind it, and writes the places in order.json (see the top of this file).
+ */
+export const moveInQueue = (pid: number, direction: string | undefined, dir = slotDir()): number => {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || (direction !== 'up' && direction !== 'down')) {
+    console.error(MOVE_USAGE);
+    return EXIT_USAGE;
+  }
+  const queue = queueDir(dir);
+  const {tickets, order} = readQueue(queue);
+  const live = tickets.filter((ticket) => judgeTicket(ticket, true) === 'live');
+  const at = live.findIndex((ticket) => ticket.pid === pid);
+  const mover = live[at];
+  if (mover === undefined) {
+    console.error(`Pid ${pid} does not wait in the render slot queue (${queue}).`);
+    return 1;
+  }
+  const to = direction === 'up' ? at - 1 : at + 1;
+  const other = live[to];
+  if (other === undefined) {
+    console.error(`Pid ${pid} is already the ${direction === 'up' ? 'first' : 'last'} in the render slot queue.`);
+    return 1;
+  }
+  for (const name of order.keys()) {
+    const match = TICKET_NAME.exec(name);
+    if (match === null || Number(match[1]) < bootTimeMs() || !alive(Number(match[2]))) order.delete(name);
+  }
+  // Each place stays where it was in the queue, and goes to the ticket that is there now.
+  let last = -Infinity;
+  for (const ticket of live) {
+    const there = ticket === mover ? other : ticket === other ? mover : ticket;
+    last = Math.max(ticket.place, last + PLACE_STEP_MS);
+    order.set(there.name, last);
+  }
+  const file = path.join(queue, ORDER_FILE);
+  const temporary = path.join(queue, `.${ORDER_FILE}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`);
+  try {
+    writeFileSync(temporary, `${JSON.stringify({keys: Object.fromEntries(order)}, null, 2)}\n`);
+    renameSync(temporary, file);
+  } catch (error) {
+    removeQuietly(temporary);
+    console.error(`Could not write ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  console.log(`Moved pid ${pid} ${direction} in the render slot queue: ${to + 1} of ${live.length}.`);
+  return 0;
+};
+
 /** Claude Code's folder, with sessions/<pid>.json and the job band watch.json: CLAUDE_CONFIG_DIR, else ~/.claude. */
 const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 
@@ -1097,15 +1197,32 @@ const sessionAbove = (pid: number, parents: Map<number, number>, home = claudeDi
   return null;
 };
 
+/** The entries of the job band (watch.json); empty when it cannot be read. */
+const bandJobs = (home: string): ({id?: unknown; pid?: unknown; log?: unknown} | null)[] => {
+  let band: unknown;
+  try { band = JSON.parse(readFileSync(path.join(home, 'watch.json'), 'utf8')); } catch { return []; }
+  const jobs: unknown = Array.isArray(band) ? band : (band as {jobs?: unknown} | null)?.jobs;
+  return Array.isArray(jobs) ? jobs : [];
+};
+
 /** The log of the first job band entry (watch.json) whose pid is `pid`, one of its ancestors or one under it. */
 const jobLog = (pid: number, parents: Map<number, number>, home = claudeDir()) => {
-  let band: unknown;
-  try { band = JSON.parse(readFileSync(path.join(home, 'watch.json'), 'utf8')); } catch { return null; }
-  const jobs: unknown = Array.isArray(band) ? band : (band as {jobs?: unknown} | null)?.jobs;
-  if (!Array.isArray(jobs)) return null;
   const related = new Set([...lineage(pid, parents), ...progeny(pid, parents)]);
-  for (const job of jobs as ({pid?: unknown; log?: unknown} | null)[]) {
+  for (const job of bandJobs(home)) {
     if (typeof job?.pid === 'number' && related.has(job.pid) && typeof job.log === 'string') return job.log;
+  }
+  return null;
+};
+
+/** The id of the job band entry nearest to `pid`: the pid itself, else its nearest ancestor, else one under it. */
+const nearestJob = (pid: number, parents: Map<number, number>, home = claudeDir()) => {
+  const ids = new Map<number, string>();
+  for (const job of bandJobs(home)) {
+    if (typeof job?.pid === 'number' && typeof job.id === 'string' && !ids.has(job.pid)) ids.set(job.pid, job.id);
+  }
+  for (const at of [...lineage(pid, parents), ...progeny(pid, parents)]) {
+    const id = ids.get(at);
+    if (id !== undefined) return id;
   }
   return null;
 };
@@ -1165,9 +1282,27 @@ export const slotStatus = (dir = slotDir(), now = Date.now()) => {
   lines.push(queue.length === 0 ? 'Nobody waits in the queue.' : `${queue.length} waiting in the queue, in the order they take the slot:`);
   queue.forEach((ticket, index) => {
     const [head, ...log] = about(ticket.pid, ticket.enqueuedAt, ticket.repo, ticket.command);
-    lines.push(`  ${index + 1}. ${head}.`, ...log);
+    lines.push(`  ${index + 1}. ${head}${ticket.place === ticket.enqueuedAt ? '' : ', moved'}.`, ...log);
   });
   return lines.join('\n');
+};
+
+/** `render-slot status --json`: what `status` says, as one JSON document for the job band. Read only. */
+export const slotStatusJson = (dir = slotDir()) => {
+  const parents = processTable();
+  const about = (pid: number, since: number, repo: string, command: string) =>
+    ({pid, repo, command, since, session: sessionAbove(pid, parents), job: nearestJob(pid, parents)});
+  const state = exists(dir) ? renderSlotHolder(dir) : undefined;
+  const owner = state?.owner ?? null;
+  return {
+    free: state === undefined,
+    holder: owner === null ? null : about(owner.pid, Date.parse(owner.startedAt), owner.repo, owner.command),
+    queue: renderSlotQueue(dir).map((ticket, index) => ({
+      position: index + 1,
+      ...about(ticket.pid, ticket.enqueuedAt, ticket.repo, ticket.command),
+      moved: ticket.place !== ticket.enqueuedAt,
+    })),
+  };
 };
 
 /** The value of `--name <value>` in `args`, or undefined. */
@@ -1194,10 +1329,16 @@ if (isMain()) {
     process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max));
   } else if (verb === 'release') {
     process.exitCode = await releaseHold(optionValue(args, '--rotulo') ?? '');
+  } else if (verb === 'move') {
+    const pid = optionValue(args, '--pid');
+    const up = args.includes('--up');
+    process.exitCode = moveInQueue(pid === undefined ? NaN : Number(pid), up === args.includes('--down') ? undefined : up ? 'up' : 'down');
   } else if (verb === 'status' && separator === undefined) {
     console.log(slotStatus());
+  } else if (verb === 'status' && separator === '--json' && command.length === 0) {
+    console.log(JSON.stringify(slotStatusJson()));
   } else {
-    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> | release --rotulo <label> | status');
+    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
     process.exitCode = EXIT_USAGE;
   }
 }
