@@ -1,0 +1,88 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (unexpected.length) {",
+      "to": "if (false) {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "neither commit"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "normalized = JSON.stringify(JSON.parse(text));",
+      "to": "normalized = text;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^run moves every widget"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "entry.model.setValue(entry.before);",
+      "to": "void entry;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "puts every written tab back"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const hidden = () => (document.visibilityState === 'visible' ? null",
+      "to": "const hidden = () => (true ? null",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "in the background"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "return wrote.every((tab) => now[tab].NEW > before[tab].NEW);",
+      "to": "return true;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "never shows the new code"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "hash === plan().tabs[tab].new ? 'ok' :",
+      "to": "true ? 'ok' :",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^files that are not"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (found[tab].status !== 'OLD') continue;",
+      "to": "if (found[tab].status === 'MISSING') continue;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "half way there"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "return {text, status: 'cut', width: outer.scrollWidth, room: outer.clientWidth};",
+      "to": "return {text, status: 'whole'};",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^run moves every widget"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const item = box.querySelector(`.md-nav-item[name=",
+      "to": "const item = box.querySelector(`md-nav-item[name=",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^run moves every widget"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (!(await waitFor(() => typeof monaco !== 'undefined' && monaco.editor, 10000))) {",
+      "to": "if (typeof monaco === 'undefined') {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^run moves every widget"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "if (location.hostname !== 'streamelements.com' ||",
+      "to": "if (false ||",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the read-only half refuses"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "!/^\\/overlay\\/[0-9a-f]{24}\\/editor\\/?$/.test(location.pathname)",
+      "to": "false",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the read-only half refuses"
+    }
+  ]
+}

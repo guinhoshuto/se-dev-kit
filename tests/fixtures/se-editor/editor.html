@@ -1,0 +1,197 @@
+<!doctype html>
+<!--
+  A hand-written stand-in for the StreamElements overlay editor, for tests/integration/se-editor-update.test.mjs. It
+  keeps only what the page scripts in skills/se-widget-studio/scripts/se-editor-*.js touch: the class names, the code
+  editor's tab names, the blob: iframes, and the Monaco calls they make. It behaves as the editor was seen to between
+  2026-10-14 and 2026-10-24: Monaco loads only when the first code editor opens after the page loads, a moment after
+  the dialog shows; a code tab's model is created only when the tab opens, after a moment; Done applies the code to the
+  widget's iframe, rebuilt a moment later, and disposes the models; FIELDS come back reformatted without the final
+  newline. It is not a copy of StreamElements' markup or code.
+
+  The test sets window.__FIXTURE_WIDGETS = [{name, html, css, js, fields, fieldData}] before the page loads, and reads
+  window.__fixture: each widget's applied code, and counts of what was clicked and written.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StreamElements - fixture</title>
+<style>
+  body { margin: 0; font: 14px/1.4 sans-serif; display: flex; }
+  md-sidenav { display: block; width: 300px; padding: 8px; }
+  .widget-layers-list-item { display: block; width: 100%; text-align: left; }
+  .widget-form { width: 280px; overflow: hidden; }
+  .widget-form .field { display: block; width: 260px; }
+  .widget-form label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .closed .body { display: none; }
+  .overlay { position: relative; width: 640px; height: 360px; }
+  .overlay iframe { width: 300px; height: 160px; border: 0; }
+  md-dialog { position: fixed; inset: 40px; background: #222; color: #fff; display: block; }
+  md-nav-bar ul { margin: 0; padding: 0; }
+  md-nav-bar li { list-style: none; display: inline-block; }
+</style>
+</head>
+<body>
+<md-sidenav>
+  <div class="overlay-editor__toolbar"><button class="md-raised md-primary" id="save">Save</button></div>
+  <div id="layers"></div>
+  <div id="settings"></div>
+</md-sidenav>
+<div class="overlay" id="canvas"></div>
+<script>
+(() => {
+  const state = {
+    widgets: (window.__FIXTURE_WIDGETS || []).map((widget) => ({...widget, frame: null})),
+    selected: -1,
+    saves: 0,
+    selections: 0,
+    opens: 0,
+    dones: 0,
+    writes: 0,
+    mangle: null,
+    frozen: false
+  };
+  window.__fixture = state;
+  const reformat = (fields) => JSON.stringify(JSON.parse(fields), null, 2);
+
+  // Monaco: models live until Done disposes them.
+  let models = [];
+  const createModel = (language, text, tab) => {
+    let value = text;
+    const model = {
+      tab,
+      getLanguageId: () => language,
+      getValue: () => value,
+      // state.mangle names a tab whose next write loses its last character, once.
+      setValue: (next) => {
+        state.writes += 1;
+        value = next;
+        if (state.mangle === tab) {
+          state.mangle = null;
+          value = next.slice(0, -1);
+        }
+      }
+    };
+    models.push(model);
+    return model;
+  };
+  // window.monaco is defined only once the first code editor has opened, a moment later.
+  let monacoLoaded = false;
+  const whenMonaco = (then) => {
+    if (monacoLoaded) return then();
+    setTimeout(() => {
+      monacoLoaded = true;
+      window.monaco = {editor: {getModels: () => models.slice(), getEditors: () => []}};
+      then();
+    }, 300);
+  };
+
+  const frameDocument = (widget) => `<!doctype html><html><head><style>${widget.css}</style></head><body>${widget.html}`
+    + `<script>var fieldData = ${JSON.stringify(widget.fieldData)};<\/script><script>${widget.js}<\/script></body></html>`;
+  const renderFrame = (widget) => {
+    if (widget.frame) {
+      URL.revokeObjectURL(widget.frame.src);
+      widget.frame.remove();
+    }
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', '');
+    frame.src = URL.createObjectURL(new Blob([frameDocument(widget)], {type: 'text/html'}));
+    document.getElementById('canvas').appendChild(frame);
+    widget.frame = frame;
+  };
+
+  const renderSettings = () => {
+    const settings = document.getElementById('settings');
+    settings.replaceChildren();
+    const widget = state.widgets[state.selected];
+    if (!widget) return;
+    const container = document.createElement('div');
+    container.className = 'custom-event-list-editor-button-container';
+    const button = document.createElement('button');
+    button.className = 'md-primary md-raised md-button';
+    button.textContent = 'Open Editor';
+    button.addEventListener('click', () => openEditor(widget));
+    container.appendChild(button);
+    const form = document.createElement('div');
+    form.className = 'widget-form flex-100 form-no-padding';
+    for (const [key, field] of Object.entries(JSON.parse(widget.fields))) {
+      const row = document.createElement('div');
+      row.className = field.group === 'Closed' ? 'field closed' : 'field';
+      row.innerHTML = '<div class="body"><label></label></div>';
+      row.querySelector('label').textContent = field.label || key;
+      form.appendChild(row);
+    }
+    settings.append(container, form);
+  };
+
+  const tabs = [['html', 'HTML'], ['css', 'CSS'], ['js', 'JS'], ['fields', 'Fields'], ['fieldData', 'Data']];
+  const languages = {html: 'html', css: 'css', js: 'javascript', fields: 'json', fieldData: 'json'};
+  const textOf = (widget, tab) => tab === 'fields' ? reformat(widget.fields) : tab === 'fieldData' ? JSON.stringify(widget.fieldData) : widget[tab];
+
+  const openEditor = (widget) => {
+    state.opens += 1;
+    const dialog = document.createElement('md-dialog');
+    dialog.className = 'code-editor-dialog flex-80';
+    const bar = document.createElement('md-nav-bar');
+    const list = document.createElement('ul');
+    bar.appendChild(list);
+    const open = {};
+    const show = (tab) => {
+      if (open[tab]) return;
+      open[tab] = true;
+      setTimeout(() => {
+        if (dialog.isConnected) createModel(languages[tab], textOf(widget, tab), tab);
+      }, 40);
+    };
+    for (const [name, title] of tabs) {
+      // md-nav-item compiles to an li that keeps its name, with the button inside (seen on 2026-10-24).
+      const item = document.createElement('li');
+      item.className = 'md-nav-item';
+      item.setAttribute('name', name);
+      item.innerHTML = '<button class="_md-nav-button md-button" role="tab"><span></span></button>';
+      item.querySelector('span').textContent = title;
+      item.querySelector('button').addEventListener('click', () => show(name));
+      list.appendChild(item);
+    }
+    const actions = document.createElement('md-dialog-actions');
+    const done = document.createElement('button');
+    done.className = 'md-primary exit-code-editor md-button';
+    done.textContent = 'Done';
+    done.addEventListener('click', () => {
+      state.dones += 1;
+      for (const model of models) if (model.tab !== 'fieldData') widget[model.tab] = model.getValue();
+      models = [];
+      dialog.remove();
+      // state.frozen keeps the canvas as it was, as if the code had not reached the widget.
+      setTimeout(() => {
+        if (!state.frozen) renderFrame(widget);
+        renderSettings();
+      }, 80);
+    });
+    actions.appendChild(done);
+    dialog.append(bar, document.createElement('md-dialog-content'), actions);
+    document.body.appendChild(dialog);
+    open.html = true;
+    whenMonaco(() => {
+      if (dialog.isConnected) createModel('html', widget.html, 'html');
+    });
+  };
+
+  const layers = document.getElementById('layers');
+  state.widgets.forEach((widget, index) => {
+    const row = document.createElement('div');
+    row.className = 'widget-layers-list-item';
+    row.innerHTML = '<span class="widget-layers-list-item--name"></span>';
+    row.querySelector('span').textContent = widget.name;
+    row.addEventListener('click', () => {
+      state.selections += 1;
+      state.selected = index;
+      setTimeout(renderSettings, 30);
+    });
+    layers.appendChild(row);
+    renderFrame(widget);
+  });
+  document.getElementById('save').addEventListener('click', () => { state.saves += 1; });
+})();
+</script>
+</body>
+</html>

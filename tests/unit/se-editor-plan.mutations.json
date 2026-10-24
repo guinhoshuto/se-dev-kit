@@ -1,0 +1,17 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "return sha256(tab === 'fields' ? JSON.stringify(JSON.parse(text)) : text);",
+      "to": "return sha256(text);",
+      "test": "tests/unit/se-editor-plan.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "mkdirSync(folder); // throws when it exists: never replaced",
+      "to": "mkdirSync(folder, {recursive: true});",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses an existing folder"
+    }
+  ]
+}
