@@ -19,6 +19,8 @@ Paste a page script by passing the file's text as the call's code, with the call
    ```
 
    It reads the two commits, never the working tree, and prints the plan JSON, which goes to the page twice.
+
+   Then look for a `{{field}}` placeholder in the CSS and JS of both commits: `git -C <widget repository> grep -n '{{' <old commit> <new commit> -- <css file> <js file>`. After Done, StreamElements fills each placeholder with the field's value in the canvas, so the canvas check cannot confirm that widget, and `run()` stops after its Done with nothing saved ([#9](https://github.com/guinhoshuto/se-dev-kit/issues/9)). When the command finds any, stop before opening the editor and tell the owner.
 2. Open the overlay's editor link (the note's `se_link`) in one tab, in front: timers stall in a background tab, so the writing script refuses to run there.
 3. Paste `se-editor-read.js`, then `seEditor.use(<plan>)`, `seEditor.layers()`, and `await seEditor.canvas()`. For each widget in the canvas, `canvas()` says whether its JS and CSS are the old commit's (`OLD`), the new one's (`NEW`), or neither (`OTHER`). `OTHER` where `OLD` was expected means the overlay is not on `--from`: plan from the commit it has, or ask. Nothing has been clicked or changed yet.
 
