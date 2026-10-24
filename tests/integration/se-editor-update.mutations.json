@@ -57,6 +57,20 @@
       "name": "^run moves every widget"
     },
     {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const item = box.querySelector(`.md-nav-item[name=",
+      "to": "const item = box.querySelector(`md-nav-item[name=",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^run moves every widget"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (!(await waitFor(() => typeof monaco !== 'undefined' && monaco.editor, 10000))) {",
+      "to": "if (typeof monaco === 'undefined') {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^run moves every widget"
+    },
+    {
       "file": "skills/se-widget-studio/scripts/se-editor-read.js",
       "from": "if (location.hostname !== 'streamelements.com' ||",
       "to": "if (false ||",

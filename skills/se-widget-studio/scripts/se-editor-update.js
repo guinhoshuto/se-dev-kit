@@ -17,7 +17,7 @@
   const out = (result) => JSON.stringify(result);
   if (!api || api.version !== 1 || !api.core) return out({ok: false, error: 'Paste se-editor-read.js in this tab first.'});
   const {TABS, plan, short, tabHash, status, canvasState, noPlan} = api.core;
-  // Each tab's md-nav-item name in the code editor, and the Monaco language of its model.
+  // Each tab's name in the code editor (the name of its li.md-nav-item), and the Monaco language of its model.
   const NAV = {html: 'html', css: 'css', js: 'js', fields: 'fields'};
   const LANGUAGE = {html: 'html', css: 'css', js: 'javascript', fields: 'json'};
   const INPUT_ID = 'se-editor-update-files';
@@ -33,7 +33,7 @@
       await sleep(50);
     }
   };
-  // AngularJS Material keeps the click handler on the <button> it renders inside md-nav-item and md-button.
+  // AngularJS Material keeps the click handler on the <button> it renders inside li.md-nav-item and md-button.
   const press = (el) => (el.matches('button') ? el : el.querySelector('button') || el).click();
   const dialog = () => document.querySelector('md-dialog.code-editor-dialog');
   const openEditorButton = () => document.querySelector('.custom-event-list-editor-button-container button');
@@ -89,10 +89,13 @@
   const inspect = async () => {
     const box = dialog();
     if (!box) return {ok: false, error: 'No code editor is open.'};
-    if (typeof monaco === 'undefined') return {ok: false, error: 'The code editor has no Monaco.'};
+    // The editor loads Monaco only when the first code editor opens after the page loads (seen on 2026-10-24).
+    if (!(await waitFor(() => typeof monaco !== 'undefined' && monaco.editor, 10000))) {
+      return {ok: false, error: 'The code editor has no Monaco.'};
+    }
     const found = {};
     for (const tab of TABS) {
-      const item = box.querySelector(`md-nav-item[name="${NAV[tab]}"]`);
+      const item = box.querySelector(`.md-nav-item[name="${NAV[tab]}"]`);
       if (!item) return {ok: false, error: `The code editor has no ${tab} tab.`};
       press(item);
       const models = await waitFor(() => {

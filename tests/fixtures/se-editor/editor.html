@@ -3,9 +3,10 @@
   A hand-written stand-in for the StreamElements overlay editor, for tests/integration/se-editor-update.test.mjs. It
   keeps only what the page scripts in skills/se-widget-studio/scripts/se-editor-*.js touch: the class names, the code
   editor's tab names, the blob: iframes, and the Monaco calls they make. It behaves as the editor was seen to between
-  2026-10-14 and 2026-10-22: a code tab's model is created only when the tab opens, after a moment; Done applies the
-  code to the widget's iframe, rebuilt a moment later, and disposes the models; FIELDS come back reformatted without the
-  final newline. It is not a copy of StreamElements' markup or code.
+  2026-10-14 and 2026-10-24: Monaco loads only when the first code editor opens after the page loads, a moment after
+  the dialog shows; a code tab's model is created only when the tab opens, after a moment; Done applies the code to the
+  widget's iframe, rebuilt a moment later, and disposes the models; FIELDS come back reformatted without the final
+  newline. It is not a copy of StreamElements' markup or code.
 
   The test sets window.__FIXTURE_WIDGETS = [{name, html, css, js, fields, fieldData}] before the page loads, and reads
   window.__fixture: each widget's applied code, and counts of what was clicked and written.
@@ -25,7 +26,8 @@
   .overlay { position: relative; width: 640px; height: 360px; }
   .overlay iframe { width: 300px; height: 160px; border: 0; }
   md-dialog { position: fixed; inset: 40px; background: #222; color: #fff; display: block; }
-  md-nav-item li { list-style: none; display: inline-block; }
+  md-nav-bar ul { margin: 0; padding: 0; }
+  md-nav-bar li { list-style: none; display: inline-block; }
 </style>
 </head>
 <body>
@@ -72,7 +74,16 @@
     models.push(model);
     return model;
   };
-  window.monaco = {editor: {getModels: () => models.slice(), getEditors: () => []}};
+  // window.monaco is defined only once the first code editor has opened, a moment later.
+  let monacoLoaded = false;
+  const whenMonaco = (then) => {
+    if (monacoLoaded) return then();
+    setTimeout(() => {
+      monacoLoaded = true;
+      window.monaco = {editor: {getModels: () => models.slice(), getEditors: () => []}};
+      then();
+    }, 300);
+  };
 
   const frameDocument = (widget) => `<!doctype html><html><head><style>${widget.css}</style></head><body>${widget.html}`
     + `<script>var fieldData = ${JSON.stringify(widget.fieldData)};<\/script><script>${widget.js}<\/script></body></html>`;
@@ -121,6 +132,8 @@
     const dialog = document.createElement('md-dialog');
     dialog.className = 'code-editor-dialog flex-80';
     const bar = document.createElement('md-nav-bar');
+    const list = document.createElement('ul');
+    bar.appendChild(list);
     const open = {};
     const show = (tab) => {
       if (open[tab]) return;
@@ -130,12 +143,14 @@
       }, 40);
     };
     for (const [name, title] of tabs) {
-      const item = document.createElement('md-nav-item');
+      // md-nav-item compiles to an li that keeps its name, with the button inside (seen on 2026-10-24).
+      const item = document.createElement('li');
+      item.className = 'md-nav-item';
       item.setAttribute('name', name);
-      item.innerHTML = '<li class="md-nav-item"><button class="_md-nav-button md-button"><span></span></button></li>';
+      item.innerHTML = '<button class="_md-nav-button md-button" role="tab"><span></span></button>';
       item.querySelector('span').textContent = title;
       item.querySelector('button').addEventListener('click', () => show(name));
-      bar.appendChild(item);
+      list.appendChild(item);
     }
     const actions = document.createElement('md-dialog-actions');
     const done = document.createElement('button');
@@ -156,7 +171,9 @@
     dialog.append(bar, document.createElement('md-dialog-content'), actions);
     document.body.appendChild(dialog);
     open.html = true;
-    createModel('html', widget.html, 'html');
+    whenMonaco(() => {
+      if (dialog.isConnected) createModel('html', widget.html, 'html');
+    });
   };
 
   const layers = document.getElementById('layers');
