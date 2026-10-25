@@ -44,6 +44,48 @@
     },
     {
       "file": "src/validation/project.ts",
+      "from": "const LINE_LABEL_MAX = 36;",
+      "to": "const LINE_LABEL_MAX = 37;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "characterCount(field.label) > LINE_LABEL_MAX)",
+      "to": "characterCount(field.label) >= LINE_LABEL_MAX)",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "const LINE_LABEL_TYPES = new Set([\"number\", \"text\"]);",
+      "to": "const LINE_LABEL_TYPES = new Set([\"number\"]);",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "const LINE_LABEL_TYPES = new Set([\"number\", \"text\"]);",
+      "to": "const LINE_LABEL_TYPES = new Set([\"text\"]);",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": ".filter((field) => LINE_LABEL_TYPES.has(field.type) && characterCount",
+      "to": ".filter((field) => characterCount",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "        \"warning\",\n        \"FIELD_LABEL_TRUNCATED\",",
+      "to": "        \"error\",\n        \"FIELD_LABEL_TRUNCATED\",",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "  diagnostics.push(...lineLabelDiagnostics(project));\n",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
       "from": "  diagnostics.push(...(await shippedThemeDiagnostics(project)));\n",
       "to": "",
       "test": "tests/unit/fields-themes-check.test.mjs"

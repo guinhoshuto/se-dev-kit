@@ -52,7 +52,7 @@ test("a button label over 24 characters is a validation error, counted as a read
     // 21 characters, as in the custom wheel; the recycle sign carries a variation selector.
     reset: button("♻️ Reset merged slices"),
     over: button("x".repeat(25)),
-    note: {type: "text", label: "A text field may explain the button at length, well past twenty-four characters.", value: ""}
+    note: {type: "text", label: "A text label past 24 characters", value: ""}
   });
 
   const diagnostics = await diagnosticsFor(root);
@@ -63,6 +63,29 @@ test("a button label over 24 characters is a validation error, counted as a read
   assert.match(long[0].detail, /^Button field "over" has a 25-character label;/);
   assert.equal(hasValidationErrors(diagnostics), true);
   assert.deepEqual(withCode(diagnostics, "SHIPPED_THEMES"), [], "a widget without themes reports none");
+});
+
+test("a number or text label over 36 characters warns that the editor cuts it; other types never do", async (t) => {
+  const root = await temporaryDirectory(t, "sws-line-label-");
+  await writeWidget(root, {
+    fits: {type: "number", label: "x".repeat(36), value: 1},
+    count: {type: "number", label: "x".repeat(40), value: 1},
+    // 36 characters: the wheel is one character and two UTF-16 units.
+    caption: {type: "text", label: `🎡${"x".repeat(35)}`, value: ""},
+    title: {type: "text", label: "x".repeat(37), value: ""},
+    accent: {type: "colorpicker", label: "x".repeat(40), value: "#ffffff"}
+  });
+
+  const diagnostics = await diagnosticsFor(root);
+
+  assert.deepEqual(
+    withCode(diagnostics, "FIELD_LABEL_TRUNCATED").map((item) => [item.status, item.detail.split(";")[0]]),
+    [
+      ["warning", 'The number field "count" has a 40-character label'],
+      ["warning", 'The text field "title" has a 37-character label']
+    ]
+  );
+  assert.equal(hasValidationErrors(diagnostics), false);
 });
 
 const FIELDS = {

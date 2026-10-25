@@ -33,6 +33,10 @@ In captures, tutorial videos, and scenarios, a field change follows `widget.fiel
 
 The hosted editor preview always recreates the iframe when a field changes. The local development UI dispatches `onWidgetUpdate` for field edits in both modes, and its frames substitute placeholders with the FIELDS defaults. Theme, fixture, or scene changes recreate the iframe everywhere, to prevent duplicate listeners and stale DOM.
 
+## Field labels
+
+The StreamElements editor shows a `number` or `text` field's label on one 280 px line, about 36 characters, and cuts the rest with an ellipsis. `validate` warns about a longer one as `FIELD_LABEL_TRUNCATED`.
+
 ## Button fields
 
 A FIELDS entry with `"type": "button"` is a button in the StreamElements editor. Pressing it sends no field change: the widget receives `onEventReceived` with `detail.listener` `"event:test"` and `detail.event` `{field, value, listener: "widget-button"}`, where `field` is the field id and `value` its saved value (the FIELDS `value` when none is saved). Keep its `label` within 24 characters: on 2026-10-09 a 79-character label pushed the editor's field panel out of place, and `validate` reports a longer one as `FIELD_BUTTON_LABEL_LONG`, an error. Listen for it this way:
