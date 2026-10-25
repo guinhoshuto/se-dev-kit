@@ -1,0 +1,46 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "`<checkout>` being what `realpath <skill>/../..` prints)",
+      "to": "the checkout being `<skill>/../..`)",
+      "test": "tests/unit/skill-checkout-path.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "(`<checkout>`, what `realpath <skill>/../..` prints), on `main`.",
+      "to": "(`<skill>/../..`), on `main`.",
+      "test": "tests/unit/skill-checkout-path.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "is what `realpath <skill>/../..` prints.",
+      "to": "is what `cd <skill>/../.. && pwd` prints.",
+      "test": "tests/unit/skill-checkout-path.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/references/studio-workflow.md",
+      "from": "`SKILL_DIR=\"$(realpath <skill>)\"` and `STUDIO_DIR=\"$(realpath \"$SKILL_DIR/../..\")\"`",
+      "to": "`SKILL_DIR=\"<skill>\"` and `STUDIO_DIR=\"$(cd \"$SKILL_DIR/../..\" && pwd)\"`",
+      "test": "tests/unit/skill-checkout-path.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/references/studio-workflow.md",
+      "from": "the Studio checkout. Agents load the skill through a link (`~/.claude/skills/se-widget-studio`), where `../..` is `~/.claude`, so resolve both before the first command: `SKILL_DIR=\"$(realpath <skill>)\"` and `STUDIO_DIR=\"$(realpath \"$SKILL_DIR/../..\")\"`.",
+      "to": "the Studio checkout (`$SKILL_DIR/../..`).",
+      "test": "tests/unit/skill-checkout-path.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/references/studio-workflow.md",
+      "from": "(`$STUDIO_DIR/sample-media/manifest.json`, present",
+      "to": "(`$SKILL_DIR/../../sample-media/manifest.json`, present",
+      "test": "tests/unit/skill-checkout-path.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/references/catalog-authoring.md",
+      "from": "(`<checkout>/sample-media/manifest.json` from a checkout",
+      "to": "(`$SKILL_DIR/../../sample-media/manifest.json` from a checkout",
+      "test": "tests/unit/skill-checkout-path.test.mjs"
+    }
+  ]
+}

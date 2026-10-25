@@ -5,7 +5,7 @@ description: Upload, edit, preview, test, capture, and render StreamElements Cus
 
 # SE Widget Studio
 
-Operate the shared Studio instead of building a widget-specific preview runtime. Resolve all referenced files relative to this `SKILL.md`.
+Operate the shared Studio instead of building a widget-specific preview runtime. Resolve all referenced files relative to this `SKILL.md`. `<skill>` is the real path of its directory, not the link agents load it through (`~/.claude/skills/se-widget-studio`, where `../..` is `~/.claude`, since `node` and `cd` drop the `..` from the text): the Studio checkout, `<checkout>`, is what `realpath <skill>/../..` prints.
 
 Read a reference by section, never whole when it is large (`studio-workflow.md` is about 23 KB and `catalog-authoring.md` about 16 KB): every link below names the section the task needs. List a file's headings with `grep -n '^#' <file>`, then print its lead (the lines before its first `##`, which define names such as `SKILL_DIR`) and the section, from its heading to the line before the next heading of the same level, with `sed -n '<start>,<end>p' <file>`. A link to a file's title means the whole file, and only small files get one.
 
@@ -24,7 +24,7 @@ Read a reference by section, never whole when it is large (`studio-workflow.md` 
 - Inspect repository instructions and the working tree before reading or changing a consumer widget.
 - Treat production HTML, CSS, JavaScript, and FIELDS as source. Never rewrite or copy them merely to make Studio work.
 - Put Studio-only behavior in JSON catalogs or the consumer's existing versioned Studio configuration.
-- After a change to a widget's FIELDS or themes, run the CLI's `validate` on it (`node <checkout>/dist/cli/index.js validate <widget-root>`, the checkout being `<skill>/../..`), in Studio mode too, and fix every error before testing: a button label over 24 characters pushes the StreamElements editor's field panel out of place, and a theme that ships sets every FIELDS key ([Theme files](references/catalog-authoring.md#theme-files)).
+- After a change to a widget's FIELDS or themes, run the CLI's `validate` on it (`node <checkout>/dist/cli/index.js validate <widget-root>`, `<checkout>` being what `realpath <skill>/../..` prints), in Studio mode too, and fix every error before testing: a button label over 24 characters pushes the StreamElements editor's field panel out of place, and a theme that ships sets every FIELDS key ([Theme files](references/catalog-authoring.md#theme-files)).
 - Keep `fieldData` separate from background, viewport, output size, camera, crop, and device scale.
 - For test media, use the Studio's built-in sample images (`sws-sample:` references listed in [references/catalog-authoring.md](references/catalog-authoring.md#sample-media)) instead of generating, downloading, or uploading images, and never copy them into the widget. The client refuses them before any change when the selected Studio does not serve them; then stop and tell the user the Studio must be updated, rather than working around it.
 - Use only synthetic, public-safe channel data, identities, messages, and events. Never submit StreamElements tokens, cookies, webhooks, private messages, or viewer data.
@@ -33,7 +33,7 @@ Read a reference by section, never whole when it is large (`studio-workflow.md` 
 
 Use `scripts/studio-client.mjs`; it defaults to the local Studio, `http://127.0.0.1:4310`, and accepts `--origin` (or `SE_WIDGET_STUDIO_URL`) for another Studio.
 
-- The local Studio runs from the Studio checkout this skill belongs to (`<skill>/../..`), on `main`. If the client answers `No Studio is running at …`, start it as [references/studio-workflow.md](references/studio-workflow.md#start-the-local-studio) describes, then run the command again. Stop only a server you started, when the task ends, and only once `studio-client.mjs active` prints `"activeJobs":0`: every session uses the server on that port, and a local job runs inside it, so stopping it kills the jobs of other sessions too.
+- The local Studio runs from the Studio checkout this skill belongs to (`<checkout>`, what `realpath <skill>/../..` prints), on `main`. If the client answers `No Studio is running at …`, start it as [references/studio-workflow.md](references/studio-workflow.md#start-the-local-studio) describes, then run the command again. Stop only a server you started, when the task ends, and only once `studio-client.mjs active` prints `"activeJobs":0`: every session uses the server on that port, and a local job runs inside it, so stopping it kills the jobs of other sessions too.
 - Project capabilities and signed URLs are secrets. Keep access bundles mode `0600`; never print, quote, attach, commit, or paste their contents.
 - Never `cat`, `jq`, or otherwise print the access files (`~/.se-widget-studio/access-*.json`), not even with secret-looking fields removed: their `editorUrl` carries the project key. List them with `studio-client.mjs projects`, which gives each file's project ID, origin, creation time, and project name; inspect one with `status --access <file>`.
 - A `blocked` import already created the project and prints its diagnostics. Fix them with `pull`/`push` on that project; never import again.
