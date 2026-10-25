@@ -51,7 +51,9 @@
 // the Claude Code session above the pid (the first of its ancestors with a <pid>.json in
 // ~/.claude/sessions, the file `sessoes.py --eu` reads) and the last line of the log of the first job band
 // entry (~/.claude/watch.json, `watch_job.py add --log`) whose pid is that pid, an ancestor or a
-// descendant of it; "free" when nothing holds it. CLAUDE_CONFIG_DIR moves ~/.claude, as for Claude Code.
+// descendant of it, and the last line of the state file of the first one with `--estado` (THB-28,
+// 2026-10-24: the estado.txt of a cadeia_planos.py chain, whose line has the expected end of its step and of
+// the chain); "free" when nothing holds it. CLAUDE_CONFIG_DIR moves ~/.claude, as for Claude Code.
 // It exits 0. `status --json` (2026-10-23) says the same in one JSON document, for the job band: {free,
 // holder, queue}, the holder null when no owner.json names it, each with pid, repo, command, since (ms),
 // session and job, the id of the job band entry nearest to the pid (the pid itself, else its nearest
@@ -824,7 +826,9 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
         wayOut = 'Run again when they are done; a waiter whose pid is gone leaves the queue automatically.';
       }
       if (Date.now() - started > waitLimitMs) {
-        throw new RenderSlotError('RENDER_SLOT_TIMEOUT', `Gave up after ${Math.round(waitLimitMs / 60_000)} minutes waiting for the render slot (${dir}), ${waitingFor}.`, wayOut);
+        // The whole wait, from when it first came (THB-28, 2026-10-24): `run` hands a waiter that gave the slot back
+        // only what is left of its limit, and 82716657 read "Gave up after 57 minutes" at the end of a 4-hour wait.
+        throw new RenderSlotError('RENDER_SLOT_TIMEOUT', `Gave up after ${Math.round((waitLimitMs + started - arrival) / 60_000)} minutes waiting for the render slot (${dir}), ${waitingFor}.`, wayOut);
       }
       await sleep(roundMs);
     }
@@ -1198,18 +1202,22 @@ const sessionAbove = (pid: number, parents: Map<number, number>, home = claudeDi
 };
 
 /** The entries of the job band (watch.json); empty when it cannot be read. */
-const bandJobs = (home: string): ({id?: unknown; pid?: unknown; log?: unknown} | null)[] => {
+const bandJobs = (home: string): ({id?: unknown; pid?: unknown; log?: unknown; estado?: unknown} | null)[] => {
   let band: unknown;
   try { band = JSON.parse(readFileSync(path.join(home, 'watch.json'), 'utf8')); } catch { return []; }
   const jobs: unknown = Array.isArray(band) ? band : (band as {jobs?: unknown} | null)?.jobs;
   return Array.isArray(jobs) ? jobs : [];
 };
 
-/** The log of the first job band entry (watch.json) whose pid is `pid`, one of its ancestors or one under it. */
-const jobLog = (pid: number, parents: Map<number, number>, home = claudeDir()) => {
+/**
+ * The `log` (or the `estado`, the state file of `watch_job.py add --estado`) of the first job band entry (watch.json)
+ * that has one and whose pid is `pid`, one of its ancestors or one under it.
+ */
+const jobFile = (pid: number, parents: Map<number, number>, key: 'log' | 'estado', home = claudeDir()) => {
   const related = new Set([...lineage(pid, parents), ...progeny(pid, parents)]);
   for (const job of bandJobs(home)) {
-    if (typeof job?.pid === 'number' && related.has(job.pid) && typeof job.log === 'string') return job.log;
+    const file = job?.[key];
+    if (typeof job?.pid === 'number' && related.has(job.pid) && typeof file === 'string') return file;
   }
   return null;
 };
@@ -1254,14 +1262,18 @@ const localSince = (ms: number, now: number) => {
 
 /**
  * `render-slot status` (HAR-167): who holds the slot and who waits in the queue, each with the pid, the
- * repo, the command, since when, the Claude Code session and the last line of its job's log. Read only.
+ * repo, the command, since when, the Claude Code session and the last line of its job's log and state file. Read only.
  */
 export const slotStatus = (dir = slotDir(), now = Date.now()) => {
   const parents = processTable();
   const about = (pid: number, since: number, repo: string, command: string) => {
     const head = `pid ${pid} (${repo}: ${command}) since ${localSince(since, now)}, session ${sessionAbove(pid, parents) ?? 'unknown'}`;
-    const log = jobLog(pid, parents);
-    return log === null ? [head] : [head, `    log ${log}: ${lastLogLine(log) ?? '(cannot be read)'}`];
+    const log = jobFile(pid, parents, 'log');
+    const state = jobFile(pid, parents, 'estado');
+    return [head,
+      ...(log === null ? [] : [`    log ${log}: ${lastLogLine(log) ?? '(cannot be read)'}`]),
+      // The last line of a chain's estado.txt (cadeia_planos.py) has the expected end of its step and of the chain (THB-28).
+      ...(state === null ? [] : [`    state ${state}: ${lastLogLine(state) ?? '(cannot be read)'}`])];
   };
   const lines: string[] = [];
   const owner = exists(dir) ? readOwner(dir) : null;
