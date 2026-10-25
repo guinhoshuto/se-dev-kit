@@ -28,6 +28,9 @@ const RECOGNIZED_FIELD_TYPES = new Set([
 
 // A 79-character button label pushed the StreamElements editor's field panel out of place (WID-10).
 const BUTTON_LABEL_MAX = 24;
+// The editor shows a number or text field's label on one 280 px line and cuts the rest with an ellipsis (se-dev-kit#4).
+const LINE_LABEL_MAX = 36;
+const LINE_LABEL_TYPES = new Set(["number", "text"]);
 const graphemes = new Intl.Segmenter("en", {granularity: "grapheme"});
 
 /** Characters as a reader counts them: an emoji, even one built from several code points, is one. */
@@ -98,6 +101,7 @@ export async function validateProject(project: ResolvedProject): Promise<Diagnos
   }
 
   diagnostics.push(...buttonLabelDiagnostics(project));
+  diagnostics.push(...lineLabelDiagnostics(project));
   diagnostics.push(...(await shippedThemeDiagnostics(project)));
 
   const sensitiveFindings = findSensitiveTestData(project);
@@ -222,6 +226,19 @@ function buttonLabelDiagnostics(project: ResolvedProject): Diagnostic[] {
         "FIELD_BUTTON_LABEL_LONG",
         `Button field "${field.id}" has a ${characterCount(field.label)}-character label; a button label over ${BUTTON_LABEL_MAX} characters pushes the StreamElements editor's field panel out of place.`,
         `Shorten it to ${BUTTON_LABEL_MAX} characters or fewer, and explain the button in another field or the README.`
+      )
+    );
+}
+
+function lineLabelDiagnostics(project: ResolvedProject): Diagnostic[] {
+  return project.fields
+    .filter((field) => LINE_LABEL_TYPES.has(field.type) && characterCount(field.label) > LINE_LABEL_MAX)
+    .map((field) =>
+      diagnostic(
+        "warning",
+        "FIELD_LABEL_TRUNCATED",
+        `The ${field.type} field "${field.id}" has a ${characterCount(field.label)}-character label; the StreamElements editor shows a ${field.type} field's label on one line of about ${LINE_LABEL_MAX} characters and cuts the rest with an ellipsis.`,
+        `Shorten it to ${LINE_LABEL_MAX} characters or fewer, and explain the field in the README.`
       )
     );
 }
