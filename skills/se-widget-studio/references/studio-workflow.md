@@ -1,6 +1,6 @@
 # Studio workflow
 
-The client (`scripts/studio-client.mjs`) uses only Node.js built-ins and the Studio HTTP API; `--config` also uses the engine of the Studio checkout the skill runs from. In the examples, `SKILL_DIR` means the directory containing this skill and `STUDIO_DIR` the Studio checkout (`$SKILL_DIR/../..`). Do not create a shell variable named `HOME` or expose access-file contents.
+The client (`scripts/studio-client.mjs`) uses only Node.js built-ins and the Studio HTTP API; `--config` also uses the engine of the Studio checkout the skill runs from. In the examples, `SKILL_DIR` means the real path of the directory containing this skill and `STUDIO_DIR` the Studio checkout. Agents load the skill through a link (`~/.claude/skills/se-widget-studio`), where `../..` is `~/.claude`, so resolve both before the first command: `SKILL_DIR="$(realpath <skill>)"` and `STUDIO_DIR="$(realpath "$SKILL_DIR/../..")"`. Do not create a shell variable named `HOME` or expose access-file contents.
 
 The client talks to the local Studio, `http://127.0.0.1:4310`, unless `--origin` or `SE_WIDGET_STUDIO_URL` selects another one. The hosted deployment is paused (see [its section](#hosted-deployment-paused)).
 
@@ -53,7 +53,7 @@ Creation writes a new project to the selected Studio. Confirm the intended widge
 
 If `import` prints `"status": "blocked"`, the project already exists and the output lists its `diagnostics` (`status` shows them again). Fix the catalog, then `pull` and `push` on that same project; do not import again.
 
-When the catalog uses `sws-sample:` references, `import` and `push` first check them, before any change: offline against `sample-media/manifest.json` of the Studio repository (`$SKILL_DIR/../../sample-media/manifest.json`, present when the skill runs from a checkout or a linked skill directory), then against `GET /api/v1/sample-media` on the selected origin. If the Studio answers that it does not support them or does not serve a reference, nothing is created or pushed: stop and tell the user that the Studio must be updated first (for the local Studio: pull, build, and restart it). Do not upload, draw, or generate images as a workaround.
+When the catalog uses `sws-sample:` references, `import` and `push` first check them, before any change: offline against `sample-media/manifest.json` of the Studio repository (`$STUDIO_DIR/sample-media/manifest.json`, present when the skill runs from a checkout or a linked skill directory), then against `GET /api/v1/sample-media` on the selected origin. If the Studio answers that it does not support them or does not serve a reference, nothing is created or pushed: stop and tell the user that the Studio must be updated first (for the local Studio: pull, build, and restart it). Do not upload, draw, or generate images as a workaround.
 
 ### Widgets with a local Studio config
 
