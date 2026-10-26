@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "fade-video",
+  "name": "Fade video",
+  "scenes": ["fade"],
+  "outputs": {
+    "screenshots": false,
+    "video": {"enabled": true, "durationMs": 1000, "fps": 30, "format": "mp4", "codec": "h264", "pixelFormat": "yuv420p", "audio": "none"}
+  },
+  "limit": 1
+}

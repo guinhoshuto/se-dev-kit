@@ -1,0 +1,22 @@
+{
+  "mutations": [
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "animation.currentTime = Math.max(0, sampleTime - startedAt);",
+      "to": "animation.currentTime = 0;",
+      "test": "tests/integration/css-transition.test.mjs"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "const startedAt = starts.get(animation) ?? sampleTime;",
+      "to": "const startedAt = sampleTime;",
+      "test": "tests/integration/css-transition.test.mjs"
+    },
+    {
+      "file": "tests/fixtures/css-transition/widget.css",
+      "from": "#filled { animation: widget-in 200ms ease both; }",
+      "to": "#filled { animation: widget-in 200ms ease; }",
+      "test": "tests/integration/css-transition.test.mjs"
+    }
+  ]
+}

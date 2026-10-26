@@ -1,0 +1,10 @@
+/* Two boxes fade out through the same 500 ms opacity transition when widget.js adds .out at 300 ms.
+   #filled also has an entrance keyframe whose fill (both) holds its opacity, as se-wheel's .wrap did
+   until 2026-10-20 (b97de20): Chrome starts no transition on a property a CSS animation holds, so it
+   stays whole until visibility turns hidden at the end of the transition's delay, and cuts. */
+html, body { margin: 0; background: transparent; }
+#row { display: flex; gap: 20px; padding: 10px; }
+.box { width: 60px; height: 60px; background: #fff; transition: opacity 500ms linear; }
+.box.out { opacity: 0; visibility: hidden; transition: opacity 500ms linear, visibility 0s linear 500ms; }
+#filled { animation: widget-in 200ms ease both; }
+@keyframes widget-in { from { opacity: 0; } to { opacity: 1; } }
