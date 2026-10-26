@@ -1,0 +1,25 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "return [...new Set([engineDist, live].filter(Boolean))];",
+      "to": "return [engineDist];",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "^a client without dist"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "resolve(realpathSync(liveSkill), '../../dist')",
+      "to": "resolve(liveSkill, '../../dist')",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "^a client without dist"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "process.stderr.write(`[se-widget-studio] machine check skipped: no engine build at ${builds.join(' or ')}\\n`); return;",
+      "to": "return;",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "^a client without dist"
+    }
+  ]
+}

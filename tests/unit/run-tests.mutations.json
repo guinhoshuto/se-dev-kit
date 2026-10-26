@@ -1,0 +1,88 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "repo: 'se-dev-kit', waitLimitMs: SLOT_WAIT_MS, ...options",
+      "to": "repo: 'se-dev-kit', waitLimitMs: SLOT_WAIT_MS, wait: false, ...options",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite waits in the queue"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "    if (!result.wait || !wait) return result;",
+      "to": "    return result;",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^while the machine is busy"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "if (!result.wait || !wait) return result;",
+      "to": "if (!result.wait) return result;",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^while the machine is busy"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "    slot.release();\n    const waited = Date.now() - since;",
+      "to": "    const waited = Date.now() - since;",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^while the machine is busy"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "; gave up after ${duration(waited)}",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^while the machine is busy"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "return gaveBack ? {...slot, reason:",
+      "to": "return false ? {...slot, reason:",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^while the machine is busy"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "const allowed = suite.browser ? await gateFor() :",
+      "to": "const allowed = false ? await gateFor() :",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^npm test waits"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "detail: `${seconds.toFixed(1)} s${waited}`",
+      "to": "detail: `${seconds.toFixed(1)} s`",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^npm test waits"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "allowed.waitedMs >= 1000",
+      "to": "allowed.waitedMs >= 0",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^npm test waits"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "{ok: false, wait: true, reason: `the machine check says to wait:",
+      "to": "{ok: false, reason: `the machine check says to wait:",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the browser gate follows the machine check"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "{ok: false, wait: true, reason: `another session is rendering:",
+      "to": "{ok: false, reason: `another session is rendering:",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the browser gate refuses below 3 GiB"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "gate({wait: false, take:",
+      "to": "gate({take:",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^with the render slot held by another process"
+    }
+  ]
+}

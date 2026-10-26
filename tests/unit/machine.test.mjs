@@ -184,7 +184,7 @@ test("the caller's ancestors, and a shell or pgrep that only mentions a pattern,
   assert.deepEqual(busy, [810]);
 });
 
-test("the browser gate refuses below 3 GiB free, for orphans and for another session's render, and passes otherwise", async () => {
+test("the browser gate refuses below 3 GiB free, for orphans and for another session's render, which alone is worth waiting for, and passes otherwise", async () => {
   const quiet = [{pid: 900, ppid: 1, command: "/opt/homebrew/bin/node scripts/run-tests.mjs"}];
   // No usage readings: a real `ps -p 11` would read whatever runs as PID 11 on this machine.
   const gate = (options) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, usage: async () => new Map(), machine: async () => null, ...options});
@@ -192,10 +192,13 @@ test("the browser gate refuses below 3 GiB free, for orphans and for another ses
   const low = await gate({processes: quiet, free: async () => 3 * 1024 ** 3 - 1});
   assert.equal(low.ok, false);
   assert.match(low.reason, /only 2\.9 GiB free on the volume of \/work; browser suites need 3\.0 GiB/);
+  assert.equal(low.wait, undefined, "waiting does not free the disk");
   const orphaned = await gate({processes: [...quiet, ...processes()], free: async () => 10 * 1024 ** 3});
   assert.match(orphaned.reason, /orphan process\(es\) \(PID 10, 20, 21\); run npm run kill-stale/);
+  assert.equal(orphaned.wait, undefined, "waiting does not end this checkout's own orphan");
   const busy = await gate({processes: [...quiet, processes()[1]], free: async () => 10 * 1024 ** 3});
   assert.match(busy.reason, /another session is rendering: PID 11 /);
+  assert.equal(busy.wait, true);
 });
 
 const HEADLESS = `${CHROME} --headless=new --dump-dom file:///work/page.html`;
@@ -253,8 +256,8 @@ test("the browser gate passes a stalled render with a warning and its `! kill` l
   const warning = "orphan render (PPID 1) stalled for 2 h, without CPU (0% now, 0.4 s of CPU in its life), 112 KiB; it does not count as a render: " +
     "PID 100 (/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --dump-dom file:///work/page.html), in /work/review-notes; you end it: `! kill 100`";
   assert.deepEqual(await gate([100, 101]), {ok: true, warnings: [warning]});
-  assert.deepEqual(await gate([100, 101, 200]), {ok: false, reason: `another session is rendering: PID 200 ${HEADLESS}`, warnings: [warning]});
-  assert.deepEqual(await gate([200]), {ok: false, reason: `another session is rendering: PID 200 ${HEADLESS}`});
+  assert.deepEqual(await gate([100, 101, 200]), {ok: false, wait: true, reason: `another session is rendering: PID 200 ${HEADLESS}`, warnings: [warning]});
+  assert.deepEqual(await gate([200]), {ok: false, wait: true, reason: `another session is rendering: PID 200 ${HEADLESS}`});
 });
 
 test("ps usage parses the macOS and Linux times and a decimal comma, and skips what it cannot read", () => {
@@ -356,7 +359,7 @@ test("the browser gate follows the machine check, and the process list only wher
   const asked = [];
   const gate = (machine) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], cwd, usage: async () => new Map(), processes: rendering, free: async () => 10 * 1024 ** 3, machine: async (roots) => { asked.push(roots); return machine; }});
   assert.deepEqual(await gate({free: true, reasons: []}), {ok: true}, "the check already looked at the renders");
-  assert.deepEqual(await gate({free: false, reasons: ["12% of memory free, below 30%", "the game (Client-Mac-Shipping) is open"]}), {ok: false, reason: "the machine check says to wait: 12% of memory free, below 30%; the game (Client-Mac-Shipping) is open"});
+  assert.deepEqual(await gate({free: false, reasons: ["12% of memory free, below 30%", "the game (Client-Mac-Shipping) is open"]}), {ok: false, wait: true, reason: "the machine check says to wait: 12% of memory free, below 30%; the game (Client-Mac-Shipping) is open"});
   assert.match((await gate(null)).reason, /another session is rendering: PID 11 /);
   assert.deepEqual(asked, [[900], [900], [900]], "the check is asked for the runner's family");
 });
