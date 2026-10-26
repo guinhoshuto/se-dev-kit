@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "fade",
+  "name": "Fade out",
+  "viewport": {"width": 170, "height": 80},
+  "output": {"width": 170, "height": 80, "format": "png"},
+  "background": {"id": "black", "color": "#000000"}
+}
