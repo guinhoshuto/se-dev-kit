@@ -29,6 +29,17 @@ This repository contains SE Widget Studio Web and its shared StreamElements simu
 - A finished change reaches `main` by merge, with the owner's yes. Then, in the live checkout, run `npm run build` (engine and web app), check that `dist/build-info.json` reports `"dirty": false`, and restart the local Studio if you started it; when another session's server is running, tell the user it serves the old build. Remove the worktree once its branch is merged or dropped: `git worktree remove .claude/worktrees/<task>`.
 - Skill text that depends on a code change ships in the same commit as that change, and reaches `main` only with it. The skill never tells an agent to use a field, flag, or behavior that the local Studio on `main` rejects.
 
+## A session on one issue
+
+The backlog is this repository's GitHub issues; an issue's last line, `Tracker: <ID>`, names the vault tracker item it comes from. A session on one issue (Orca's Start hands it only the issue's URL) closes the cycle without the owner asking for each step:
+
+1. The work in its worktree on a `wip/<task>` branch, with its tests and a mutation each new test kills (`npm run mutate`, a plan in `tests/unit/<topic>.mutations.json`); the commit on that branch, with no question, says `Closes #N`.
+2. The whole gate on the branch's last commit: `npm run typecheck`, `npm test` and `npm run build`, then the branch's mutation plans. Run `npm test` in the background: its browser suites wait in the render-slot queue behind another session's hold. A run that still prints `NOT COVERED` did not test them: run `npm run test:browser` again, or name them in the question.
+3. The issue's comment in the live checkout's `.cache/issue-<N>/comment.md` (English, short: what changed, the test and the mutation, what was measured, the commit).
+4. One question (AskUserQuestion) offers together the merge into `main` and the comment. With the yes: `gh issue comment <N> --body-file .cache/issue-<N>/comment.md`; the merge in the live checkout (`git merge --no-ff`), then its build as the section above says; and the push in a command of its own, by the merge's sha (`git push origin <sha>:refs/heads/main`, its permission box being the owner's yes), which closes the issue.
+5. An issue whose code is in `main` closes at the merge that carried it, also when part of its acceptance waits for a later real session: its comment names the tracker item that keeps that check.
+6. Started by Orca: after the push, `orca worktree set --worktree id:$ORCA_WORKTREE_ID --workspace-status completed`. The last answer offers the vault's `/fechar` in one line and says, with no command, that the worktree goes after the session closes (the session's own process is inside it).
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know
