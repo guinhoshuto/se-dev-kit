@@ -17,12 +17,17 @@ export function slugify(value: string): string {
   return slug;
 }
 
+/** The rule SAFE_ID enforces, in words, for every message that refuses an id. */
+export const SAFE_ID_RULE = "lowercase letters, numbers, and single hyphens";
+
+/** Why an id is unsafe, or undefined when it is safe. Catalog schemas and assertSafeId share it. */
+export function unsafeIdMessage(value: string, label = "identifier"): string | undefined {
+  if (SAFE_ID.test(value) && !value.includes("..")) return undefined;
+  return `Invalid ${label} "${value}". Use ${SAFE_ID_RULE}.`;
+}
+
 export function assertSafeId(value: string, label = "identifier"): string {
-  if (!SAFE_ID.test(value) || value.includes("..")) {
-    throw new StudioError(
-      "INVALID_ID",
-      `Invalid ${label} "${value}". Use lowercase letters, numbers, and single hyphens.`
-    );
-  }
+  const message = unsafeIdMessage(value, label);
+  if (message) throw new StudioError("INVALID_ID", message);
   return value;
 }

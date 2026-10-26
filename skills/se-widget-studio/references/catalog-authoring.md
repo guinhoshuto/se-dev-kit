@@ -1,6 +1,6 @@
 # Catalog authoring
 
-Use schema version `1` and unique IDs matching `[a-zA-Z0-9_-]{1,100}`. Keep catalogs small and specific to the widget.
+Use schema version `1` and unique IDs of lowercase letters, numbers, and single hyphens, up to 100 characters: `f-font-name`, not `f-fontName` or `f_font_name`. Scene, theme, background, viewport, and camera IDs become part of every capture variant ID, so the Studio import and `validate` refuse any other ID there at once, with that rule in the message, instead of the job failing later. Keep catalogs small and specific to the widget.
 
 ## Layers
 

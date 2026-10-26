@@ -1,5 +1,15 @@
 import {z} from "zod";
-import {SAFE_ID} from "../shared/ids.js";
+import {SAFE_ID, unsafeIdMessage} from "../shared/ids.js";
+
+/**
+ * An id that becomes part of a capture variant id (scene, theme, background, viewport, camera): the job
+ * refuses it with assertSafeId, so the catalog refuses it first, with the same rule and message.
+ */
+const safeIdSchema = (label: string) =>
+  z.string().superRefine((value, context) => {
+    const message = unsafeIdMessage(value, label);
+    if (message) context.addIssue({code: z.ZodIssueCode.custom, message});
+  });
 
 const jsonPrimitiveSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()]);
 export const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
@@ -66,7 +76,7 @@ export const timelineEventSchema = z
 
 const backgroundSchema = z
   .object({
-    id: z.string().min(1),
+    id: safeIdSchema("background id"),
     label: z.string().optional(),
     color: z.string().optional(),
     image: z.string().optional(),
@@ -76,7 +86,7 @@ const backgroundSchema = z
 
 const cameraSchema = z
   .object({
-    id: z.string().min(1),
+    id: safeIdSchema("camera id"),
     label: z.string().optional(),
     scale: z.number().min(0.05).max(20),
     x: z.number().min(-100_000).max(100_000),
@@ -106,7 +116,7 @@ const cropSchema = z
 export const themeSchema = z
   .object({
     schemaVersion: z.literal(1),
-    id: z.string().min(1),
+    id: safeIdSchema("theme id"),
     name: z.string().min(1),
     description: z.string().optional(),
     fieldData: jsonObjectSchema
@@ -160,7 +170,7 @@ export const scenarioSchema = z
 export const sceneSchema = z
   .object({
     schemaVersion: z.literal(1),
-    id: z.string().min(1),
+    id: safeIdSchema("scene id"),
     name: z.string().min(1),
     description: z.string().optional(),
     theme: z.string().optional(),
@@ -301,7 +311,7 @@ export const recipeSchema = z
       .object({
         themes: z.array(z.string().min(1)).optional(),
         backgrounds: z.array(backgroundSchema).optional(),
-        viewports: z.array(viewportSchema.extend({id: z.string().min(1), label: z.string().optional()})).optional(),
+        viewports: z.array(viewportSchema.extend({id: safeIdSchema("viewport id"), label: z.string().optional()})).optional(),
         cameras: z.array(cameraSchema).optional()
       })
       .strict()

@@ -1,0 +1,53 @@
+{
+  "mutations": [
+    {
+      "file": "src/config/schemas.ts",
+      "from": "id: safeIdSchema(\"scene id\"),",
+      "to": "id: z.string().min(1),",
+      "test": "tests/unit/catalog-ids.test.mjs",
+      "name": "a scene id in camelCase is refused"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": "id: safeIdSchema(\"scene id\"),",
+      "to": "id: z.string().min(1),",
+      "test": "tests/web/schema.test.ts",
+      "name": "the import refuses a scene id"
+    },
+    {
+      "file": "src/shared/ids.ts",
+      "from": "return `Invalid ${label} \"${value}\". Use ${SAFE_ID_RULE}.`;",
+      "to": "return `Invalid ${label} \"${value}\".`;",
+      "test": "tests/unit/catalog-ids.test.mjs",
+      "name": "a scene id in camelCase is refused"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": "id: safeIdSchema(\"background id\"),",
+      "to": "id: z.string().min(1),",
+      "test": "tests/unit/catalog-ids.test.mjs",
+      "name": "every other part of a variant id"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": "id: safeIdSchema(\"camera id\"),",
+      "to": "id: z.string().min(1),",
+      "test": "tests/unit/catalog-ids.test.mjs",
+      "name": "every other part of a variant id"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": "id: safeIdSchema(\"theme id\"),",
+      "to": "id: z.string().min(1),",
+      "test": "tests/unit/catalog-ids.test.mjs",
+      "name": "every other part of a variant id"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": "id: safeIdSchema(\"viewport id\"),",
+      "to": "id: z.string().min(1),",
+      "test": "tests/unit/catalog-ids.test.mjs",
+      "name": "every other part of a variant id"
+    }
+  ]
+}
