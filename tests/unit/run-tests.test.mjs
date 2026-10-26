@@ -152,7 +152,8 @@ test("while the machine is busy the gate gives the slot back and asks again in i
   assert.match(lost.reason, /^Gave up after 240 minutes waiting for the render slot, held by pid 7\. It had given the slot back 1× since \S+, the machine busy: the machine check says to wait: the game is open\.$/);
 
   checks = 0;
-  const once = await gate({take, check: async () => { checks += 1; return game; }, pauseMs: 0, backoffMs: 20, wait: false, log: () => {}});
+  // A limit of its own, so a gate that waited anyway would end with more checks, not hang.
+  const once = await gate({take, check: async () => { checks += 1; return game; }, pauseMs: 0, backoffMs: 20, waitLimitMs: 500, wait: false, log: () => {}});
   assert.deepEqual([once.ok, once.reason, checks], [false, game.reason, 3], "without wait, one hold and its three checks");
   assert.equal(await exists(dir), false);
 });
