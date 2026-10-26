@@ -276,8 +276,9 @@ export const shortCommand = command => (command.length > 110 ? `${command.slice(
 /**
  * Whether a suite that starts Chrome may run now. It refuses below MIN_FREE_BYTES, when this checkout
  * left an orphan (which `npm run kill-stale` removes), and when the machine check says to wait; where
- * that check is missing, when another session renders. A stalled render does not refuse: it comes back
- * in `warnings`, which is there only when there is one.
+ * that check is missing, when another session renders. Only the last two carry `wait`: waiting ends
+ * them, and the test runner waits. A stalled render does not refuse: it comes back in `warnings`,
+ * which is there only when there is one.
  */
 export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FREE_BYTES, processes, free = freeBytes, cwd = cwdOf, usage = readUsage, machine = machineVerdict}) {
   for (const path of paths) {
@@ -288,9 +289,9 @@ export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FRE
   const {orphans} = await checkoutOrphans(root, list, {cwd});
   if (orphans.length) return {ok: false, reason: `this checkout left ${orphans.length} orphan process(es) (PID ${orphans.map(item => item.pid).join(', ')}); run npm run kill-stale`};
   const verdict = await machine(ownRoots);
-  if (verdict) return verdict.free ? {ok: true} : {ok: false, reason: `the machine check says to wait: ${verdict.reasons.join('; ')}`};
+  if (verdict) return verdict.free ? {ok: true} : {ok: false, wait: true, reason: `the machine check says to wait: ${verdict.reasons.join('; ')}`};
   const {busy, stalled} = await splitStalled(otherSessionsWork(list, ownRoots), list, {usage, cwd});
-  const result = busy.length ? {ok: false, reason: `another session is rendering: PID ${busy[0].pid} ${shortCommand(busy[0].command)}${busy.length > 1 ? ` (+${busy.length - 1} more)` : ''}`} : {ok: true};
+  const result = busy.length ? {ok: false, wait: true, reason: `another session is rendering: PID ${busy[0].pid} ${shortCommand(busy[0].command)}${busy.length > 1 ? ` (+${busy.length - 1} more)` : ''}`} : {ok: true};
   return stalled.length ? {...result, warnings: stalled.map(stalledWarning)} : result;
 }
 

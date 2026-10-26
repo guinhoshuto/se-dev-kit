@@ -1,8 +1,9 @@
 // Runs the test suites the way this machine needs them:
 // - every suite also writes its output to .cache/test-logs/<run>/<suite>.log, so a failure keeps its name;
 // - the suites that start Chrome (integration, web:browser) run one file at a time behind the machine
-//   gate, holding the machine-wide render slot (~/.cache/render-slot, shared with background-creator),
-//   and are skipped with the reason when the disk is low, another session renders, or the slot is held;
+//   gate, holding the machine-wide render slot (~/.cache/render-slot, shared with background-creator):
+//   they wait for it in the queue, and for a free machine, up to four hours, and are skipped with the
+//   reason when the disk is low, this checkout left an orphan, or that wait runs out;
 // - each suite gets a temporary folder of its own (TMPDIR), which must be empty when the suite ends,
 //   and a render slot inside it, so a CLI render a test starts never waits for the machine's slot.
 //
@@ -21,6 +22,10 @@ import {browserGate} from './lib/machine.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LOGS = join(ROOT, '.cache', 'test-logs');
 const KEEP_RUNS = 10;
+/** How long a browser suite waits for the render slot and a free machine before it is not covered, as a local render does. */
+export const SLOT_WAIT_MS = 4 * 60 * 60 * 1000;
+/** How long a browser suite leaves the slot to the next in the queue when the machine is busy outside it. */
+const BUSY_BACKOFF_MS = 20_000;
 
 // A test without its own timeout fails after two minutes instead of holding the run, and a file ends
 // once its tests end even if a hung browser keeps its event loop alive (Playwright then kills Chrome).
@@ -64,38 +69,60 @@ export function suiteForFile(file) {
 /** Entries a suite left in its temporary folder; tsx keeps its compile cache there and is exempt. */
 export const leftovers = entries => entries.filter(entry => !/^tsx-\d+$/.test(entry)).sort();
 
-/** The machine-wide render slot for one browser suite, taken without waiting: a held slot skips the suite. */
+/**
+ * The machine-wide render slot for one browser suite. It waits its turn in the queue, up to SLOT_WAIT_MS from
+ * `since`, the moment it first came, which keeps its place after it gave the slot back; `wait: false` answers at once.
+ */
 export async function takeBrowserSlot(options = {}) {
   const {acquireRenderSlot} = await import('../dist/shared/render-slot.js');
   try {
-    const slot = await acquireRenderSlot({command: `node scripts/run-tests.mjs ${process.argv.slice(2).join(' ')}`.trim(), repo: 'se-dev-kit', wait: false, ...options});
+    const slot = await acquireRenderSlot({command: `node scripts/run-tests.mjs ${process.argv.slice(2).join(' ')}`.trim(), repo: 'se-dev-kit', waitLimitMs: SLOT_WAIT_MS, ...options});
     return {ok: true, release: slot.release};
   } catch (error) {
     return {ok: false, reason: error instanceof Error ? error.message : String(error)};
   }
 }
 
+/** A wait in the unit a person reads: seconds under a minute, else minutes. */
+export const duration = ms => (ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60_000)} min`);
+
 /**
- * Whether a browser suite may run now: it takes the render slot, then asks the machine gate, and
- * gives the slot back when the gate refuses. `take` and `check` are replaceable for tests.
+ * Whether a browser suite may run now: it waits for the render slot, then asks the machine gate. A refusal
+ * that waiting can end (`wait` in it: the machine check says to wait, another session renders) gives the
+ * slot back and asks again after `backoffMs`, in the place it first came, until `waitLimitMs` from then;
+ * any other (low disk, an orphan) ends at once, and so does every refusal with `wait` false. `waitedMs`
+ * says how long it waited. `take`, `check` and `log` are replaceable for tests.
  */
 export async function gate({
   take = takeBrowserSlot,
   check = () => browserGate({root: ROOT, paths: [ROOT, tmpdir()], ownRoots: [process.pid]}),
-  pauseMs = 1000
+  pauseMs = 1000,
+  wait = true,
+  waitLimitMs = SLOT_WAIT_MS,
+  backoffMs = BUSY_BACKOFF_MS,
+  log = message => console.log(message)
 } = {}) {
-  if (process.env.SE_WIDGET_STUDIO_TEST_GATE === 'off') return {ok: true, release: () => {}};
-  const slot = await take();
-  if (!slot.ok) return slot;
-  let result;
-  // A Chrome the previous suite's exit just killed can still be listed for a moment.
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (attempt) await sleep(pauseMs);
-    result = await check();
-    if (result.ok) return {...result, release: slot.release};
+  if (process.env.SE_WIDGET_STUDIO_TEST_GATE === 'off') return {ok: true, release: () => {}, waitedMs: 0};
+  const since = Date.now();
+  let said = '';
+  for (let gaveBack = 0; ; gaveBack += 1) {
+    const slot = await take({since, wait, waitLimitMs: Math.max(0, waitLimitMs - (Date.now() - since))});
+    if (!slot.ok) return gaveBack ? {...slot, reason: `${slot.reason} It had given the slot back ${gaveBack}× since ${new Date(since).toISOString()}, the machine busy: ${said}.`} : slot;
+    let result;
+    // A Chrome the previous suite's exit just killed can still be listed for a moment.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt) await sleep(pauseMs);
+      result = await check();
+      if (result.ok) return {...result, release: slot.release, waitedMs: Date.now() - since};
+    }
+    slot.release();
+    const waited = Date.now() - since;
+    if (!result.wait || !wait) return result;
+    if (waited >= waitLimitMs) return {...result, reason: `${result.reason}; gave up after ${duration(waited)}, giving the slot back ${gaveBack + 1}×`};
+    if (result.reason !== said) log(`The machine is busy: ${result.reason}. Gave the slot back; asking again in ${backoffMs / 1000} s, in the place it first came.`);
+    said = result.reason;
+    await sleep(Math.min(backoffMs, waitLimitMs - waited));
   }
-  slot.release();
-  return result;
 }
 
 /**
@@ -155,39 +182,42 @@ async function warnOnUnsupportedNode() {
   }
 }
 
-async function runSuites(names) {
-  for (const name of names) if (!SUITES[name]) throw new Error(`Unknown suite ${name}. Suites: ${Object.keys(SUITES).join(', ')}.`);
+/** Runs the named suites in order and prints a summary; `suites`, `files`, `gateFor`, `run`, `newDirectory` and `log` are replaceable for tests. */
+export async function runSuites(names, {suites = SUITES, files = suiteFiles, gateFor = gate, run = execute, newDirectory = newRunDirectory, log = console.log} = {}) {
+  for (const name of names) if (!suites[name]) throw new Error(`Unknown suite ${name}. Suites: ${Object.keys(suites).join(', ')}.`);
   await warnOnUnsupportedNode();
-  const directory = await newRunDirectory();
-  console.log(`Test logs: ${relative(ROOT, directory)}/`);
+  const directory = await newDirectory();
+  log(`Test logs: ${relative(ROOT, directory)}/`);
   const results = [];
   for (const name of names) {
-    const suite = SUITES[name];
-    const files = await suiteFiles(suite);
-    if (!files.length) { results.push({name, status: 'passed', detail: 'no files'}); continue; }
-    const allowed = suite.browser ? await gate() : {ok: true, release: () => {}};
-    for (const warning of allowed.warnings ?? []) console.log(`\nWarning: ${warning}`);
+    const suite = suites[name];
+    const list = await files(suite);
+    if (!list.length) { results.push({name, status: 'passed', detail: 'no files'}); continue; }
+    const allowed = suite.browser ? await gateFor() : {ok: true, release: () => {}};
+    for (const warning of allowed.warnings ?? []) log(`\nWarning: ${warning}`);
     if (!allowed.ok) {
-      console.log(`\nSkipped ${name}: ${allowed.reason}`);
+      log(`\nSkipped ${name}: ${allowed.reason}`);
       results.push({name, status: 'skipped', detail: allowed.reason});
       continue;
     }
+    // A wait under a second is no wait worth naming.
+    const waited = allowed.waitedMs >= 1000 ? `, after ${duration(allowed.waitedMs)} waiting for the render slot` : '';
     let outcome;
     try {
-      console.log(`\n== ${name}: ${files.length} file(s)${suite.browser ? ', one at a time' : ''}`);
-      outcome = await execute(name, suite, files, join(directory, `${name.replace(':', '-')}.log`));
+      log(`\n== ${name}: ${list.length} file(s)${suite.browser ? ', one at a time' : ''}${waited}`);
+      outcome = await run(name, suite, list, join(directory, `${name.replace(':', '-')}.log`));
     } finally {
       allowed.release();
     }
     const {code, seconds} = outcome;
-    results.push({name, status: code === 0 ? 'passed' : 'failed', detail: `${seconds.toFixed(1)} s`});
+    results.push({name, status: code === 0 ? 'passed' : 'failed', detail: `${seconds.toFixed(1)} s${waited}`});
     if (code !== 0) break;
   }
-  console.log('');
-  for (const result of results) console.log(`${result.name.padEnd(12)} ${result.status.padEnd(8)} ${result.detail}`);
+  log('');
+  for (const result of results) log(`${result.name.padEnd(12)} ${result.status.padEnd(8)} ${result.detail}`);
   const skipped = results.filter(result => result.status === 'skipped').map(result => result.name);
-  if (skipped.length) console.log(`NOT COVERED: ${skipped.join(', ')}. This run did not test them; run npm run wait-free, then npm run test:browser.`);
-  console.log(`Logs: ${relative(ROOT, directory)}/`);
+  if (skipped.length) log(`NOT COVERED: ${skipped.join(', ')}. This run did not test them; run npm run wait-free, then npm run test:browser.`);
+  log(`Logs: ${relative(ROOT, directory)}/`);
   return results.some(result => result.status === 'failed') ? 1 : 0;
 }
 

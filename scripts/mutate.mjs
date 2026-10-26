@@ -125,8 +125,8 @@ export async function checkMutation(raw, index, root) {
 /** A test file of a suite whose every test starts Chrome (tests/integration); mutate skips the [browser] web tests. */
 export const opensChrome = test => Object.values(SUITES).some(suite => suite.browser && !suite.tagged && test.startsWith(`${suite.dir}/`));
 
-/** The test runner's gate for a browser suite: the render slot, taken without waiting, then the machine check. */
-const machineGate = () => gate({take: () => takeBrowserSlot({command: `node scripts/mutate.mjs ${process.argv.slice(2).join(' ')}`.trim().slice(0, 200)})});
+/** The test runner's gate for a browser suite, without its wait: the render slot, taken at once, then the machine check. */
+const machineGate = () => gate({wait: false, take: options => takeBrowserSlot({...options, command: `node scripts/mutate.mjs ${process.argv.slice(2).join(' ')}`.trim().slice(0, 200)})});
 
 /** The spec reporter's totals and the names of the tests that failed. */
 export function summarize(output) {

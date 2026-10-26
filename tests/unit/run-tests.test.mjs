@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
+import {existsSync} from "node:fs";
 import {mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
+import {setTimeout as sleep} from "node:timers/promises";
 
-import {SUITES, execute, gate, leftovers, nodeArgs, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
+import {SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
 
 async function logFile(t) {
   const directory = await mkdtemp(join(tmpdir(), "sws-runner-log-"));
@@ -76,36 +78,126 @@ async function slotFolder(t) {
 
 const exists = (path) => stat(path).then(() => true, () => false);
 const ownerPid = async (dir) => JSON.parse(await readFile(join(dir, "owner.json"), "utf8")).pid;
+const literal = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-test("a browser suite takes the render slot without waiting, and a held slot skips it naming the holder", {timeout: 30_000}, async (t) => {
-  const dir = await slotFolder(t);
+/** Another process's hold on the slot at `dir`: a live pid in its owner.json, as background-creator writes it. */
+async function holdSlot(t, dir) {
   const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio: "ignore"});
   t.after(() => other.kill("SIGKILL"));
   await mkdir(dir, {recursive: true});
   await writeFile(join(dir, "owner.json"), JSON.stringify({pid: other.pid, repo: "background-creator", command: "npm run stills", startedAt: new Date().toISOString()}));
+  return other;
+}
+
+/** The test runner's gate keeps its own environment switch; these tests need it on. */
+function gateOn(t) {
+  const saved = process.env.SE_WIDGET_STUDIO_TEST_GATE;
+  delete process.env.SE_WIDGET_STUDIO_TEST_GATE;
+  t.after(() => { if (saved !== undefined) process.env.SE_WIDGET_STUDIO_TEST_GATE = saved; });
+}
+
+test("a browser suite waits in the queue for a held render slot and takes it when the holder lets go; a holder that never does ends the wait naming it", {timeout: 30_000}, async (t) => {
+  const dir = await slotFolder(t);
+  const other = await holdSlot(t, dir);
   const started = Date.now();
-  const held = await takeBrowserSlot({dir});
+  const held = await takeBrowserSlot({dir, wait: false});
   assert.equal(held.ok, false);
   assert.match(held.reason, new RegExp(`held by pid ${other.pid} \\(background-creator: npm run stills\\)`));
-  assert.ok(Date.now() - started < 1000, "a held slot answers at once");
+  assert.ok(Date.now() - started < 1000, "without wait, a held slot answers at once");
 
-  other.kill("SIGKILL");
-  await once(other, "exit");
-  const taken = await takeBrowserSlot({dir});
+  const timedOut = await takeBrowserSlot({dir, pollMs: 50, waitLimitMs: 300, log: () => {}});
+  assert.equal(timedOut.ok, false);
+  assert.match(timedOut.reason, new RegExp(`Gave up after \\d+ minutes waiting for the render slot \\(${literal(dir)}\\), held by pid ${other.pid} \\(background-creator: npm run stills\\)`));
+
+  const said = [];
+  const waiting = takeBrowserSlot({dir, pollMs: 50, log: (message) => said.push(message)});
+  await sleep(500);
+  assert.equal(await ownerPid(dir), other.pid, "the slot stays with its holder while it holds it");
+  // The holder lets go between two of its steps, as a mutation chain of the vault does.
+  await rm(dir, {recursive: true, force: true});
+  const taken = await waiting;
   assert.equal(taken.ok, true, taken.reason);
   assert.equal(await ownerPid(dir), process.pid);
+  assert.match(said.join("\n"), new RegExp(`Waiting for the render slot, held by pid ${other.pid}`));
   const owner = JSON.parse(await readFile(join(dir, "owner.json"), "utf8"));
   assert.deepEqual([owner.repo, owner.protocol], ["se-dev-kit", 2], "the owner names this repo, not the package or the folder");
   taken.release();
   assert.equal(await exists(dir), false);
 });
 
-test("the gate takes the slot before the machine check and gives it back when the check refuses", async (t) => {
-  const saved = process.env.SE_WIDGET_STUDIO_TEST_GATE;
-  delete process.env.SE_WIDGET_STUDIO_TEST_GATE;
-  t.after(() => { if (saved !== undefined) process.env.SE_WIDGET_STUDIO_TEST_GATE = saved; });
+test("while the machine is busy the gate gives the slot back and asks again in its place, then runs; it gives up at its limit, and without wait at once", {timeout: 30_000}, async (t) => {
+  gateOn(t);
   const dir = await slotFolder(t);
-  const take = () => takeBrowserSlot({dir});
+  const take = (options) => takeBrowserSlot({...options, dir, log: () => {}});
+  const busy = {ok: false, wait: true, reason: "another session is rendering: PID 11 npx remotion render"};
+  let checks = 0;
+  const said = [];
+  const allowed = await gate({take, check: async () => (++checks <= 3 ? busy : {ok: true}), pauseMs: 0, backoffMs: 20, log: (message) => said.push([message, existsSync(dir)])});
+  assert.equal(allowed.ok, true, allowed.reason);
+  assert.equal(checks, 4, "three checks on the first hold, one on the second");
+  assert.deepEqual(said, [["The machine is busy: another session is rendering: PID 11 npx remotion render. Gave the slot back; asking again in 0.02 s, in the place it first came.", false]], "the slot is free while the gate waits");
+  assert.equal(await ownerPid(dir), process.pid);
+  assert.ok(allowed.waitedMs >= 20, `waited ${allowed.waitedMs} ms`);
+  allowed.release();
+
+  const game = {ok: false, wait: true, reason: "the machine check says to wait: the game is open"};
+  const stuck = await gate({take, check: async () => game, pauseMs: 0, backoffMs: 20, waitLimitMs: 200, log: () => {}});
+  assert.equal(stuck.ok, false);
+  assert.match(stuck.reason, /^the machine check says to wait: the game is open; gave up after 0\.\d s, giving the slot back \d+×$/);
+  assert.equal(await exists(dir), false);
+
+  // The slot taken by someone else while the gate waited out the busy machine: the refusal says both.
+  let takes = 0;
+  const lost = await gate({take: async (options) => (++takes === 1 ? take(options) : {ok: false, reason: "Gave up after 240 minutes waiting for the render slot, held by pid 7."}), check: async () => game, pauseMs: 0, backoffMs: 20, log: () => {}});
+  assert.match(lost.reason, /^Gave up after 240 minutes waiting for the render slot, held by pid 7\. It had given the slot back 1× since \S+, the machine busy: the machine check says to wait: the game is open\.$/);
+
+  checks = 0;
+  const once = await gate({take, check: async () => { checks += 1; return game; }, pauseMs: 0, backoffMs: 20, wait: false, log: () => {}});
+  assert.deepEqual([once.ok, once.reason, checks], [false, game.reason, 3], "without wait, one hold and its three checks");
+  assert.equal(await exists(dir), false);
+});
+
+test("npm test waits for a held slot, then runs integration and web:browser holding it; a holder that never lets go leaves them NOT COVERED with the wait and the holder", {timeout: 30_000}, async (t) => {
+  gateOn(t);
+  const dir = await slotFolder(t);
+  const other = await holdSlot(t, dir);
+  const logs = await mkdtemp(join(tmpdir(), "sws-runner-logs-"));
+  t.after(() => rm(logs, {recursive: true, force: true}));
+  const suites = {integration: {browser: true}, web: {}, "web:browser": {browser: true}};
+  const ran = [];
+  const options = (waitLimitMs, lines) => ({
+    suites,
+    files: async () => ["fake.test.mjs"],
+    gateFor: () => gate({take: (slot) => takeBrowserSlot({...slot, dir, pollMs: 50, log: () => {}}), check: async () => ({ok: true}), pauseMs: 0, waitLimitMs}),
+    // Each suite notes who holds the slot while it runs.
+    run: async (name) => { ran.push([name, suites[name].browser ? await ownerPid(dir) : null]); return {code: 0, seconds: 0.5}; },
+    newDirectory: async () => logs,
+    log: (line) => lines.push(line)
+  });
+  const stuck = [];
+  assert.equal(await runSuites(["integration", "web", "web:browser"], options(200, stuck)), 0);
+  assert.deepEqual(ran, [["web", null]]);
+  const summary = stuck.join("\n");
+  assert.match(summary, new RegExp(`^integration +skipped +Gave up after \\d+ minutes waiting for the render slot \\(${literal(dir)}\\), held by pid ${other.pid} \\(background-creator: npm run stills\\)`, "m"));
+  assert.match(summary, /^NOT COVERED: integration, web:browser\./m);
+
+  ran.length = 0;
+  const lines = [];
+  const release = sleep(1200).then(() => rm(dir, {recursive: true, force: true}));
+  assert.equal(await runSuites(["integration", "web", "web:browser"], options(60_000, lines)), 0);
+  await release;
+  assert.deepEqual(ran, [["integration", process.pid], ["web", null], ["web:browser", process.pid]]);
+  const text = lines.join("\n");
+  assert.doesNotMatch(text, /NOT COVERED|skipped/);
+  assert.match(text, /^integration +passed +0\.5 s, after \d+\.\d s waiting for the render slot$/m);
+  assert.match(text, /^web:browser +passed +0\.5 s$/m, "a free slot is no wait");
+  assert.equal(await exists(dir), false, "the run gives the slot back");
+});
+
+test("the gate takes the slot before the machine check and gives it back at once when the check refuses for a reason waiting cannot end", async (t) => {
+  gateOn(t);
+  const dir = await slotFolder(t);
+  const take = (options) => takeBrowserSlot({...options, dir});
   const checked = [];
   const refused = await gate({take, check: async () => { checked.push(await exists(dir)); return {ok: false, reason: "only 2.9 GiB free"}; }, pauseMs: 0});
   assert.deepEqual(refused, {ok: false, reason: "only 2.9 GiB free"});
