@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {waitBeforeSubmitting} from '../../skills/se-widget-studio/scripts/studio-client.mjs';
@@ -76,4 +76,29 @@ test('the wait before submitting asks the machine check only for a loopback Stud
   assert.equal(asked, 0);
   await waitBeforeSubmitting('http://127.0.0.1:4310', {check});
   assert.equal(asked, 1);
+});
+
+test('a client without dist/ next to it asks the machine check through the live checkout\'s build, and with no build anywhere says it skipped the check', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'sws-skill-no-dist-')));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  // A worktree without a build, and the live checkout the global skill links to, built: this repository's dist/.
+  const worktree = join(root, 'worktree', 'dist');
+  const checkout = join(root, 'checkout');
+  await mkdir(join(checkout, 'skills', 'se-widget-studio'), {recursive: true});
+  await symlink(join(checkout, 'skills', 'se-widget-studio'), join(root, 'skill-link'));
+  const written: string[] = [];
+  const write = process.stderr.write;
+  process.stderr.write = ((chunk: string) => { written.push(String(chunk)); return true; }) as typeof process.stderr.write;
+  t.after(() => { process.stderr.write = write; });
+  let asked = 0;
+  const check = async () => { asked++; return null; };
+  const wait = (liveSkill: string) => waitBeforeSubmitting('http://127.0.0.1:4310', {engineDist: worktree, liveSkill, check});
+
+  await wait(join(root, 'skill-link'));
+  assert.deepEqual([asked, written], [0, [`[se-widget-studio] machine check skipped: no engine build at ${worktree} or ${join(checkout, 'dist')}\n`]], 'a live checkout without a build either');
+  await symlink(resolve('dist'), join(checkout, 'dist'));
+  await wait(join(root, 'skill-link'));
+  assert.deepEqual([asked, written.length], [1, 1], 'the check ran through the live checkout\'s build, without a word');
+  await wait(join(root, 'no-skill'));
+  assert.deepEqual([asked, written.slice(1)], [1, [`[se-widget-studio] machine check skipped: no engine build at ${worktree}\n`]], 'no skill link: only the path next to the client');
 });

@@ -22,6 +22,9 @@ const SAMPLE_SCHEME = 'sws-sample:';
 const SAMPLE_MANIFEST = resolve(dirname(fileURLToPath(import.meta.url)), '../../../sample-media/manifest.json');
 // The same checkout's engine build, which --config uses to read a se-widget-studio.config.mjs as the local CLI does.
 const ENGINE_DIST = resolve(dirname(fileURLToPath(import.meta.url)), '../../../dist');
+// The global skill's link, whose real path is in the live checkout: its engine build answers the machine check for a
+// client run from a checkout without one, such as a new worktree (SDK-58).
+const LIVE_SKILL = join(homedir(), '.claude', 'skills', 'se-widget-studio');
 // Per-revision catalog limit of the Studio API (lib/schema.ts).
 const CATALOG_LIMIT = 48;
 const sleep = ms => new Promise(done => setTimeout(done, ms));
@@ -533,20 +536,32 @@ function failedChecks(name, bytes) {
     .map(item => ({id: String(item.id), errors: Array.isArray(item.errors) ? item.errors.filter(error => typeof error === 'string') : []}));
 }
 
+/** The engine builds the machine check may come from, in order: the one next to this client, then the live checkout's. */
+export function engineBuilds({engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL} = {}) {
+  let live;
+  try {live = resolve(realpathSync(liveSkill), '../../dist');} catch {live = undefined;}
+  return [...new Set([engineDist, live].filter(Boolean))];
+}
+
 /**
  * Before a job on a local Studio, waits while the machine check every repo shares says to wait (another session's
  * render or held render slot, the game, memory, swap, disk), up to 4 hours like the local CLI, and prints why. The
  * job's own worker waits 30 minutes at most, inside its two-hour life, so a long wait belongs here, before the job
  * exists. It never takes the render slot: the job takes it, or runs under the hold of a Studio started with
  * RENDER_SLOT_HELD=<hold pid>, which this command then needs too, or the check counts that hold as another
- * session's. A remote Studio renders on another machine. A skill copied without the checkout's engine build, or a
- * machine without the check, submits at once and leaves the render slot to the job.
- * SE_WIDGET_STUDIO_MACHINE_POLL_MS shortens the 20 s between checks for the tests.
+ * session's. A remote Studio renders on another machine. A client without the engine build next to it (a new
+ * worktree, a copied skill) asks through the live checkout's, the real path of the global skill's link; with neither,
+ * or on a machine without the check, it submits at once and leaves the render slot to the job, saying so on stderr
+ * when no build was found. SE_WIDGET_STUDIO_MACHINE_POLL_MS shortens the 20 s between checks for the tests.
  */
-export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, check} = {}) {
+export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL, check} = {}) {
   if (!isLoopback(origin)) return;
+  const builds = engineBuilds({engineDist, liveSkill});
   let machine;
-  try {machine = await import(pathToFileURL(resolve(engineDist, 'shared/machine-check.js')).href);} catch {return;}
+  for (const build of builds) {
+    try {machine = await import(pathToFileURL(resolve(build, 'shared/machine-check.js')).href); break;} catch {/* the next build */}
+  }
+  if (!machine) {process.stderr.write(`[se-widget-studio] machine check skipped: no engine build at ${builds.join(' or ')}\n`); return;}
   const pollMs = Number(process.env.SE_WIDGET_STUDIO_MACHINE_POLL_MS);
   const say = message => message.replace(/^Waiting for the machine: /, 'Waiting for the machine before submitting: ').replace(/^The machine is free; rendering\.$/, 'The machine is free; submitting the job.');
   try {
