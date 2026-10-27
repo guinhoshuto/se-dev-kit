@@ -213,9 +213,11 @@
         break;
       }
       const wrote = watched.filter((tab) => applied.tabs[tab] === 'written');
+      // One more widget reads NEW or, when the two commits differ only next to a placeholder, NEW or UNVERIFIABLE.
       const shown = !wrote.length || await waitFor(async () => {
         const now = await canvasState();
-        return wrote.every((tab) => now[tab].NEW > before[tab].NEW);
+        return wrote.every((tab) => now[tab].NEW > before[tab].NEW
+          || now[tab].NEW + now[tab].UNVERIFIABLE > before[tab].NEW + before[tab].UNVERIFIABLE);
       }, 5000);
       if (!shown) {
         widgets.push({name, ok: false, tabs: applied.tabs,

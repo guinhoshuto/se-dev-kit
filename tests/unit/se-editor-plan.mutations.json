@@ -12,6 +12,62 @@
       "to": "mkdirSync(folder, {recursive: true});",
       "test": "tests/unit/se-editor-plan.test.mjs",
       "name": "refuses an existing folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "for (const tab of CANVAS_TABS) {",
+      "to": "for (const tab of TABS) {",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "carries that commit's template"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "if (pieces.length < 2) return undefined;",
+      "to": "if (pieces.length < 1) return undefined;",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "carries that commit's template"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "export const PLACEHOLDER = /\\{\\{[^{}]*\\}\\}/;",
+      "to": "export const PLACEHOLDER = /\\{\\{\\w+\\}\\}/;",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "^a template splits"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "head: piece.slice(0, HEAD)",
+      "to": "head: piece",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "carries that commit's template"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": ".filter(([, pieces]) => pieces)",
+      "to": ".filter(() => true)",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "carries that commit's template"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const keys = [...new Set(fields.flatMap((entries) => Object.keys(entries)))];",
+      "to": "const keys = [];",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "carries that commit's template"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const keys = [...new Set(fields.flatMap((entries) => Object.keys(entries)))];",
+      "to": "const keys = Object.keys(fields[1]);",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "carries that commit's template"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "keys.map(literal).join('|')",
+      "to": "keys.join('|')",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "^a template splits"
     }
   ]
 }

@@ -36,14 +36,33 @@ const NEW = {
   }, null, 2) + "\n"
 };
 const FILES = {html: "index.html", css: "style.css", js: "script.js", fields: "fields.json"};
+// {{field}} placeholders in the CSS at both commits, and {{field}} and a FIELDS key's {field} in the JS at the new one,
+// which the canvas shows filled.
+const STYLE = {color: {type: "colorpicker", label: "Color", value: "red"}, size: {type: "number", label: "Size", value: 24}};
+const OLD_FILLED = {
+  ...OLD,
+  css: "#wrap { color: {{color}}; }\n#wrap .name { font-weight: 700; letter-spacing: 1px; font-size: {{size}}px; }\n",
+  fields: JSON.stringify({...JSON.parse(OLD.fields), ...STYLE}, null, 2) + "\n"
+};
+const NEW_FILLED = {
+  ...NEW,
+  css: "#wrap { border: 2px solid {{ color }}; color: {{color}}; }\n#wrap .name { font-weight: 700; letter-spacing: 1px; font-size: {{size}}px; }\n",
+  js: "window.addEventListener('onWidgetLoad', () => { start({{speed}}, `${color}`); });\n",
+  fields: JSON.stringify({...JSON.parse(NEW.fields), ...STYLE}, null, 2) + "\n"
+};
+// A change next to a placeholder only: once filled, the new CSS fits both commits.
+const OLD_UNIT = {...OLD, css: "#wrap { font-size: {{size}}; }\n"};
+const NEW_UNIT = {...OLD, css: "#wrap { font-size: {{size}}px; }\n"};
 
 let browser;
 let root;
 let plan;
+let filled;
+let unit;
 
-before(async () => {
-  root = await mkdtemp(join(tmpdir(), "sws-se-editor-"));
-  const repo = join(root, "widget");
+/** The plan from `first` to `second`, committed in a new widget repository named `name`. */
+async function planOf(name, first, second) {
+  const repo = join(root, name);
   await mkdir(repo);
   const git = (...args) => execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args]).toString().trim();
   git("init", "-q");
@@ -53,9 +72,16 @@ before(async () => {
     git("commit", "-q", "-m", "widget");
     return git("rev-parse", "HEAD");
   };
-  const from = await commit(OLD);
-  await commit(NEW);
-  plan = makePlan({repo, from, out: join(root, "upload")});
+  const from = await commit(first);
+  await commit(second);
+  return makePlan({repo, from, out: join(root, `${name}-upload`)});
+}
+
+before(async () => {
+  root = await mkdtemp(join(tmpdir(), "sws-se-editor-"));
+  plan = await planOf("widget", OLD, NEW);
+  filled = await planOf("filled", OLD_FILLED, NEW_FILLED);
+  unit = await planOf("unit", OLD_UNIT, NEW_UNIT);
   const detection = await detectBrowser();
   if (detection.executablePath) ({browser} = await launchStudioBrowser({browserPath: detection.executablePath}));
 });
@@ -68,7 +94,7 @@ after(async () => {
 const widget = (name, code = OLD, fieldData = {speed: 3}) => ({name, ...code, fieldData});
 
 /** The fixture editor at `url` with these widgets, the page scripts pasted, and every request it made. */
-async function editor(t, widgets, {url = EDITOR, update = true} = {}) {
+async function editor(t, widgets, {url = EDITOR, update = true, using = plan} = {}) {
   if (!browser) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
     return undefined;
@@ -84,7 +110,7 @@ async function editor(t, widgets, {url = EDITOR, update = true} = {}) {
   const call = async (expression) => JSON.parse(await page.evaluate(expression));
   const pasted = await call(READ);
   if (pasted.ok && update) {
-    assert.equal((await call(`seEditor.use(${JSON.stringify(plan)})`)).ok, true);
+    assert.equal((await call(`seEditor.use(${JSON.stringify(using)})`)).ok, true);
     assert.equal((await call(UPDATE)).ok, true);
   }
   return {page, call, pasted, requests, state: () => page.evaluate(() => {
@@ -104,6 +130,7 @@ const codeOf = (state, name) => {
   return {html, css, js, fields: JSON.stringify(JSON.parse(fields))};
 };
 const normalized = (code) => ({...code, fields: JSON.stringify(JSON.parse(code.fields))});
+const count = (counts) => ({NEW: 0, OLD: 0, UNVERIFIABLE: 0, OTHER: 0, UNREADABLE: 0, ...counts});
 
 test("the read-only half refuses any page that is not a StreamElements overlay editor, the Studio's among them", {timeout: 60_000}, async (t) => {
   for (const url of ["http://127.0.0.1:4310/overlay/0123456789abcdef01234567/editor", "https://streamelements.com/dashboard/overlays"]) {
@@ -120,7 +147,7 @@ test("run moves every widget to the new commit, keeps DATA, never saves, and the
   if (!session) return;
   assert.deepEqual(await session.call("seEditor.layers()"), {ok: true, layers: ["minimal", "halloween"]});
   const before = await session.call("seEditor.canvas()");
-  assert.deepEqual({ok: before.ok, js: before.js, css: before.css}, {ok: false, js: {NEW: 0, OLD: 2, OTHER: 0, UNREADABLE: 0}, css: {NEW: 0, OLD: 2, OTHER: 0, UNREADABLE: 0}});
+  assert.deepEqual({ok: before.ok, js: before.js, css: before.css}, {ok: false, js: count({OLD: 2}), css: count({OLD: 2})});
   assert.match((await session.call("seEditor.run(['minimal'])")).error, /Load the new files first/);
 
   assert.deepEqual(await upload(session), {ok: true, files: {"index.html": "ok", "style.css": "ok", "script.js": "ok", "fields.json": "ok"}});
@@ -130,7 +157,7 @@ test("run moves every widget to the new commit, keeps DATA, never saves, and the
   assert.deepEqual(result, {
     ok: true,
     widgets: [{name: "minimal", ok: true, tabs: written}, {name: "halloween", ok: true, tabs: written}],
-    canvas: {widgets: 2, js: {NEW: 2, OLD: 0, OTHER: 0, UNREADABLE: 0}, css: {NEW: 2, OLD: 0, OTHER: 0, UNREADABLE: 0}},
+    canvas: {widgets: 2, js: count({NEW: 2}), css: count({NEW: 2})},
     left: 0
   });
   const state = await session.state();
@@ -238,4 +265,62 @@ test("nothing runs while the editor tab is in the background", {timeout: 60_000}
     assert.match((await session.call(call)).error, /in the background/);
   }
   assert.deepEqual(await session.state().then(({selections, opens}) => ({selections, opens})), {selections: 0, opens: 0});
+});
+
+test("the canvas tells the commits apart by the code around the {{field}} placeholders it shows filled", {timeout: 60_000}, async (t) => {
+  // A field value that repeats the start of the code after its placeholder, then differs.
+  const injected = "blue; }\n#wrap .name { font-weight: 777";
+  const edited = {...OLD_FILLED, css: `${OLD_FILLED.css}.mine { margin: 0; }\n`};
+  const session = await editor(t, [
+    widget("old", OLD_FILLED, {color: "red", size: 24}),
+    widget("new", NEW_FILLED, {color: "#ff7518", size: 30, speed: 9}),
+    widget("injected", OLD_FILLED, {color: injected, size: 18}),
+    widget("edited", edited, {color: "red", size: 24})
+  ], {update: false});
+  if (!session) return;
+  const broken = {...filled, tabs: {...filled.tabs, css: {...filled.tabs.css, templates: {old: [{head: "#", length: -1, sha256: filled.tabs.css.old}, filled.tabs.css.templates.old[1]]}}}};
+  assert.match((await session.call(`seEditor.use(${JSON.stringify(broken)})`)).error, /The plan's css templates need two or more pieces/);
+  assert.deepEqual((await session.call(`seEditor.use(${JSON.stringify(filled)})`)).placeholders, ["js", "css"]);
+  const frames = await session.page.evaluate(async () => Promise.all([...document.querySelectorAll("iframe")].map(async (frame) => (await fetch(frame.src)).text())));
+  assert.ok(frames.every((text) => !text.includes("{{")), "the canvas shows every placeholder filled");
+  const canvas = await session.call("seEditor.canvas()");
+  assert.deepEqual(canvas.each, [{js: "OLD", css: "OLD"}, {js: "NEW", css: "NEW"}, {js: "OLD", css: "OLD"}, {js: "OLD", css: "OTHER"}]);
+  assert.deepEqual(session.requests.filter((url) => !url.startsWith("blob:")), [EDITOR]);
+});
+
+test("an overlay whose CSS has {{field}} placeholders moves in one run, one Save, and a reload the canvas confirms", {timeout: 60_000}, async (t) => {
+  const data = [{color: "red", size: 24, speed: 3}, {color: "#ff7518", size: 30, speed: 9, theme: "dark"}];
+  const session = await editor(t, [widget("minimal", OLD_FILLED, data[0]), widget("halloween", OLD_FILLED, data[1])], {using: filled});
+  if (!session) return;
+  const before = await session.call("seEditor.canvas()");
+  assert.deepEqual({js: before.js, css: before.css}, {js: count({OLD: 2}), css: count({OLD: 2})});
+  assert.equal((await upload(session, filled.upload)).ok, true);
+  const result = await session.call("seEditor.run(['minimal', 'halloween'])");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual({canvas: result.canvas, left: result.left}, {canvas: {widgets: 2, js: count({NEW: 2}), css: count({NEW: 2})}, left: 0});
+  assert.equal((await session.state()).saves, 0, "the page scripts never save");
+
+  await session.page.click("#save");
+  assert.equal((await session.state()).saves, 1);
+  await session.page.reload();
+  assert.equal((await session.call(READ)).ok, true);
+  assert.equal((await session.call(`seEditor.use(${JSON.stringify(filled)})`)).ok, true);
+  const after = await session.call("seEditor.canvas()");
+  assert.deepEqual({ok: after.ok, js: after.js, css: after.css}, {ok: true, js: count({NEW: 2}), css: count({NEW: 2})});
+  const state = await session.state();
+  for (const name of ["minimal", "halloween"]) assert.deepEqual(codeOf(state, name), normalized(NEW_FILLED), `${name} saved the new code`);
+  assert.deepEqual(state.widgets.map(({fieldData}) => fieldData), data, "DATA is never written");
+  assert.ok(session.requests.every((url) => url.startsWith("blob:") || url === EDITOR), "nothing but the editor page was requested");
+});
+
+test("code that fits both commits once its placeholders are filled reads UNVERIFIABLE, and run takes it as shown", {timeout: 60_000}, async (t) => {
+  const session = await editor(t, [widget("minimal", OLD_UNIT, {size: 24})], {using: unit});
+  if (!session) return;
+  assert.deepEqual((await session.call("seEditor.canvas()")).css, count({OLD: 1}));
+  assert.equal((await upload(session, unit.upload)).ok, true);
+  const result = await session.call("seEditor.run(['minimal'])");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.widgets[0].tabs, {html: "already new", css: "written", js: "already new", fields: "already new"});
+  assert.deepEqual({css: result.canvas.css, left: result.left}, {css: count({UNVERIFIABLE: 1}), left: 0});
+  assert.equal((await session.call("seEditor.canvas()")).ok, false, "the canvas cannot confirm it");
 });
