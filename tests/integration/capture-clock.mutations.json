@@ -1,0 +1,16 @@
+{
+  "mutations": [
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "  await page.clock.pauseAt(time);\n}",
+      "to": "  await page.clock.install({time});\n}",
+      "test": "tests/integration/capture-clock.test.mjs"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "    channel.port2.postMessage(null);\n",
+      "to": "",
+      "test": "tests/integration/capture-clock.test.mjs"
+    }
+  ]
+}

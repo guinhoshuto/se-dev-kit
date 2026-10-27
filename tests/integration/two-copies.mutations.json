@@ -11,6 +11,12 @@
       "from": "const b = read(\"b\");",
       "to": "const b = read(\"a\");",
       "test": "tests/integration/two-copies.test.mjs"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "  await page.clock.pauseAt(time);\n}",
+      "to": "  await page.clock.install({time});\n}",
+      "test": "tests/integration/two-copies.test.mjs"
     }
   ]
 }

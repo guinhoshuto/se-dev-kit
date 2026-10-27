@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "still",
+  "name": "Still at 1 s",
+  "scenes": ["system", "timeorigin"],
+  "outputs": {"screenshots": true},
+  "limit": 2
+}

@@ -1,15 +1,21 @@
 // A synthetic canvas widget whose motion is a function of its clock alone. It stands in for
 // se-curvetext, whose front and back copies are two OBS browser sources (consumer widget files never
-// enter this repository); only its two clocks are copied here.
-// - `?clock=load` keeps time from its own load, as se-curvetext did before 2026-10-14 (2613894):
-//   two copies loaded at different moments draw different frames at the same instant.
-// - `?clock=system` (the default) keeps time from the system clock, the fix (aec43c4), which
-//   every copy shares.
+// enter this repository); only its two clocks are copied here. The clock comes from `?clock=` in
+// frame.html, or from the `clock` field in a Studio capture.
+// - `load` keeps time from its own load, as se-curvetext did before 2026-10-14 (2613894): two copies
+//   loaded at different moments draw different frames at the same instant.
+// - `timeorigin` keeps time as `performance.timeOrigin + performance.now()`, which the README advised
+//   until 2026-10-27. Under Playwright's fake clock `timeOrigin` stays at the first time the clock was
+//   set, so it shows the scene's time only because a capture pauses the clock with its first call
+//   (#5); before that, two Studio captures of one scene drew different frames.
+// - `system` (the default) keeps time from the system clock as se-curvetext's fix (aec43c4) does,
+//   `Date.now() - performance.now()` read once at load: it follows the system time a fake clock sets,
+//   so every copy shares it, in Chrome and in a Studio capture alike.
 (function () {
-  var clock = new URLSearchParams(location.search).get('clock') || 'system';
-  var startedAt = performance.now();
-  var clockOffset = performance.timeOrigin || Date.now() - performance.now();
   var canvas = document.getElementById('canvas');
+  var clock = new URLSearchParams(location.search).get('clock') || canvas.dataset.clock || 'system';
+  var startedAt = performance.now();
+  var clockOffset = clock === 'timeorigin' ? performance.timeOrigin : Date.now() - performance.now();
   var context = canvas.getContext('2d');
 
   function seconds(now) {

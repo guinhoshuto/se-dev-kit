@@ -370,6 +370,29 @@ export interface OpenSceneOptions {
   fonts?: FontResolver;
 }
 
+/**
+ * Pauses the page's fake clock at `time` with its first call, so every document the page creates, the
+ * widget frame included, starts its `performance.now()` at 0 with `performance.timeOrigin` at `time`.
+ *
+ * A new document replays Playwright's clock log on its first clock call and counts the real time
+ * between entries while the clock ran: after `install`, the widget's `performance.now()` started at
+ * the 36–1782 ms the host took to load, so `performance.timeOrigin + performance.now()` and the 16 ms
+ * requestAnimationFrame grid moved with each capture (#5). Before that first call the clock also runs
+ * on real time, and its own 100 ms timer adds that time (101 ms in a frame whose scripts came late), so
+ * an init script asks the clock in the document's first task, once every init script has logged.
+ */
+export async function pauseClockFromStart(page: Page, time: Date): Promise<void> {
+  await page.context().addInitScript(() => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      performance.now();
+    };
+    channel.port2.postMessage(null);
+  });
+  await page.clock.pauseAt(time);
+}
+
 export async function openScene(
   project: ResolvedProject,
   server: StudioServer,
@@ -394,10 +417,9 @@ export async function openScene(
   const captureTime = new Date(resolved.runtimeState.fixedTime);
   const readyTimeoutMs = project.config.widget.ready?.timeoutMs ?? 10_000;
   const readySelector = project.config.widget.ready?.selector;
-  await page.clock.install({time: captureTime});
+  await pauseClockFromStart(page, captureTime);
   await page.goto(`${server.origin}/__sws/${options.host ?? "capture"}`, {waitUntil: "domcontentloaded"});
-  // Pause before the widget iframe is created. The large control-host-only jump avoids
-  // racing the naturally advancing clock without consuming any widget timers.
+  // The large control-host-only jump runs the host's timers without consuming any widget timers.
   await page.clock.pauseAt(new Date(captureTime.getTime() + 86_400_000));
   await page.clock.setSystemTime(captureTime);
   await awaitFrameLoad(page, captureHostLoad(page, {

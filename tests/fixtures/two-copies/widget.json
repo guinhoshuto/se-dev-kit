@@ -1,0 +1,8 @@
+{
+  "clock": {
+    "type": "dropdown",
+    "label": "Clock",
+    "value": "system",
+    "options": {"system": "System", "timeorigin": "performance.timeOrigin", "load": "Own load"}
+  }
+}
