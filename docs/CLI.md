@@ -124,7 +124,7 @@ Run `se-widget-studio <command> --help` for the installed contract.
 | `doctor [root]` | Detect Node, browser, output, FFmpeg, and ffprobe without installing anything. Report the engine build that manifests will record, and warn when it was built from uncommitted changes (`BUILD_DIRTY`), is older than `src/` or than the checkout's commit (`BUILD_STALE`), or records no commit (`BUILD_UNKNOWN`). With a root, warn (`BROWSER_NO_H264`) when a Chromium build meets MP4/MOV video in the catalog. |
 | `list [root]` | List normalized fields and every configured catalog item. |
 | `presets` | List versioned marketplace presets and official sources. |
-| `validate [root]` | Validate files, schemas, references, safe paths, synthetic-data rules, button labels (24 characters at most), and the shipped themes against FIELDS ([Shipped themes](CONFIGURATION.md#shipped-themes)). |
+| `validate [root]` | Validate files, schemas, references, safe paths, synthetic-data rules, button labels (24 characters at most), and the shipped themes against FIELDS ([Shipped themes](CONFIGURATION.md#shipped-themes)). Before the diagnostics, it prints the field count by type and each field's id, type, and label (`fields` in `--json`), as information, never as an error. |
 | `dev [root]` | Start the interactive workbench (`studio` is an alias). |
 | `test [root]` | Run deterministic browser scenarios in fresh contexts. |
 | `capture [root]` | Capture one scene. |

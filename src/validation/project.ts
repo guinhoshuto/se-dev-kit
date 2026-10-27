@@ -375,3 +375,38 @@ async function sampleMediaDiagnostics(project: ResolvedProject): Promise<Diagnos
 export function hasValidationErrors(diagnostics: Diagnostic[]): boolean {
   return diagnostics.some((item) => item.status === "error");
 }
+
+/**
+ * The fields `validate` shows the owner before a new widget's first build, as information and never as an
+ * error: the curve text widget reached 77 fields before anyone counted them, and the cap waits for this list (WID-13).
+ */
+export interface FieldInventory {
+  count: number;
+  /** Most used type first; types used as often, by name. */
+  types: Array<{type: string; count: number}>;
+  /** In FIELDS order. */
+  list: Array<{id: string; type: string; label: string}>;
+}
+
+export function fieldInventory(project: ResolvedProject): FieldInventory {
+  const counts = new Map<string, number>();
+  for (const field of project.fields) counts.set(field.type, (counts.get(field.type) ?? 0) + 1);
+  return {
+    count: project.fields.length,
+    types: [...counts]
+      .map(([type, count]) => ({type, count}))
+      .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type)),
+    list: project.fields.map(({id, type, label}) => ({id, type, label}))
+  };
+}
+
+/** The inventory as text: a line with the count by type, then one aligned line per field. */
+export function fieldInventoryLines(inventory: FieldInventory): string[] {
+  const types = inventory.types.map(({type, count}) => `${count} ${type}`).join(", ");
+  const summary = `${inventory.count} field${inventory.count === 1 ? "" : "s"}${types ? `: ${types}` : ""}`;
+  if (inventory.list.length === 0) return [summary];
+  const rows = [{id: "ID", type: "TYPE", label: "LABEL"}, ...inventory.list];
+  const idWidth = Math.max(...rows.map((row) => row.id.length));
+  const typeWidth = Math.max(...rows.map((row) => row.type.length));
+  return [summary, ...rows.map((row) => `  ${row.id.padEnd(idWidth)}  ${row.type.padEnd(typeWidth)}  ${row.label}`)];
+}
