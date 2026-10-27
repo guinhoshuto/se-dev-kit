@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "system",
+  "name": "Clock: system",
+  "fieldData": {"clock": "system"},
+  "viewport": {"width": 480, "height": 270},
+  "output": {"width": 480, "height": 270, "format": "png"},
+  "background": {"id": "black", "color": "#000000"},
+  "captureAtMs": 1000
+}
