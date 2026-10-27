@@ -8,7 +8,7 @@ import {loadProject} from "../config/load.js";
 import {initializeWidget} from "../config/init.js";
 import {loadMarketplacePresets} from "../config/presets.js";
 import {loadSampleMediaCatalog, sampleMediaReferencesByKind} from "../config/sample-media.js";
-import {validateProject, hasValidationErrors} from "../validation/project.js";
+import {fieldInventory, fieldInventoryLines, validateProject, hasValidationErrors} from "../validation/project.js";
 import {runDoctor} from "../validation/doctor.js";
 import {runBrowserSmoke, runScenarios} from "../scenarios/runner.js";
 import {createDefaultScene} from "../scenarios/state.js";
@@ -196,7 +196,13 @@ program
         detail: smoke.status === "passed" ? "Widget reached browser readiness without runtime errors." : smoke.errors.join("; ")
       });
     }
-    printDiagnostics(diagnostics, globals(command).json);
+    // The field list comes first, so the diagnostics and their errors stay the last lines.
+    const fields = fieldInventory(project);
+    if (globals(command).json) print({fields, diagnostics}, true);
+    else {
+      process.stdout.write(`${fieldInventoryLines(fields).join("\n")}\n\n`);
+      printDiagnostics(diagnostics, false);
+    }
     if (hasValidationErrors(diagnostics)) process.exitCode = 1;
   });
 

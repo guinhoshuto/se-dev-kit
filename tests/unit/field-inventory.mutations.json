@@ -1,0 +1,118 @@
+{
+  "mutations": [
+    {
+      "file": "src/validation/project.ts",
+      "from": "(counts.get(field.type) ?? 0) + 1",
+      "to": "1",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "count: project.fields.length,",
+      "to": "count: counts.size,",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "b.count - a.count || a.type.localeCompare(b.type)",
+      "to": "a.type.localeCompare(b.type)",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "b.count - a.count || a.type.localeCompare(b.type)",
+      "to": "b.count - a.count",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "b.count - a.count ||",
+      "to": "a.count - b.count ||",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "list: project.fields.map(({id, type, label}) => ({id, type, label}))",
+      "to": "list: project.fields.map(({id, type}) => ({id, type, label: id}))",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "field${inventory.count === 1 ? \"\" : \"s\"}",
+      "to": "field${inventory.count === 0 ? \"\" : \"s\"}",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "${types ? `: ${types}` : \"\"}",
+      "to": "${types ? ` ${types}` : \"\"}",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "  if (inventory.list.length === 0) return [summary];\n",
+      "to": "",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "const rows = [{id: \"ID\", type: \"TYPE\", label: \"LABEL\"}, ...inventory.list];",
+      "to": "const rows = inventory.list;",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "row.id.padEnd(idWidth)",
+      "to": "row.id",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "row.type.padEnd(typeWidth)",
+      "to": "row.type",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/cli/index.ts",
+      "from": "      process.stdout.write(`${fieldInventoryLines(fields).join(\"\\n\")}\\n\\n`);\n",
+      "to": "",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/cli/index.ts",
+      "from": "join(\"\\n\")}\\n\\n`);",
+      "to": "join(\"\\n\")}\\n`);",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/cli/index.ts",
+      "from": "      process.stdout.write(`${fieldInventoryLines(fields).join(\"\\n\")}\\n\\n`);\n      printDiagnostics(diagnostics, false);\n",
+      "to": "      printDiagnostics(diagnostics, false);\n      process.stdout.write(`${fieldInventoryLines(fields).join(\"\\n\")}\\n\\n`);\n",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "src/cli/index.ts",
+      "from": "print({fields, diagnostics}, true)",
+      "to": "print({diagnostics}, true)",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "- For a new widget, once its FIELDS is written, run the CLI's `validate` on it and show the owner the field list it prints (the count by type, then each field's id, type, and label) before its first build or Studio run, and wait for their answer: the owner sets the field budget from that list, since the curve text widget reached 77 fields before anyone counted them. `validate` needs all four widget files, but the HTML, CSS, and JavaScript may still be empty.\n",
+      "to": "",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "before its first build or Studio run, and wait",
+      "to": "after its first build or Studio run, and wait",
+      "test": "tests/unit/field-inventory.test.mjs"
+    },
+    {
+      "file": "skills/se-widget-studio/SKILL.md",
+      "from": "show the owner the field list it prints",
+      "to": "report the field count it prints",
+      "test": "tests/unit/field-inventory.test.mjs"
+    }
+  ]
+}
