@@ -13,15 +13,9 @@
       "test": "tests/integration/two-copies.test.mjs"
     },
     {
-      "file": "tests/fixtures/two-copies/clock-widget.js",
-      "from": "var clockOffset = clock === 'timeorigin' ? performance.timeOrigin : Date.now() - performance.now();",
-      "to": "var clockOffset = performance.timeOrigin;",
-      "test": "tests/integration/two-copies.test.mjs"
-    },
-    {
-      "file": "tests/fixtures/two-copies/scenes/timeorigin.json",
-      "from": "\"fieldData\": {\"clock\": \"timeorigin\"}",
-      "to": "\"fieldData\": {\"clock\": \"system\"}",
+      "file": "src/scenarios/runner.ts",
+      "from": "  await page.clock.pauseAt(time);\n}",
+      "to": "  await page.clock.install({time});\n}",
       "test": "tests/integration/two-copies.test.mjs"
     }
   ]

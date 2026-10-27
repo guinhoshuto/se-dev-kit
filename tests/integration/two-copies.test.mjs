@@ -3,9 +3,9 @@
 // sources, and OBS never loads them at the same moment. A Studio capture cannot show this: it loads one
 // copy on a fixed clock. Ported from the check that proved the se-curvetext clock fix on 2026-10-14
 // (SDK-51): with the fix the copies differed by 0.0005, without it by 29.4.
-// The layers' two Studio captures must match too, which the same clock gives only when it is read as
-// `Date.now() - performance.now()`: under the capture's fake clock, `performance.timeOrigin` is the
-// scene's fixed time and leaves out the real time the capture host took to load (#5).
+// The layers' two Studio captures must match too. Until #5 they did not, on either clock expression:
+// the widget frame's `performance.now()` started at the real time the capture host took to load, which
+// `performance.timeOrigin + performance.now()` kept and which moved the 16 ms requestAnimationFrame grid.
 import assert from "node:assert/strict";
 import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {createServer} from "node:http";
@@ -124,7 +124,7 @@ function compareStills(left, right) {
   return {meanDiff: sum / a.length, inkShare: ink / (a.length / 4)};
 }
 
-test("two Studio captures of one scene draw the same frame only when the widget reads the clock as Date.now() - performance.now()", {timeout: 120_000}, async (t) => {
+test("two Studio captures of one scene draw the same frame, on either system clock expression", {timeout: 120_000}, async (t) => {
   const detection = await detectBrowser();
   if (!detection.executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
@@ -150,8 +150,8 @@ test("two Studio captures of one scene draw the same frame only when the widget 
   t.diagnostic(`system clock ${JSON.stringify(system)}; timeOrigin clock ${JSON.stringify(timeOrigin)}; system against timeOrigin ${JSON.stringify(apart)}`);
 
   assert.ok(system.inkShare > 0.05, `the system-clock capture drew almost nothing: ${JSON.stringify(system)}`);
-  assert.ok(first.system.equals(second.system), `two captures on the system clock must be identical: ${JSON.stringify(system)}`);
-  // The scenario happened: timeOrigin + performance.now() is ahead of the scene's clock by the real
-  // time the capture host took to load, which no two captures share.
-  assert.ok(apart.meanDiff > 0, `the timeOrigin clock drew the scene's frame: ${JSON.stringify(apart)}`);
+  assert.ok(first.system.equals(second.system), `two captures on Date.now() - performance.now() must be identical: ${JSON.stringify(system)}`);
+  assert.ok(first.timeorigin.equals(second.timeorigin), `two captures on performance.timeOrigin must be identical: ${JSON.stringify(timeOrigin)}`);
+  // Both read the scene's fixed time: the frame's performance.now() starts at 0, with timeOrigin there.
+  assert.ok(first.system.equals(first.timeorigin), `the two clock expressions must draw the same frame: ${JSON.stringify(apart)}`);
 });

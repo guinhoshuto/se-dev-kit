@@ -5,13 +5,12 @@
 // - `load` keeps time from its own load, as se-curvetext did before 2026-10-14 (2613894): two copies
 //   loaded at different moments draw different frames at the same instant.
 // - `timeorigin` keeps time as `performance.timeOrigin + performance.now()`, which the README advised
-//   until 2026-10-27. Chrome shares it between copies, but Playwright 1.54.2's fake clock does not:
-//   there `timeOrigin` is the scene's fixed time, while `performance.now()` in a frame created after
-//   the capture pauses the clock still counts the real time the capture host took to load, so two
-//   Studio captures of one scene draw different frames.
+//   until 2026-10-27. Under Playwright's fake clock `timeOrigin` stays at the first time the clock was
+//   set, so it shows the scene's time only because a capture pauses the clock with its first call
+//   (#5); before that, two Studio captures of one scene drew different frames.
 // - `system` (the default) keeps time from the system clock as se-curvetext's fix (aec43c4) does,
-//   `Date.now() - performance.now()` read once at load: every copy shares it, in Chrome and in a
-//   Studio capture alike.
+//   `Date.now() - performance.now()` read once at load: it follows the system time a fake clock sets,
+//   so every copy shares it, in Chrome and in a Studio capture alike.
 (function () {
   var canvas = document.getElementById('canvas');
   var clock = new URLSearchParams(location.search).get('clock') || canvas.dataset.clock || 'system';
