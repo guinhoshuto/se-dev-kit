@@ -5,8 +5,11 @@
   editor's tab names, the blob: iframes, and the Monaco calls they make. It behaves as the editor was seen to between
   2026-10-14 and 2026-10-24: Monaco loads only when the first code editor opens after the page loads, a moment after
   the dialog shows; a code tab's model is created only when the tab opens, after a moment; Done applies the code to the
-  widget's iframe, rebuilt a moment later, and disposes the models; FIELDS come back reformatted without the final
-  newline. It is not a copy of StreamElements' markup or code.
+  widget's iframe, rebuilt a moment later, and disposes the models; the iframe holds the HTML, CSS, and JS with each
+  {{field}} placeholder, and each single-brace {field}, filled with the field's value; FIELDS come back reformatted
+  without the final newline. Save
+  keeps the overlay for the tab's next load, so a reload shows what was saved. It is not a copy of StreamElements'
+  markup or code.
 
   The test sets window.__FIXTURE_WIDGETS = [{name, html, css, js, fields, fieldData}] before the page loads, and reads
   window.__fixture: each widget's applied code, and counts of what was clicked and written.
@@ -39,8 +42,10 @@
 <div class="overlay" id="canvas"></div>
 <script>
 (() => {
+  const SAVED = 'se-editor-fixture-overlay';
+  const saved = sessionStorage.getItem(SAVED);
   const state = {
-    widgets: (window.__FIXTURE_WIDGETS || []).map((widget) => ({...widget, frame: null})),
+    widgets: (saved ? JSON.parse(saved) : window.__FIXTURE_WIDGETS || []).map((widget) => ({...widget, frame: null})),
     selected: -1,
     saves: 0,
     selections: 0,
@@ -85,8 +90,18 @@
     }, 300);
   };
 
-  const frameDocument = (widget) => `<!doctype html><html><head><style>${widget.css}</style></head><body>${widget.html}`
-    + `<script>var fieldData = ${JSON.stringify(widget.fieldData)};<\/script><script>${widget.js}<\/script></body></html>`;
+  // Each {{field}} and {field} becomes the field's raw value, in one pass, and a placeholder with no field stays as
+  // written, as the Studio's engine does it for {{field}} (src/config/placeholders.ts). StreamElements was seen filling
+  // {{field}} in the CSS on 2026-10-24, and {field} in a JS `${field}` on 2026-10-27.
+  const fill = (text, data) => text.replace(/\{\{\s*([\w.-]+)\s*\}\}|\{([\w.-]+)\}/g, (match, double, single) => {
+    const name = double ?? single;
+    if (!Object.hasOwn(data, name)) return match;
+    const value = data[name];
+    return typeof value === 'string' ? value : value === null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  });
+  const frameDocument = (widget) => `<!doctype html><html><head><style>${fill(widget.css, widget.fieldData)}</style></head>`
+    + `<body>${fill(widget.html, widget.fieldData)}<script>var fieldData = ${JSON.stringify(widget.fieldData)};<\/script>`
+    + `<script>${fill(widget.js, widget.fieldData)}<\/script></body></html>`;
   const renderFrame = (widget) => {
     if (widget.frame) {
       URL.revokeObjectURL(widget.frame.src);
@@ -190,7 +205,10 @@
     layers.appendChild(row);
     renderFrame(widget);
   });
-  document.getElementById('save').addEventListener('click', () => { state.saves += 1; });
+  document.getElementById('save').addEventListener('click', () => {
+    state.saves += 1;
+    sessionStorage.setItem(SAVED, JSON.stringify(state.widgets.map(({frame, ...widget}) => widget)));
+  });
 })();
 </script>
 </body>

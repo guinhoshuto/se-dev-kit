@@ -9,6 +9,11 @@
  * script does: StreamElements reformats FIELDS when it saves, while HTML, CSS, and JS come back byte for byte. The
  * plan's `labels` are the FIELDS labels that are new or changed, for the label check before Save.
  *
+ * The canvas shows a widget's JS and CSS with each `{{field}}` placeholder filled with the field's value, and a single-brace
+ * `{field}` too when `field` is a FIELDS key, so a JS or CSS tab whose code at a commit has placeholders also carries that
+ * commit's template: the literal pieces between the placeholders, each as its first characters, length, and SHA-256.
+ * The page recognizes the commit in the canvas by those pieces in order, whatever the values between them.
+ *
  * Usage: se-editor-plan.mjs --repo <widget repository> --from <commit> [--to <commit>] --out <new folder>
  * --to defaults to HEAD. --out must not exist; it is never replaced. Reads committed files only, never the working tree.
  */
@@ -24,12 +29,28 @@ export const LAYOUTS = [
   {html: 'index.html', css: 'style.css', js: 'script.js', fields: 'fields.json'}
 ];
 export const TABS = ['html', 'css', 'js', 'fields'];
+// The tabs the canvas check reads. StreamElements fills {{field}}, and {field} when field is a FIELDS key: se-dreamychat's
+// `${fontColor}` showed as `$rgb(242, 242, 242)` (2026-10-27). A placeholder here is anything between {{ and }} with no
+// brace inside, or a FIELDS key of either commit in single braces, wider than what StreamElements fills: a value it
+// filled in never has to match code, and code taken for a placeholder only loosens the match.
+export const CANVAS_TABS = ['js', 'css'];
+export const PLACEHOLDER = /\{\{[^{}]*\}\}/;
+export const HEAD = 32;
+const literal = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
 
 /** The hash the page script compares a tab by: FIELDS as parsed JSON, the others as the exact text. */
 export function tabHash(tab, text) {
   return sha256(tab === 'fields' ? JSON.stringify(JSON.parse(text)) : text);
+}
+
+/** The literal pieces of `text` between its placeholders, `{{…}}` and `{key}` for each of `keys`; undefined without one. */
+export function template(text, keys = []) {
+  const single = keys.length ? `|\\{\\s*(?:${keys.map(literal).join('|')})\\s*\\}` : '';
+  const pieces = text.split(new RegExp(PLACEHOLDER.source + single));
+  if (pieces.length < 2) return undefined;
+  return pieces.map((piece) => ({head: piece.slice(0, HEAD), length: piece.length, sha256: sha256(piece)}));
 }
 
 /** The FIELDS labels of `next` that `previous` does not have under the same key. */
@@ -98,13 +119,20 @@ export function plan({repo, from, to = 'HEAD', out}) {
 
   const tabs = {};
   const sources = {};
+  const previous = {};
   let fields;
   for (const tab of TABS) {
     const file = layout[tab];
-    const before = text(root, old, file);
+    previous[tab] = text(root, old, file);
     sources[tab] = text(root, next, file);
-    if (tab === 'fields') fields = [parseFields(file, old, before), parseFields(file, next, sources[tab])];
-    tabs[tab] = {file, old: tabHash(tab, before), new: tabHash(tab, sources[tab])};
+    if (tab === 'fields') fields = [parseFields(file, old, previous[tab]), parseFields(file, next, sources[tab])];
+    tabs[tab] = {file, old: tabHash(tab, previous[tab]), new: tabHash(tab, sources[tab])};
+  }
+  const keys = [...new Set(fields.flatMap((entries) => Object.keys(entries)))];
+  for (const tab of CANVAS_TABS) {
+    const templates = Object.fromEntries([['old', template(previous[tab], keys)], ['new', template(sources[tab], keys)]]
+      .filter(([, pieces]) => pieces));
+    if (Object.keys(templates).length) tabs[tab].templates = templates;
   }
   if (TABS.every((tab) => tabs[tab].old === tabs[tab].new)) {
     throw new Error(`No code tab changes between ${old.slice(0, 7)} and ${next.slice(0, 7)}.`);

@@ -7,7 +7,7 @@ import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
 
-import {changedLabels, plan} from "../../skills/se-widget-studio/scripts/se-editor-plan.mjs";
+import {changedLabels, plan, template} from "../../skills/se-widget-studio/scripts/se-editor-plan.mjs";
 
 const SCRIPTS = fileURLToPath(new URL("../../skills/se-widget-studio/scripts/", import.meta.url));
 const sha = (text) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -111,6 +111,38 @@ test("plan refuses an existing folder, an unknown or repeated commit, a commit t
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test("a JS or CSS tab with {{field}} placeholders at either commit carries that commit's template, HTML and FIELDS never", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-se-editor-plan-"));
+  try {
+    const long = "; }\n#wrap .name { font-weight: 700; letter-spacing: 1px; font-size: ";
+    const fontColor = {type: "colorpicker", label: "Font color", value: "#fff"};
+    const first = {...OLD, "index.html": "<div>{{title}}</div>\n", "style.css": "#wrap { color: {{color}}; }\n",
+      "fields.json": JSON.stringify({...JSON.parse(OLD["fields.json"]), fontColor})};
+    const second = {...NEW, "index.html": first["index.html"], "style.css": `#wrap { color: {{ color }}${long}{{size}}px; }\n`,
+      "script.js": "start({{speed}}, `${fontColor}`, {other});\n"};
+    const {repo, from} = await widgetRepo(root, first, second);
+    const result = plan({repo, from, out: join(root, "upload")});
+    const piece = (text) => ({head: text.slice(0, 32), length: text.length, sha256: sha(text)});
+    assert.deepEqual(result.tabs.css.templates, {old: ["#wrap { color: ", "; }\n"].map(piece), new: ["#wrap { color: ", long, "px; }\n"].map(piece)});
+    assert.equal(result.tabs.css.templates.new[1].head, long.slice(0, 32));
+    // A FIELDS key of either commit in single braces is a placeholder too; another name is code.
+    assert.deepEqual(result.tabs.js.templates, {new: ["start(", ", `$", "`, {other});\n"].map(piece)}, "only the commit whose code has placeholders");
+    assert.deepEqual(result.tabs.html, {file: "index.html", old: sha(first["index.html"]), new: sha(first["index.html"])});
+    assert.equal(Object.hasOwn(result.tabs.fields, "templates"), false);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("a template splits at each {{…}} with no brace inside and each {key} of the keys given, and code without one has none", () => {
+  assert.equal(template("#wrap { color: red; }\n"), undefined);
+  assert.equal(template("a {{ b } c"), undefined);
+  assert.equal(template("const {speed} = data;", ["size"]), undefined);
+  assert.deepEqual(template("x{ a.b }y{aXb}", ["a.b", "size"]).map(({head}) => head), ["x", "y{aXb}"]);
+  assert.deepEqual(template("{{a}}{{b-c.d}}x{{ e }}").map(({head, length}) => [head, length]), [["", 0], ["", 0], ["x", 1], ["", 0]]);
+  assert.deepEqual(template("a{{{b}}}c").map(({head}) => head), ["a{", "}c"]);
 });
 
 test("changedLabels lists the labels a FIELDS change adds or rewords, once each", () => {

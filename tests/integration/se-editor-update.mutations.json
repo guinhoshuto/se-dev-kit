@@ -30,8 +30,8 @@
     },
     {
       "file": "skills/se-widget-studio/scripts/se-editor-update.js",
-      "from": "return wrote.every((tab) => now[tab].NEW > before[tab].NEW);",
-      "to": "return true;",
+      "from": "return wrote.every((tab) =>",
+      "to": "return true || wrote.every((tab) =>",
       "test": "tests/integration/se-editor-update.test.mjs",
       "name": "never shows the new code"
     },
@@ -83,6 +83,76 @@
       "to": "false",
       "test": "tests/integration/se-editor-update.test.mjs",
       "name": "^the read-only half refuses"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "const shows = async (side) => hash === expect[side] || (!!expect.templates[side] && (await fits(text, expect.templates[side])));",
+      "to": "const shows = async (side) => hash === expect[side];",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^an overlay whose CSS has"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "const shows = async (side) => hash === expect[side] || (!!expect.templates[side] && (await fits(text, expect.templates[side])));",
+      "to": "const shows = async (side) => hash === expect[side];",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the canvas tells the commits apart"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "if (end < first.length || !(await at(0, first))) return false;",
+      "to": "if (end < first.length) return false;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the canvas tells the commits apart"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "index = text.indexOf(piece.head, index + 1);",
+      "to": "index = -1;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the canvas tells the commits apart"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "return at(end, last);",
+      "to": "return true;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the canvas tells the commits apart"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "if (!templates) return {ok: false,",
+      "to": "if (false) return {ok: false,",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the canvas tells the commits apart"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "&& entry.length >= entry.head.length &&",
+      "to": "&&",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the canvas tells the commits apart"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "return isNew ? (isOld ? 'UNVERIFIABLE' : 'NEW') : isOld ? 'OLD' : 'OTHER';",
+      "to": "return isNew ? 'NEW' : isOld ? 'OLD' : 'OTHER';",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "reads UNVERIFIABLE"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "|| now[tab].NEW + now[tab].UNVERIFIABLE > before[tab].NEW + before[tab].UNVERIFIABLE);",
+      "to": ");",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "reads UNVERIFIABLE"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const keys = [...new Set(fields.flatMap((entries) => Object.keys(entries)))];",
+      "to": "const keys = [];",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the canvas tells the commits apart"
     }
   ]
 }
