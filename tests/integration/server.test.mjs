@@ -175,7 +175,7 @@ test("built-in sample media are served only by exact manifest lookup on the fram
   }
 });
 
-test("the frame server serves the frame runtime modules from a fixed list, including the Google Fonts URL module", async () => {
+test("the frame server serves the frame runtime modules from a fixed list, including the Google Fonts URL module and the vendored jQuery", async () => {
   const project = await loadProject({inputDirectory: exampleRoot});
   const server = await startStudioServer(project, {port: 0, watch: false});
   try {
@@ -188,6 +188,14 @@ test("the frame server serves the frame runtime modules from a fixed list, inclu
     }
     const frame = (await requestBuffer(`${server.frameOrigin}/__sws/runtime/frame.js`)).body.toString("utf8");
     assert.match(frame, /from "\.\/google-fonts-url\.js"/);
+    // StreamElements' jQuery 3.3.1 (src/runtime/vendor/README.md); the README and the license stay unserved.
+    const jquery = await requestBuffer(`${server.frameOrigin}/__sws/runtime/vendor/jquery-3.3.1.min.js`);
+    assert.equal(jquery.status, 200);
+    assert.match(String(jquery.headers["content-type"]), /^text\/javascript/);
+    assert.equal(createHash("sha256").update(jquery.body).digest("hex"), "160a426ff2894252cd7cebbdd6d6b7da8fcd319c65b70468f10b6690c45d02ef");
+    for (const path of ["/__sws/runtime/vendor/README.md", "/__sws/runtime/vendor/jquery-LICENSE.txt", "/__sws/runtime/vendor/", "/__sws/runtime/vendor"]) {
+      assert.equal((await requestBuffer(`${server.frameOrigin}${path}`)).status, 404, path);
+    }
     for (const path of ["/__sws/runtime/frame.d.ts", "/__sws/runtime/frame.js.map", "/__sws/runtime/", "/__sws/runtime/frame"]) {
       assert.equal((await requestBuffer(`${server.frameOrigin}${path}`)).status, 404, path);
     }

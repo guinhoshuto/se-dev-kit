@@ -12,7 +12,7 @@ import type {
   WidgetViewport
 } from "../types.js";
 import {StudioError} from "../shared/errors.js";
-import {mergeJsonObjects} from "../shared/json.js";
+import {cloneJson, mergeJsonObjects} from "../shared/json.js";
 import {defaultViewport} from "../config/load.js";
 
 export const DEFAULT_FIXED_TIME = "2025-01-15T12:00:00.000Z";
@@ -50,7 +50,7 @@ export function resolveSceneState(
   const runtimeState = {
     fieldData: mergeJsonObjects(project.fieldDefaults, theme?.fieldData, fixture?.fieldData, scene.fieldData, overrides.fieldData),
     channel: mergeJsonObjects({username: "streamer"}, project.config.channel, fixture?.channel),
-    recents: mergeJsonObjects(fixture?.recents),
+    recents: cloneJson(fixture?.recents ?? []),
     ...(fixture?.session ? {session: mergeJsonObjects(fixture.session)} : {}),
     seed: DEFAULT_SEED,
     fixedTime: DEFAULT_FIXED_TIME

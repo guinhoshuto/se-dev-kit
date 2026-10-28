@@ -102,7 +102,8 @@ export interface FixtureDefinition {
   name: string;
   description?: string;
   channel?: JsonObject;
-  recents?: JsonObject;
+  /** onWidgetLoad's `recents`, an array of events; the Studio does not build it from session data. */
+  recents?: JsonObject[];
   /** Session data keys merged over the empty defaults, as onWidgetLoad delivers them (`detail.session.data`). */
   session?: JsonObject;
   fieldData?: JsonObject;
@@ -359,7 +360,7 @@ export interface RuntimeState {
   sessionId: string;
   fieldData: JsonObject;
   channel: JsonObject;
-  recents: JsonObject;
+  recents: JsonObject[];
   /** The fixture's session data keys; the frame merges them over the empty defaults. */
   session?: JsonObject;
   seed: number;

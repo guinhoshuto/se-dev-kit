@@ -51,7 +51,8 @@ const MAX_FRAME_DOCUMENTS = 256;
 const FRAME_RUNTIME_FILES = new Map([
   ["/__sws/runtime/frame-bootstrap.js", "frame-bootstrap.js"],
   ["/__sws/runtime/frame.js", "frame.js"],
-  ["/__sws/runtime/google-fonts-url.js", "google-fonts-url.js"]
+  ["/__sws/runtime/google-fonts-url.js", "google-fonts-url.js"],
+  ["/__sws/runtime/vendor/jquery-3.3.1.min.js", "vendor/jquery-3.3.1.min.js"]
 ]);
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));

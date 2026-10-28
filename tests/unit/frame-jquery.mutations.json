@@ -1,0 +1,65 @@
+{
+  "mutations": [
+    {
+      "file": "src/runtime/frame.ts",
+      "from": "await withTimeout(loadClassicScript(JQUERY_URL), options.timeoutMs, \"jQuery\");",
+      "to": "void JQUERY_URL;",
+      "test": "tests/integration/jquery-recents.test.mjs"
+    },
+    {
+      "file": "src/runtime/frame.ts",
+      "from": "    await withTimeout(loadClassicScript(JQUERY_URL), options.timeoutMs, \"jQuery\");\n    for (const script of Array.from(document.querySelectorAll<HTMLScriptElement>('script[type=\"application/x-sws-classic\"]'))) {\n      if (script.dataset.swsSrc) await withTimeout(loadClassicScript(script.dataset.swsSrc), options.timeoutMs, \"Dependency script\");\n      else {\n        const executable = document.createElement(\"script\");\n        executable.nonce = options.nonce;\n        executable.textContent = script.textContent;\n        document.body.append(executable);\n      }\n    }\n    await withTimeout(loadClassicScript(options.widgetScriptUrl), options.timeoutMs, \"Widget script\");\n",
+      "to": "    for (const script of Array.from(document.querySelectorAll<HTMLScriptElement>('script[type=\"application/x-sws-classic\"]'))) {\n      if (script.dataset.swsSrc) await withTimeout(loadClassicScript(script.dataset.swsSrc), options.timeoutMs, \"Dependency script\");\n      else {\n        const executable = document.createElement(\"script\");\n        executable.nonce = options.nonce;\n        executable.textContent = script.textContent;\n        document.body.append(executable);\n      }\n    }\n    await withTimeout(loadClassicScript(JQUERY_URL), options.timeoutMs, \"jQuery\");\n    await withTimeout(loadClassicScript(options.widgetScriptUrl), options.timeoutMs, \"Widget script\");\n",
+      "test": "tests/integration/jquery-recents.test.mjs"
+    },
+    {
+      "file": "src/server/server.ts",
+      "from": "  [\"/__sws/runtime/vendor/jquery-3.3.1.min.js\", \"vendor/jquery-3.3.1.min.js\"]\n",
+      "to": "",
+      "test": "tests/integration/server.test.mjs",
+      "name": "serves the frame runtime modules from a fixed list"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": "(value) => (isEmptyPlainObject(value) ? [] : value)",
+      "to": "(value) => value",
+      "test": "tests/unit/frame-jquery.test.mjs"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": "Object.keys(value).length === 0",
+      "to": "Object.keys(value).length >= 0",
+      "test": "tests/unit/frame-jquery.test.mjs"
+    },
+    {
+      "file": "src/config/schemas.ts",
+      "from": "z.array(jsonObjectSchema, {invalid_type_error: RECENTS_MESSAGE})",
+      "to": "z.array(jsonObjectSchema)",
+      "test": "tests/unit/frame-jquery.test.mjs"
+    },
+    {
+      "file": "src/scenarios/state.ts",
+      "from": "recents: cloneJson(fixture?.recents ?? []),",
+      "to": "recents: mergeJsonObjects(fixture?.recents as unknown as JsonObject) as unknown as JsonObject[],",
+      "test": "tests/unit/frame-jquery.test.mjs"
+    },
+    {
+      "file": "src/scenarios/state.ts",
+      "from": "recents: cloneJson(fixture?.recents ?? []),",
+      "to": "recents: fixture?.recents ?? [],",
+      "test": "tests/unit/frame-jquery.test.mjs"
+    },
+    {
+      "file": "lib/preview.ts",
+      "from": "recents: structuredClone(fixture?.recents ?? []), ",
+      "to": "recents: merge(fixture?.recents as unknown as JsonObject) as unknown as JsonObject[], ",
+      "test": "tests/web/import.test.ts"
+    },
+    {
+      "file": "lib/preview.ts",
+      "from": "recents: structuredClone(fixture?.recents ?? []), ",
+      "to": "recents: fixture?.recents ?? [], ",
+      "test": "tests/web/import.test.ts"
+    }
+  ]
+}
