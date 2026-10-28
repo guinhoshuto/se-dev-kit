@@ -9,7 +9,8 @@
  *
  *   seEditor.use(<the JSON se-editor-plan.mjs printed>)
  *   seEditor.layers()          // the layer names
- *   await seEditor.canvas()    // for each widget in the canvas: its JS and CSS are the old commit's, the new one's, or other
+ *   await seEditor.canvas()    // for each widget in the canvas: its JS and CSS are the old commit's, the new one's,
+ *                              // either (UNVERIFIABLE: with its placeholders filled, the code fits both), or other
  *   seEditor.labels()          // each new FIELDS label in the field panel: shown whole, or cut
  *
  * Every call evaluates to a JSON string. It refuses a page that is not a StreamElements overlay editor, so it never
@@ -19,6 +20,7 @@
 (() => {
   const VERSION = 1;
   const TABS = ['html', 'css', 'js', 'fields'];
+  const CANVAS_TABS = ['js', 'css'];
   const HEX = /^[0-9a-f]{64}$/;
   const out = (result) => JSON.stringify(result);
   if (location.hostname !== 'streamelements.com' || !/^\/overlay\/[0-9a-f]{24}\/editor\/?$/.test(location.pathname)) {
@@ -45,6 +47,49 @@
   const plan = () => api.state.plan;
   // A tab whose code is the same in both commits reads NEW.
   const status = (expect, hash) => (hash === expect.new ? 'NEW' : hash === expect.old ? 'OLD' : 'OTHER');
+  // After Done, StreamElements fills each {{field}} placeholder in the canvas with the field's value, so a commit whose
+  // code has placeholders shows as its template's pieces in order: the first at the start, the last at the end, and
+  // each other one at its earliest place after the one before, which finds a match whenever there is one.
+  const fits = async (text, pieces) => {
+    const at = async (index, piece) => text.startsWith(piece.head, index)
+      && (await sha256(text.slice(index, index + piece.length))) === piece.sha256;
+    const first = pieces[0];
+    const last = pieces[pieces.length - 1];
+    const end = text.length - last.length;
+    if (end < first.length || !(await at(0, first))) return false;
+    let from = first.length;
+    for (const piece of pieces.slice(1, -1)) {
+      if (!piece.length) continue;
+      let index = text.indexOf(piece.head, from);
+      while (index !== -1 && index + piece.length <= end && !(await at(index, piece))) index = text.indexOf(piece.head, index + 1);
+      if (index === -1 || index + piece.length > end) return false;
+      from = index + piece.length;
+    }
+    return at(end, last);
+  };
+  // In the canvas, a commit's code shows byte for byte or, when it has placeholders, as its template. Code that fits
+  // both commits (they differ only next to a placeholder) reads UNVERIFIABLE.
+  const canvasStatus = async (expect, text) => {
+    const hash = await sha256(text);
+    const shows = async (side) => hash === expect[side] || (!!expect.templates[side] && (await fits(text, expect.templates[side])));
+    const isNew = await shows('new');
+    const isOld = expect.old !== expect.new && (await shows('old'));
+    return isNew ? (isOld ? 'UNVERIFIABLE' : 'NEW') : isOld ? 'OLD' : 'OTHER';
+  };
+  // A template is the literal pieces between a commit's placeholders: two or more, each its first characters (none
+  // only when it is empty), length, and SHA-256. Null when the plan's are malformed.
+  const piece = (entry) => !!entry && typeof entry.head === 'string' && Number.isSafeInteger(entry.length)
+    && entry.length >= entry.head.length && (entry.head.length > 0 || entry.length === 0) && HEX.test(entry.sha256);
+  const templatesOf = (given) => {
+    if (given === undefined) return Object.freeze({});
+    if (!given || typeof given !== 'object' || Array.isArray(given)) return null;
+    const templates = {};
+    for (const [side, pieces] of Object.entries(given)) {
+      if (!['old', 'new'].includes(side) || !Array.isArray(pieces) || pieces.length < 2 || !pieces.every(piece)) return null;
+      templates[side] = Object.freeze(pieces.map(({head, length, sha256: hash}) => Object.freeze({head, length, sha256: hash})));
+    }
+    return Object.freeze(templates);
+  };
   const visible = (el) => el.getClientRects().length > 0;
   const noPlan = {ok: false, error: 'Call seEditor.use(plan) first, with the JSON se-editor-plan.mjs printed.'};
 
@@ -66,7 +111,9 @@
       if (!expect || typeof expect.file !== 'string' || !expect.file || !HEX.test(expect.old) || !HEX.test(expect.new)) {
         return {ok: false, error: `The plan's ${tab} tab needs a file and the old and new SHA-256.`};
       }
-      tabs[tab] = Object.freeze({file: expect.file, old: expect.old, new: expect.new});
+      const templates = CANVAS_TABS.includes(tab) ? templatesOf(expect.templates) : Object.freeze({});
+      if (!templates) return {ok: false, error: `The plan's ${tab} templates need two or more pieces, each with its head, length, and SHA-256.`};
+      tabs[tab] = Object.freeze({file: expect.file, old: expect.old, new: expect.new, templates});
     }
     const labels = Array.isArray(given.labels) ? given.labels.filter((label) => typeof label === 'string') : [];
     api.state.plan = Object.freeze({from: String(given.from || ''), to: String(given.to || ''), tabs: Object.freeze(tabs), labels});
@@ -76,6 +123,7 @@
       from: api.state.plan.from.slice(0, 7),
       to: api.state.plan.to.slice(0, 7),
       changing: TABS.filter((tab) => tabs[tab].old !== tabs[tab].new),
+      placeholders: CANVAS_TABS.filter((tab) => Object.keys(tabs[tab].templates).length),
       labels
     };
   };
@@ -88,7 +136,8 @@
   };
 
   // Each custom widget in the canvas is a sandboxed blob: iframe whose document holds the widget's CSS in a <style>
-  // and its JS in a <script>, as the editor last applied them (saved, or applied by Done and not saved yet).
+  // and its JS in a <script>, as the editor last applied them (saved, or applied by Done and not saved yet), with
+  // their placeholders filled.
   const canvasState = async () => {
     const current = plan();
     if (!current) return noPlan;
@@ -105,16 +154,16 @@
       const match = async (selector, tab) => {
         let found = 'OTHER';
         for (const el of doc.querySelectorAll(selector)) {
-          const result = status(current.tabs[tab], await sha256(el.textContent));
+          const result = await canvasStatus(current.tabs[tab], el.textContent);
           if (result === 'NEW') return 'NEW';
-          if (result === 'OLD') found = 'OLD';
+          if (result === 'OLD' || (result === 'UNVERIFIABLE' && found === 'OTHER')) found = result;
         }
         return found;
       };
       widgets.push({js: await match('script', 'js'), css: await match('style', 'css')});
     }
     const count = (tab) => {
-      const counts = {NEW: 0, OLD: 0, OTHER: 0, UNREADABLE: 0};
+      const counts = {NEW: 0, OLD: 0, UNVERIFIABLE: 0, OTHER: 0, UNREADABLE: 0};
       for (const widget of widgets) counts[widget[tab]] += 1;
       return counts;
     };
