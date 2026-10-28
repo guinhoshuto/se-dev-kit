@@ -11,6 +11,7 @@
  * A plan is JSON, so code with quotes, `$` or backticks needs no shell quoting: an array of
  * {file, from, to, test, name?, occurrences?}, or {"mutations": [...]}. Paths are relative to the
  * checkout. `from` must occur exactly `occurrences` times (default 1) and every occurrence is swapped.
+ * The unit suite checks every *.mutations.json under tests/ the same way (checkPlans), so no plan goes stale unrun.
  *
  * A test under tests/integration starts Chrome, so a run with one passes the test runner's gate for a
  * browser suite (scripts/run-tests.mjs): it takes the machine-wide render slot without waiting, asks
@@ -26,7 +27,7 @@
 import {execFileSync, spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync, rmSync, writeFileSync} from 'node:fs';
-import {lstat, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {dirname, isAbsolute, relative, resolve, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {isEntryPoint} from './lib/entry-point.mjs';
@@ -363,13 +364,40 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
   return {code: results.some(result => !result.killed) ? EXIT.survived : EXIT.killed, results};
 }
 
-async function readPlan(path) {
+async function readPlan(path, root = process.cwd()) {
   let value;
-  try {value = JSON.parse(await readFile(resolve(process.cwd(), path), 'utf8'));}
+  try {value = JSON.parse(await readFile(resolve(root, path), 'utf8'));}
   catch (error) {throw new UsageError(`Cannot read the plan ${path}: ${error.message}`);}
   const list = Array.isArray(value) ? value : value?.mutations;
   usage(Array.isArray(list) && list.length > 0, 'A plan is a non-empty JSON array of mutations, or {"mutations": [...]}.');
   return list;
+}
+
+/**
+ * Checks every *.mutations.json under a checkout's tests/ as a run checks its plan before the first swap: each entry's
+ * file and test exist and its `from` occurs exactly `occurrences` times. Only a run reads a plan, so a `from` the
+ * code moved away from went unnoticed until someone ran that plan (#20); tests/unit/mutation-plans.test.mjs calls
+ * this. Returns the plans found and one line per problem, naming the plan and the entry.
+ */
+export async function checkPlans(root = ROOT) {
+  const plans = (await readdir(resolve(root, 'tests'), {recursive: true}))
+    .filter(path => path.endsWith('.mutations.json')).map(path => `tests/${path.split(sep).join('/')}`).sort();
+  const problems = [];
+  for (const plan of plans) {
+    let list;
+    try {list = await readPlan(plan, root);} catch (error) {problems.push(`${plan}: ${error.message}`); continue;}
+    for (const [index, raw] of list.entries()) {
+      try {
+        const {file, from, to, occurrences} = await checkMutation(raw, index, root);
+        try {applySwap(await readFile(resolve(root, file), 'utf8'), from, to, occurrences);}
+        catch (error) {problems.push(`${plan}: Mutation ${index + 1} (${short(from)}): ${file}: ${error.message}`);}
+      } catch (error) {
+        if (!(error instanceof UsageError)) throw error;
+        problems.push(`${plan}: ${error.message}`);
+      }
+    }
+  }
+  return {plans, problems};
 }
 
 async function main() {
