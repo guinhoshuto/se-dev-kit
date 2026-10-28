@@ -96,8 +96,12 @@ export function isHeavy(command) {
   return !WRAPPERS.has(executable(command)) && HEAVY.some(pattern => pattern.test(command));
 }
 
-const isTestWorker = command => /\bnode\b/.test(command) && /\.test\.(mjs|ts)\b/.test(command) && !/\s--test(\s|$)/.test(command);
-const isJobWorker = command => /\bnode\b/.test(command) && /scripts\/job-worker\.mjs\b/.test(command);
+// A worker is node itself (its executable, argv[0]), never a shell whose command line names node and the file:
+// on 2026-10-25 a detached `nohup /bin/zsh -c '... node ... render-slot.ts run -- npm run test:repeat --
+// tests/integration/css-transition.test.mjs 1'` started inside the checkout, adopted by launchd, stopped its own run
+// twice as an orphan test worker (#12). The node it starts is a process of its own.
+const isTestWorker = command => executable(command) === 'node' && /\.test\.(mjs|ts)\b/.test(command) && !/\s--test(\s|$)/.test(command);
+const isJobWorker = command => executable(command) === 'node' && /scripts\/job-worker\.mjs\b/.test(command);
 
 /**
  * This checkout's leftovers: a marked Chrome whose launcher died (PPID 1), and a test or job worker
