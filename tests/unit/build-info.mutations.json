@@ -1,0 +1,18 @@
+{
+  "mutations": [
+    {
+      "file": "src/build-info.ts",
+      "from": "\"diff\", \"--quiet\", from, to, \"--\", ...ENGINE_INPUTS]",
+      "to": "\"diff\", \"--quiet\", from, to, \"--\"]",
+      "test": "tests/unit/build-info.test.mjs",
+      "name": "^a commit after the build that changes no build:engine input"
+    },
+    {
+      "file": "src/build-info.ts",
+      "from": "status === 1 ? true : undefined",
+      "to": "status === 1 ? true : false",
+      "test": "tests/unit/build-info.test.mjs",
+      "name": "^a build from another commit than the checkout's HEAD is stale"
+    }
+  ]
+}
