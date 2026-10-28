@@ -8,7 +8,7 @@ The Next.js application lives at this repository's root. Consumer widgets remain
 
 - Imports versioned snapshots without modifying the original files.
 - Runs widgets inside opaque-origin sandboxed iframes with runtime network access blocked. Google Fonts are the one exception, and widgets load them as in StreamElements: trusted server code fetches them into an append-only cache, and previews and jobs get them from there ([Google Fonts](docs/RUNTIME.md#google-fonts)).
-- Substitutes `{{field}}` placeholders in HTML, CSS, and JavaScript, and reloads the widget when a field changes, as the StreamElements editor does.
+- Substitutes `{{field}}` and `{field}` placeholders in HTML, CSS, and JavaScript, and reloads the widget when a field changes, as the StreamElements editor does.
 - Generates controls from FIELDS, with themes, fixtures, scenes, framing, and a theme gallery.
 - Saves immutable revisions and rejects stale full replacements instead of overwriting another editor's work.
 - Runs deterministic browser scenarios and recipes for screenshots, thumbnails, contact sheets, and short silent videos.

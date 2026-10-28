@@ -23,7 +23,7 @@ async function placeholderWidget(t) {
       '<main id="widget"><h1 id="title">{{title}}</h1><div id="dot"></div><p id="script"></p></main>',
       ""
     ].join("\n"),
-    "widget.css": 'body{margin:0}#title::after{content:"{{ title }}"}#dot{width:{{size}}px;height:{{size}}px;background-image:url(assets/dot.png)}\n',
+    "widget.css": 'body{margin:0}#title::after{content:"{title}"}#dot{width:{{size}}px;height:{{size}}px;background-image:url(assets/dot.png)}\n',
     "widget.js": 'window.fromScript = "{{title}}";\nwindow.addEventListener("onWidgetLoad", () => { document.getElementById("script").textContent = window.fromScript; });\n',
     "widget.json": JSON.stringify({title: {type: "text", label: "Title", value: "Default title"}, size: {type: "number", label: "Size", value: 4}})
   };
@@ -38,7 +38,7 @@ async function get(url) {
   return {status: response.status, text: await response.text()};
 }
 
-test("the frame server substitutes {{field}} per registered document at the usual paths, and refuses values that add unsafe HTML", async (t) => {
+test("the frame server substitutes {{field}} and {field} per registered document at the usual paths, and refuses values that add unsafe HTML", async (t) => {
   const {root, files, project} = await placeholderWidget(t);
   const server = await startStudioServer(project, {port: 0, watch: false});
   try {
@@ -73,7 +73,7 @@ test("the frame server substitutes {{field}} per registered document at the usua
   }
 });
 
-test("a capture shows the theme value of {{title}} in HTML, CSS content and JS, and a relative url() next to a placeholder still loads", {timeout: 120_000}, async (t) => {
+test("a capture shows the theme value of {{title}} in HTML and JS and of {title} in CSS content, and a relative url() next to a placeholder still loads", {timeout: 120_000}, async (t) => {
   const detection = await detectBrowser();
   if (!detection.executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");

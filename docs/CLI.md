@@ -9,7 +9,7 @@ The Studio provides:
 - Automatic detection of the two common StreamElements file layouts.
 - An interactive editor generated from the real FIELDS schema.
 - Themes, synthetic fixtures, declarative scenes, smoke scenarios, and capture recipes.
-- Essential `onWidgetLoad` and `onEventReceived` simulation, `{{field}}` placeholders, and field changes that reload the widget as StreamElements does (or dispatch the Studio's `onWidgetUpdate`).
+- Essential `onWidgetLoad` and `onEventReceived` simulation, `{{field}}` and `{field}` placeholders, and field changes that reload the widget as StreamElements does (or dispatch the Studio's `onWidgetUpdate`).
 - Deterministic Playwright screenshots, thumbnails, contact sheets, and video rendered from PNG frames.
 - Optional FFmpeg conversion and ffprobe validation when those tools are already installed.
 - Versioned marketplace presets, including an Etsy profile with official sources and a verification date.

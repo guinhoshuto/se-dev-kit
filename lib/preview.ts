@@ -132,7 +132,7 @@ export async function previewDocument(prepared: PreparedSnapshot, store: ObjectS
   };
   const inline = async (reference: string, base = ''): Promise<string> => {
     if (!reference || reference.startsWith('#') || reference.startsWith('data:')) return reference;
-    if (hasPlaceholder(reference)) { warn(`Preview left ${JSON.stringify(reference)} as written: its {{field}} has no value.`); return reference; }
+    if (hasPlaceholder(reference)) { warn(`Preview left ${JSON.stringify(reference)} as written: its field placeholder has no value.`); return reference; }
     const googleUrl = googleSource(reference, base);
     if (googleUrl) return (await google(googleUrl))?.value ?? googleUrl;
     if (REMOTE_REFERENCE.test(reference.trim())) {
