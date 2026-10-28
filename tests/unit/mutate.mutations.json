@@ -131,6 +131,34 @@
       "from": "    if (distMutant) await build(root);\n",
       "to": "",
       "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "  node dist/shared/render-slot.js run -- node scripts/mutate.mjs ${",
+      "to": "  node scripts/mutate.mjs ${",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^held by a chain of the harness"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "(/^[\\w@%+=:,./-]+$/.test(arg) ? arg :",
+      "to": "(true ? arg :",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^held by a chain of the harness"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "const again = allowed.wait ?",
+      "to": "const again = true ?",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^a refusal that waiting can end"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": ", ...(error?.code === 'RENDER_SLOT_BUSY' ? {wait: true} : {})",
+      "to": "",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^held by a chain of the harness"
     }
   ]
 }

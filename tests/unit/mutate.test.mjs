@@ -9,8 +9,9 @@ import {tmpdir} from "node:os";
 import {dirname, join} from "node:path";
 import test from "node:test";
 
-import {applySwap, mutate, opensChrome, parseArgs, spawnBounded} from "../../scripts/mutate.mjs";
+import {UsageError, applySwap, mutate, opensChrome, parseArgs, spawnBounded} from "../../scripts/mutate.mjs";
 import {gate, takeBrowserSlot} from "../../scripts/run-tests.mjs";
+import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
 
 const FILES = {
   "lib/math.mjs": "export const sum = (a, b) => a + b;\nexport const unused = 1;\n",
@@ -183,6 +184,78 @@ test("with the render slot held by another process, the CLI stops a mutation who
   assert.equal(await exists(join(root, "ran")), false, "the test that starts Chrome never ran, not even its baseline");
   assert.equal(await readFile(join(root, "lib/value.mjs"), "utf8"), "export const value = 1;\n");
   assert.equal(JSON.parse(await readFile(join(slot, "owner.json"), "utf8")).pid, holder.pid, "the slot stays with its holder");
+});
+
+test("held by a chain of the harness that cedes, the slot refuses the CLI, whose printed command waits in the queue, goes in between two of the chain's rounds and runs the mutation under that slot", {timeout: 60_000}, async t => {
+  const root = await cliCheckout(t);
+  const slot = join(await folder(t, "sws-mutate-slot-"), "render-slot");
+  // The stand-in notes when it ran, the slot's owner then, and the slot it inherited.
+  await writeFile(join(root, "tests/integration/under-slot.test.mjs"), [
+    "import assert from 'node:assert/strict';",
+    "import {readFileSync, writeFileSync} from 'node:fs';",
+    "import test from 'node:test';",
+    "import {value} from '../../lib/value.mjs';",
+    "test('stands in for a Chrome test', () => {",
+    `  const owner = JSON.parse(readFileSync(${JSON.stringify(join(slot, "owner.json"))}, 'utf8'));`,
+    "  writeFileSync(new URL('../../ran', import.meta.url), JSON.stringify({at: Date.now(), owner, held: process.env.RENDER_SLOT_HELD}));",
+    "  assert.equal(value, 1);",
+    "});",
+    ""
+  ].join("\n"));
+  // The queued run asks no machine check (RENDER_SLOT_CHECK=off); the mutate it runs asks the free one.
+  const env = {...process.env, RENDER_SLOT_DIR: slot, RENDER_SLOT_CHECK: "off", MACHINE_CHECK: join(root, "free-machine.py")};
+  for (const name of ["NODE_TEST_CONTEXT", "RENDER_SLOT_HELD", "RENDER_SLOT_CEDE", "SE_WIDGET_STUDIO_TEST_GATE"]) delete env[name];
+  const script = "dist/shared/render-slot.js";
+  const first = chainRound(t, {script, label: "chain.1", env, cwd: root});
+  await first.holding;
+  // The chain's next round already waits in the queue, ahead of anyone who comes now.
+  const second = chainRound(t, {script, label: "chain.2", env, cwd: root});
+  await queueHolds(slot, 1);
+
+  const cli = spawn(process.execPath, ["scripts/mutate.mjs", "lib/value.mjs", "--from", "value = 1", "--to", "value = 2", "--test", "tests/integration/under-slot.test.mjs"], {cwd: root, env, stdio: ["ignore", "pipe", "pipe"]});
+  let refusal = "";
+  cli.stdout.on("data", chunk => {refusal += chunk;});
+  cli.stderr.on("data", chunk => {refusal += chunk;});
+  const [refused] = await once(cli, "close");
+  assert.equal(refused, 2, refusal);
+  assert.match(refusal, new RegExp(`held by pid ${first.round.pid} \\(.+: hold: chain\\.1\\)`));
+  const command = refusal.trim().split("\n").at(-1).trim();
+  assert.equal(command, "node dist/shared/render-slot.js run -- node scripts/mutate.mjs lib/value.mjs --from 'value = 1' --to 'value = 2' --test tests/integration/under-slot.test.mjs");
+
+  // A shell reads the printed command as it stands.
+  const queued = spawn("/bin/sh", ["-c", `exec ${command}`], {cwd: root, env, stdio: ["ignore", "pipe", "pipe"]});
+  t.after(() => queued.kill("SIGKILL"));
+  let output = "";
+  queued.stdout.on("data", chunk => {output += chunk;});
+  queued.stderr.on("data", chunk => {output += chunk;});
+  await queueHolds(slot, 2);
+  // The round that holds the slot ends; the next one, first by place, lets the queued run go first.
+  const released = Date.now();
+  first.round.kill("SIGTERM");
+  const [code] = await once(queued, "close");
+  assert.equal(code, 0, output);
+  assert.match(output, /^1 of 1 mutation\(s\) killed\.$/m);
+  const ran = JSON.parse(await readFile(join(root, "ran"), "utf8"));
+  assert.ok(ran.at > released, "the mutation ran after the chain's first round let go");
+  assert.match(ran.owner.command, /^node scripts\/mutate\.mjs lib\/value\.mjs /, "under the slot of the queued run, named after its command");
+  assert.equal(ran.held, String(ran.owner.pid), "which the mutation inherited");
+  assert.ok(await second.holding > ran.at, "the chain's next round took the slot only after the mutation ran");
+  assert.equal(await readFile(join(root, "lib/value.mjs"), "utf8"), "export const value = 1;\n");
+});
+
+test("a refusal that waiting can end prints the command that runs mutate again in the render slot queue; one it cannot end does not", {timeout: 60_000}, async t => {
+  const {root} = await checkout(t);
+  await mkdir(join(root, "tests/integration"));
+  await writeFile(join(root, "tests/integration/sum.test.mjs"), FILES["tests/math.test.mjs"].replace("'../lib/math.mjs'", "'../../lib/math.mjs'"));
+  const mutations = [{file: "lib/math.mjs", from: "a + b", to: "a - b", test: "tests/integration/sum.test.mjs"}];
+  const refusal = verdict => mutate(mutations, {root, machine: async () => verdict, timeoutMs: 5000, log: quiet}).then(() => assert.fail("mutate ran"), error => {
+    assert.ok(error instanceof UsageError, String(error));
+    return error.message;
+  });
+  const busy = await refusal({ok: false, wait: true, reason: "the machine check says to wait: the game is open"});
+  assert.match(busy, /the machine check says to wait: the game is open\nNo test ran and nothing was mutated\.\nTo wait for it in the render slot queue, .+, run:\n {2}node dist\/shared\/render-slot\.js run -- node scripts\/mutate\.mjs /);
+  const orphan = await refusal({ok: false, reason: "this checkout left 1 orphan process(es) (PID 1); run npm run kill-stale"});
+  assert.match(orphan, /run npm run kill-stale\nNo test ran and nothing was mutated\.$/);
 });
 
 test("a mutation whose test starts Chrome runs holding the render slot, which its test inherits, and gives the slot back", {timeout: 60_000}, async t => {

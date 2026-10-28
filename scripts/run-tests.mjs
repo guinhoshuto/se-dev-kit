@@ -73,7 +73,8 @@ export const leftovers = entries => entries.filter(entry => !/^tsx-\d+$/.test(en
 
 /**
  * The machine-wide render slot for one browser suite. It waits its turn in the queue, up to SLOT_WAIT_MS from
- * `since`, the moment it first came, which keeps its place after it gave the slot back; `wait: false` answers at once.
+ * `since`, the moment it first came, which keeps its place after it gave the slot back; `wait: false` answers at once,
+ * and a refusal that waiting can end (the slot held, or others ahead in the queue) says `wait`, as the machine gate does.
  */
 export async function takeBrowserSlot(options = {}) {
   const {acquireRenderSlot} = await import('../dist/shared/render-slot.js');
@@ -81,7 +82,7 @@ export async function takeBrowserSlot(options = {}) {
     const slot = await acquireRenderSlot({command: `node scripts/run-tests.mjs ${process.argv.slice(2).join(' ')}`.trim(), repo: 'se-dev-kit', waitLimitMs: SLOT_WAIT_MS, ...options});
     return {ok: true, release: slot.release};
   } catch (error) {
-    return {ok: false, reason: error instanceof Error ? error.message : String(error)};
+    return {ok: false, reason: error instanceof Error ? error.message : String(error), ...(error?.code === 'RENDER_SLOT_BUSY' ? {wait: true} : {})};
   }
 }
 
