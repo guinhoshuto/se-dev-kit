@@ -9,6 +9,7 @@ import test from "node:test";
 import {setTimeout as sleep} from "node:timers/promises";
 import {fileURLToPath} from "node:url";
 
+import {browserGate} from "../../scripts/lib/machine.mjs";
 import {SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
 import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
 
@@ -206,7 +207,7 @@ test("npm test waits for a held slot, then runs integration and web:browser hold
   assert.deepEqual(ran, [["web", null]]);
   const summary = stuck.join("\n");
   assert.match(summary, new RegExp(`^integration +skipped +Gave up after \\d+ minutes waiting for the render slot \\(${literal(dir)}\\), held by pid ${other.pid} \\(background-creator: npm run stills\\)`, "m"));
-  assert.match(summary, /^NOT COVERED: integration, web:browser\./m);
+  assert.match(summary, /^NOT COVERED: integration, web:browser\. This run did not test them; run npm run test:browser, which waits its turn in the render slot queue\.$/m);
 
   ran.length = 0;
   const lines = [];
@@ -247,14 +248,55 @@ test("a run stops at its first failed suite and names each suite after it NOT CO
   assert.match(first.text, /^NOT COVERED: integration, web, web:browser\. This run did not test them: unit failed and the run stopped there; run them with node scripts\/run-tests\.mjs integration web web:browser\.$/m);
 
   // A browser suite the gate skipped keeps its own line and command; the suite after the failure gets the other.
-  const both = await summary("web", ["only 2.9 GiB free"]);
+  const both = await summary("web", ["Gave up after 240 minutes waiting for the render slot, held by pid 7."]);
   assert.deepEqual(both.ran, ["unit", "web"]);
-  assert.match(both.text, /^NOT COVERED: integration\. This run did not test them; run npm run wait-free, then npm run test:browser\.$/m);
+  assert.match(both.text, /^NOT COVERED: integration\. This run did not test them; run npm run test:browser, which waits its turn in the render slot queue\.$/m);
   assert.match(both.text, /^NOT COVERED: web:browser\. This run did not test them: web failed and the run stopped there; run them with node scripts\/run-tests\.mjs web:browser\.$/m);
 
   const last = await summary("web:browser");
   assert.deepEqual(last.ran, ["unit", "integration", "web", "web:browser"]);
   assert.doesNotMatch(last.text, /NOT COVERED|not run/, "a failure in the last suite leaves nothing unrun");
+});
+
+test("a browser suite the gate skipped is NOT COVERED with the step that runs it: kill-stale or free space first, else npm run test:browser itself, never wait-free", {timeout: 30_000}, async (t) => {
+  gateOn(t);
+  const dir = await slotFolder(t);
+  const root = "/work/se-dev-kit";
+  const take = (options) => takeBrowserSlot({...options, dir, log: () => {}});
+  const quiet = [{pid: 900, ppid: 1, command: "/opt/homebrew/bin/node scripts/run-tests.mjs"}];
+  const orphaned = [...quiet, {pid: 72, ppid: 1, command: `/opt/homebrew/opt/node@24/bin/node ${root}/tests/integration/css-transition.test.mjs`}];
+  // The real machine gate behind the real slot, with the disk and the process list replaced.
+  const machine = ({free = 10 * 1024 ** 3, processes = quiet}) => () => browserGate({root, paths: ["/work"], ownRoots: [900], processes, free: async () => free, cwd: async () => root, usage: async () => new Map(), machine: async () => ({free: true, reasons: []})});
+  const low = () => gate({take, check: machine({free: 3 * 1024 ** 3 - 1}), pauseMs: 0});
+  const orphan = () => gate({take, check: machine({processes: orphaned}), pauseMs: 0});
+  const timedOut = () => gate({take: async () => ({ok: false, reason: "Gave up after 240 minutes waiting for the render slot, held by pid 7."}), check: machine({}), pauseMs: 0});
+  // Each browser suite of the run meets the next gate.
+  const summary = async (gates) => {
+    const lines = [];
+    await runSuites(["integration", "web:browser"], {
+      suites: {integration: {browser: true}, "web:browser": {browser: true}},
+      files: async () => ["fake.test.mjs"],
+      gateFor: () => gates.shift()(),
+      run: async (name) => assert.fail(`${name} was skipped and ran`),
+      newDirectory: async () => join(tmpdir(), "sws-runner-unused"),
+      log: (line) => lines.push(line)
+    });
+    return lines.join("\n");
+  };
+
+  const disk = await summary([low, low]);
+  assert.match(disk, /^integration +skipped +only 2\.9 GiB free on the volume of \/work; browser suites need 3\.0 GiB$/m);
+  assert.match(disk, /^NOT COVERED: integration, web:browser\. This run did not test them: the disk is low; free some space, then run npm run test:browser\.$/m);
+  // Suites skipped for different causes get a line each, in the order they came.
+  const mixed = await summary([orphan, timedOut]);
+  assert.match(mixed, /^NOT COVERED: integration\. This run did not test them: this checkout left an orphan; run npm run kill-stale, then npm run test:browser\.\nNOT COVERED: web:browser\. This run did not test them; run npm run test:browser, which waits its turn in the render slot queue\.$/m);
+  // 2026-10-28: npm run wait-free gives up after 30 minutes while a chain that cedes holds the slot; test:browser waits in the queue and gets in (#16).
+  for (const text of [disk, mixed]) assert.doesNotMatch(text, /wait-free/);
+  assert.equal(await exists(dir), false, "a skipped suite leaves the slot free");
+
+  // The step's script runs exactly the browser suites, each through this gate's queue.
+  const {scripts} = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  assert.match(scripts["test:browser"], new RegExp(`node scripts/run-tests\\.mjs ${Object.keys(SUITES).filter((name) => SUITES[name].browser).join(" ")}$`));
 });
 
 test("the gate takes the slot before the machine check and gives it back at once when the check refuses for a reason waiting cannot end", async (t) => {

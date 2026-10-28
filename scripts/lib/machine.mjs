@@ -281,17 +281,18 @@ export const shortCommand = command => (command.length > 110 ? `${command.slice(
  * Whether a suite that starts Chrome may run now. It refuses below MIN_FREE_BYTES, when this checkout
  * left an orphan (which `npm run kill-stale` removes), and when the machine check says to wait; where
  * that check is missing, when another session renders. Only the last two carry `wait`: waiting ends
- * them, and the test runner waits. A stalled render does not refuse: it comes back in `warnings`,
- * which is there only when there is one.
+ * them, and the test runner waits. The first two name their `cause` ('disk', 'orphan') instead, which the
+ * runner's summary turns into the step that ends them. A stalled render does not refuse: it comes back in
+ * `warnings`, which is there only when there is one.
  */
 export async function browserGate({root, paths, ownRoots, minFreeBytes = MIN_FREE_BYTES, processes, free = freeBytes, cwd = cwdOf, usage = readUsage, machine = machineVerdict}) {
   for (const path of paths) {
     const bytes = await free(path);
-    if (bytes < minFreeBytes) return {ok: false, reason: `only ${gib(bytes)} free on the volume of ${path}; browser suites need ${gib(minFreeBytes)}`};
+    if (bytes < minFreeBytes) return {ok: false, cause: 'disk', reason: `only ${gib(bytes)} free on the volume of ${path}; browser suites need ${gib(minFreeBytes)}`};
   }
   const list = processes ?? await listProcesses();
   const {orphans} = await checkoutOrphans(root, list, {cwd});
-  if (orphans.length) return {ok: false, reason: `this checkout left ${orphans.length} orphan process(es) (PID ${orphans.map(item => item.pid).join(', ')}); run npm run kill-stale`};
+  if (orphans.length) return {ok: false, cause: 'orphan', reason: `this checkout left ${orphans.length} orphan process(es) (PID ${orphans.map(item => item.pid).join(', ')}); run npm run kill-stale`};
   const verdict = await machine(ownRoots);
   if (verdict) return verdict.free ? {ok: true} : {ok: false, wait: true, reason: `the machine check says to wait: ${verdict.reasons.join('; ')}`};
   const {busy, stalled} = await splitStalled(otherSessionsWork(list, ownRoots), list, {usage, cwd});

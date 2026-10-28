@@ -132,6 +132,41 @@
       "to": "repo: 'se-dev-kit', waitLimitMs: SLOT_WAIT_MS, cede: true, ...options",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a browser suite that comes while a chain"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "{ok: false, cause: 'disk', reason:",
+      "to": "{ok: false, reason:",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite the gate skipped"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "{ok: false, cause: 'orphan', reason:",
+      "to": "{ok: false, reason:",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite the gate skipped"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "detail: allowed.reason, cause: allowed.cause}",
+      "to": "detail: allowed.reason}",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite the gate skipped"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "'; run npm run test:browser, which waits its turn in the render slot queue'",
+      "to": "'; run npm run wait-free, then npm run test:browser'",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^npm test waits"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "${skipped.filter(result => result.cause === cause).map(result => result.name)",
+      "to": "${skipped.map(result => result.name)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite the gate skipped"
     }
   ]
 }
