@@ -2,50 +2,46 @@ import {parse, type DefaultTreeAdapterMap} from "parse5";
 import type {JsonObject, JsonValue} from "../types.js";
 
 /**
- * StreamElements `{{field}}` placeholders. StreamElements replaces them with the raw field value in
- * the widget's HTML, CSS and JS before the page loads (documentation read on 2026-09-26; escaping
- * and missing fields are still to be confirmed on real StreamElements). The Studio does the same in
- * memory: widget files are never rewritten.
+ * StreamElements field placeholders, filled as its overlay fills them (the function that builds a
+ * custom widget's frame in `streamelements.com/overlay/assets/index-DmBc-s-l.js`, read on 2026-10-28):
+ * in the widget's HTML, CSS and JS, first every `{{name}}`, then, over that result, every `{name}`,
+ * where `name` is word characters only (no spaces, dots or dashes) and a key of fieldData. Anything
+ * else stays as written. The second pass also fills a `{name}` that a value from the first one
+ * brought. The Studio does the same in memory: widget files are never rewritten. Unlike
+ * StreamElements, only fieldData's own keys count: its `in` test also takes inherited object keys,
+ * such as `{constructor}`.
  */
-const PLACEHOLDER_SOURCE = String.raw`\{\{\s*([\w.-]+)\s*\}\}`;
+const DOUBLE_SOURCE = String.raw`\{\{(\w*)\}\}`;
+const SINGLE_SOURCE = String.raw`\{(\w*)\}`;
 
-/** A fresh global pattern; group 1 is the field id. Inner spaces are optional. */
-export function placeholderPattern(): RegExp {
-  return new RegExp(PLACEHOLDER_SOURCE, "g");
-}
-
+/** Text StreamElements may fill: a `{name}`, alone or inside `{{name}}`. */
 export function hasPlaceholder(text: string): boolean {
-  return new RegExp(PLACEHOLDER_SOURCE).test(text);
+  return /\{\w+\}/.test(text);
 }
 
-/** The raw text a field value becomes. Objects and arrays are JSON; `null` is empty. */
+/** The raw text a field value becomes, as JavaScript's `String()` makes it: `null` is "null", arrays join with commas. */
 export function placeholderText(value: JsonValue): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (value === null) return "";
-  return JSON.stringify(value);
+  return String(value);
 }
 
 export interface PlaceholderSubstitution {
   text: string;
-  /** Placeholder ids with no field in `fieldData`, in first-seen order. They stay intact. */
+  /** `{{name}}` ids with no field in `fieldData`, in first-seen order. They stay intact. */
   missing: string[];
 }
 
 /**
- * Replaces each `{{name}}` with the raw value of `fieldData[name]` in one pass, so a value that
- * itself contains `{{…}}` is never expanded again. Unknown placeholders stay intact.
+ * Fills `{{name}}`, then `{name}`, with the raw value of `fieldData[name]`. A `{name}` with no field
+ * is not reported: JavaScript and CSS are full of braces around a word.
  */
 export function substitutePlaceholders(text: string, fieldData: JsonObject): PlaceholderSubstitution {
   const missing: string[] = [];
-  const substituted = text.replace(placeholderPattern(), (match: string, name: string) => {
-    if (!Object.hasOwn(fieldData, name)) {
-      if (!missing.includes(name)) missing.push(name);
-      return match;
-    }
-    return placeholderText(fieldData[name] as JsonValue);
+  const fill = (match: string, name: string): string => (Object.hasOwn(fieldData, name) ? placeholderText(fieldData[name] as JsonValue) : match);
+  const doubled = text.replace(new RegExp(DOUBLE_SOURCE, "g"), (match: string, name: string) => {
+    if (name && !Object.hasOwn(fieldData, name) && !missing.includes(name)) missing.push(name);
+    return fill(match, name);
   });
-  return {text: substituted, missing};
+  return {text: doubled.replace(new RegExp(SINGLE_SOURCE, "g"), fill), missing};
 }
 
 export function missingPlaceholderWarning(file: string, missing: readonly string[]): string {

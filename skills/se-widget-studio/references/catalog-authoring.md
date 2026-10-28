@@ -19,7 +19,7 @@ FIELDS defaults → theme → fixture → scene → temporary preview override
 
 Never put background, crop, zoom, or output dimensions in `fieldData` unless they are genuine widget FIELDS.
 
-Themes and scenes may set a `googleFont` field freely: the Studio preview and jobs load Google Fonts as StreamElements does, and substitute `{{field}}` placeholders with the effective field data in HTML, CSS and JS.
+Themes and scenes may set a `googleFont` field freely: the Studio preview and jobs load Google Fonts as StreamElements does, and fill placeholders with the effective field data in HTML, CSS and JS by StreamElements' rule: `{{field}}`, then `{field}`, when `field` is a key of the field data, with word names only (`{{ field }}` stays as written).
 
 ## Field changes
 

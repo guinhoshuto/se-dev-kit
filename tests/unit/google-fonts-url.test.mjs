@@ -158,11 +158,13 @@ test("URLs over 2 KB and more than 20 families are unsupported", () => {
   rejected(`${CSS}/css?family=${families(11).join("%7C")}&family=${families(10).join("|")}`, "FONT_UNSUPPORTED", "families");
 });
 
-test("a {{field}} placeholder or a missing family is a local 400 that never reaches upstream", () => {
+test("a {field} or {{field}} placeholder or a missing family is a local 400 that never reaches upstream", () => {
   const placeholder = rejected(`${CSS}/css?family={{fontName}}:400,700`, "FONT_BAD_REQUEST", "placeholder");
   assert.equal(placeholder.status, 400);
   rejected(`${CSS}/css?family=%7B%7BfontName%7D%7D`, "FONT_BAD_REQUEST", "placeholder");
   rejected(`${CSS}/css2?family=Lato&family={{second}}`, "FONT_BAD_REQUEST", "placeholder");
+  rejected(`${CSS}/css?family={fontName}:400,700`, "FONT_BAD_REQUEST", "placeholder");
+  rejected(`${CSS}/css2?family=%7BfontName%7D`, "FONT_BAD_REQUEST", "placeholder");
   const missing = rejected(`${CSS}/css2?display=swap`, "FONT_BAD_REQUEST", "family-missing");
   assert.equal(missing.status, 400);
   rejected(`${CSS}/css?family=`, "FONT_BAD_REQUEST", "family-missing");

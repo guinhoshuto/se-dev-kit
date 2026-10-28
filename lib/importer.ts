@@ -187,22 +187,22 @@ export function setText(node: Element, value: string): void { node.childNodes = 
 function remove(node: Element): void { if (node.parentNode) node.parentNode.childNodes = node.parentNode.childNodes.filter(child => child !== node); }
 
 /**
- * Swaps each `{{field}}` for a sentinel that is a valid CSS identifier, so postcss parses widget CSS
- * that uses unquoted placeholders (`gap: {{msgSpacing}}px`, `align-items: {{alignment}}`).
+ * Swaps each `{{field}}` and `{field}` for a sentinel that is a valid CSS identifier, so postcss parses
+ * widget CSS that uses unquoted placeholders (`gap: {{msgSpacing}}px`, `align-items: {alignment}`).
  * `restore` puts the original placeholder text back, byte for byte.
  */
 export function protectPlaceholders(css: string): {text: string; restore: (value: string) => string} {
   let prefix = '__sws_tok';
   while (css.includes(prefix)) prefix += 'x';
   const tokens: string[] = [];
-  const text = css.replace(/\{\{\s*[\w.-]+\s*\}\}/g, match => `${prefix}_${tokens.push(match) - 1}__`);
+  const text = css.replace(/\{\{\s*[\w.-]+\s*\}\}|\{\w+\}/g, match => `${prefix}_${tokens.push(match) - 1}__`);
   const pattern = new RegExp(`${prefix}_(\\d+)__`, 'g');
   return {text, restore: value => tokens.length ? value.replace(pattern, (match, index: string) => tokens[Number(index)] ?? match) : value};
 }
 
 /**
- * Rewrites every `url()` and `@import` through `resolve`. References that still hold a `{{field}}`
- * are left exactly as written: they are known only after substitution.
+ * Rewrites every `url()` and `@import` through `resolve`. References that still hold a `{field}` or
+ * `{{field}}` are left exactly as written: they are known only after substitution.
  */
 export async function rewriteCss(css: string, resolve: (url: string) => Promise<string>): Promise<string> {
   const {text, restore} = protectPlaceholders(css);

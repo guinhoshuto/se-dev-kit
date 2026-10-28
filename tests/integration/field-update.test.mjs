@@ -72,15 +72,18 @@ async function openStill(t, project) {
   return opened;
 }
 
-// Reads the family and the label only in onWidgetLoad, and through {{placeholders}}, like most store widgets.
+// Reads the family and the label only in onWidgetLoad, and through {{placeholders}}, like most store widgets, and
+// the label and a checkbox through single-brace {placeholders} in its JS, like se-custom-chat.
 const PLACEHOLDER_WIDGET = {
   html: `<link id="gf" rel="stylesheet" href="https://fonts.googleapis.com/css2?family={{font}}"><h1 id="t" style="font-family:'{{font}}'">{{label}}</h1>`,
   css: "h1{margin:0;padding:24px 12px;font-size:40px;line-height:1;color:#fff}",
   js: `window.loads = 0;
+window.single = "{label}";
+window.flag = {flag} ? "on" : "off";
 window.updates = [];
 window.addEventListener("onWidgetLoad", (event) => { window.loads += 1; window.loaded = event.detail.fieldData; });
 window.addEventListener("onWidgetUpdate", (event) => { window.updates.push(event.detail.fieldData); });`,
-  fields: {font: {type: "googleFont", label: "Font", value: "Alpha"}, label: {type: "text", label: "Label", value: "First"}}
+  fields: {font: {type: "googleFont", label: "Font", value: "Alpha"}, label: {type: "text", label: "Label", value: "First"}, flag: {type: "checkbox", label: "Flag", value: true}}
 };
 
 const frameState = (opened) => opened.frame().evaluate(() => ({
@@ -89,6 +92,8 @@ const frameState = (opened) => opened.frame().evaluate(() => ({
   updates: window.updates,
   loaded: window.loaded,
   text: document.getElementById("t").textContent,
+  single: window.single,
+  flag: window.flag,
   href: document.getElementById("gf").href,
   faces: [...document.fonts].filter((face) => face.status === "loaded").map((face) => face.family.replace(/["']/g, ""))
 }));
@@ -108,6 +113,7 @@ test("reload, the default: a field change recreates the frame, substitutes place
   assert.deepEqual(state.updates, []);
   assert.equal(state.loaded.font, "Beta");
   assert.equal(state.text, "Second", "the HTML placeholder has the new value");
+  assert.deepEqual([state.single, state.flag], ["Second", "on"], "the JS {field} placeholders have the new values");
   assert.match(state.href, /family=Beta$/);
   assert.ok(state.faces.includes("Beta"), `loaded faces: ${state.faces.join(", ")}`);
 

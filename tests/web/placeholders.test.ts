@@ -55,7 +55,7 @@ test('rewriteCss parses real placeholder CSS through sentinels and round-trips i
   for (const css of [EIGHT_BIT_CSS, CUSTOM_CHAT_CSS]) assert.equal(await rewriteCss(css, async reference => { seen.push(reference); return reference; }), css);
   assert.deepEqual(seen, [], 'the only reference, a Google @import with {{fontFamily}}, is known only after substitution');
   // Adjacent tokens, a token inside a url(), and source that already contains the sentinel prefix.
-  const tricky = '.a{margin:{{top}}{{unit}} 0;background:url(assets/{{image}}.png) , url(assets/x.png)}\n.__sws_tok_0__{width:{{w}}px;content:"__sws_tok_1__"}';
+  const tricky = '.a{margin:{{top}}{{unit}} 0;background:url(assets/{{image}}.png) , url(assets/x.png)}\n.__sws_tok_0__{width:{{w}}px;content:"__sws_tok_1__"}\n.b{height:{h}px;background:url({bg})}';
   const resolved: string[] = [];
   const output = await rewriteCss(tricky, async reference => { resolved.push(reference); return `data:${reference}`; });
   assert.deepEqual(resolved, ['assets/x.png']);
@@ -163,6 +163,27 @@ test('previewDocument substitutes {{field}} in HTML, CSS and JS from the effecti
   assert.match(html, /<source src="data:audio\/mpeg;base64,SUQzIGZha2UgYXVkaW8=">/);
   assert.match(html, /<source src="">/, 'an empty sound-input becomes an empty src, as in StreamElements');
   assert.deepEqual(warnings, []);
+});
+
+test('single-brace {field} placeholders import as written and preview filled in HTML, CSS and JS, after {{field}}', async () => {
+  const store = new MemoryStore();
+  const input = snapshot({
+    html: '<h1 id="title" data-size="{size}">{title}</h1><audio><source src="{sound}"></audio>',
+    css: '#title { width: {size}px; color: {color} } #title::after { content: "{gone} {{title}}" }',
+    js: 'window.fromScript = "{title}"; window.size = {size}; window.css = `${color}`; if (a) {gone}',
+    fields: {title: {type: 'text', value: 'Default'}, size: {type: 'number', value: 10}, color: {type: 'colorpicker', value: 'red'}, sound: {type: 'sound-input', value: 'assets/on.mp3'}}
+  });
+  input.themes = [{schemaVersion: 1, id: 'dark', name: 'Dark', fieldData: {title: 'Theme title'}}];
+  input.assets = [{path: 'assets/on.mp3', content: Buffer.from('ID3 fake audio').toString('base64'), encoding: 'base64', contentType: 'audio/mpeg'}];
+  const prepared = await prepareSnapshot(input, store, 'fixture');
+  assert.equal(prepared.snapshot.widget.css, input.widget.css, 'unquoted {field} CSS is kept exactly as written');
+  assert.match(prepared.snapshot.widget.html, /<source src="\{sound\}">/);
+  const {html, warnings} = await previewDocument(prepared, store, {...previewOptions, themeId: 'dark', fieldData: {size: 24}});
+  assert.match(html, /<h1 id="title" data-size="24">Theme title<\/h1>/);
+  assert.equal(pageCss(html), '#title { width: 24px; color: red } #title::after { content: "{gone} Theme title" }');
+  assert.equal(pageScript(html), 'window.fromScript = "Theme title"; window.size = 24; window.css = `$red`; if (a) {gone}');
+  assert.match(html, /<source src="data:audio\/mpeg;base64,SUQzIGZha2UgYXVkaW8=">/);
+  assert.deepEqual(warnings, [], 'a {name} with no field is not reported');
 });
 
 test('a value that breaks CSS parsing is a preview warning, not an error, and the CSS passes through as substituted', async () => {

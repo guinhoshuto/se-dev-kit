@@ -1,0 +1,64 @@
+{
+  "mutations": [
+    {
+      "file": "src/config/placeholders.ts",
+      "from": "const DOUBLE_SOURCE = String.raw`\\{\\{(\\w*)\\}\\}`;",
+      "to": "const DOUBLE_SOURCE = String.raw`\\{\\{\\s*([\\w.-]*)\\s*\\}\\}`;",
+      "test": "tests/unit/placeholders.test.mjs"
+    },
+    {
+      "file": "src/config/placeholders.ts",
+      "from": "return {text: doubled.replace(new RegExp(SINGLE_SOURCE, \"g\"), fill), missing};",
+      "to": "return {text: doubled, missing};",
+      "test": "tests/unit/placeholders.test.mjs"
+    },
+    {
+      "file": "src/config/placeholders.ts",
+      "from": "const doubled = text.replace(new RegExp(DOUBLE_SOURCE, \"g\"),",
+      "to": "const doubled = text.replace(new RegExp(SINGLE_SOURCE, \"g\"),",
+      "test": "tests/unit/placeholders.test.mjs"
+    },
+    {
+      "file": "src/config/placeholders.ts",
+      "from": "  return String(value);",
+      "to": "  return value === null ? \"\" : typeof value === \"object\" ? JSON.stringify(value) : String(value);",
+      "test": "tests/unit/placeholders.test.mjs"
+    },
+    {
+      "file": "src/config/placeholders.ts",
+      "from": "(Object.hasOwn(fieldData, name) ? placeholderText",
+      "to": "(name in fieldData ? placeholderText",
+      "test": "tests/unit/placeholders.test.mjs"
+    },
+    {
+      "file": "src/config/placeholders.ts",
+      "from": "if (name && !Object.hasOwn(fieldData, name)",
+      "to": "if (!Object.hasOwn(fieldData, name)",
+      "test": "tests/unit/placeholders.test.mjs"
+    },
+    {
+      "file": "src/config/placeholders.ts",
+      "from": "return /\\{\\w+\\}/.test(text);",
+      "to": "return /\\{\\w*\\}/.test(text);",
+      "test": "tests/unit/placeholders.test.mjs"
+    },
+    {
+      "file": "src/config/placeholders.ts",
+      "from": "return /\\{\\w+\\}/.test(text);",
+      "to": "return /\\{\\{\\w+\\}\\}/.test(text);",
+      "test": "tests/unit/placeholders.test.mjs"
+    },
+    {
+      "file": "lib/importer.ts",
+      "from": "css.replace(/\\{\\{\\s*[\\w.-]+\\s*\\}\\}|\\{\\w+\\}/g,",
+      "to": "css.replace(/\\{\\{\\s*[\\w.-]+\\s*\\}\\}/g,",
+      "test": "tests/web/placeholders.test.ts"
+    },
+    {
+      "file": "src/runtime/google-fonts-url.ts",
+      "from": "families.some((family) => /\\{\\w+\\}/.test(family))",
+      "to": "families.some((family) => family.includes(\"{{\"))",
+      "test": "tests/unit/google-fonts-url.test.mjs"
+    }
+  ]
+}

@@ -27,7 +27,7 @@ Submit a JSON object, not a ZIP, multipart upload, file paths, or executable con
 
 `widget.viewport` defaults to `{"width":430,"height":640}`. Its dimensions are integers from 1 to 4096; optional `deviceScaleFactor` is 0.25–2. Each raster dimension after device scaling must remain at most 4096. `widget.ready` accepts optional `selector` and `timeoutMs` (100–30,000); runtime timeout defaults to 10,000 ms. `widget.fieldUpdate` is `"reload"` (the default) or `"event"`: how a scenario `updateFields` step or a tutorial `setField` reaches the widget in jobs, either by reloading it with the new values as StreamElements does, or by dispatching the Studio's `onWidgetUpdate` (see [Runtime](RUNTIME.md#bridge-sequence)). The editor preview always reloads.
 
-`{{field}}` placeholders in `html`, `css`, and `js` are replaced with the effective field values in previews and jobs, as StreamElements does; the stored source keeps them (see [Placeholders](RUNTIME.md#placeholders)).
+`{{field}}` and `{field}` placeholders in `html`, `css`, and `js` are replaced with the effective field values in previews and jobs, as StreamElements does; the stored source keeps them (see [Placeholders](RUNTIME.md#placeholders)).
 
 `widget.fields` accepts object-form FIELDS, an array whose entries have `id` or `name`, or an object with a `fields` property. Object-form dropdown options map stored values to labels: `{"compact":"Compact"}`. Unsupported field types remain available as raw data.
 

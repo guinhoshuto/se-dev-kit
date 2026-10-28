@@ -21,7 +21,7 @@ export type GoogleFontsUrlKind = "css" | "font";
 /**
  * `FONT_UNSUPPORTED`: outside the decided allowlist or the Studio's limits.
  * `FONT_BAD_REQUEST`: a request Google would refuse with 400 (for example an unresolved
- * `{{field}}` placeholder). It is answered locally with status 400 and never reaches upstream.
+ * `{field}` or `{{field}}` placeholder). It is answered locally with status 400 and never reaches upstream.
  */
 export type GoogleFontsUrlErrorCode = "FONT_UNSUPPORTED" | "FONT_BAD_REQUEST";
 
@@ -125,10 +125,10 @@ function validateCssUrl(url: URL): OriginRuleVerdict {
       dropped.push(name);
     }
   }
-  if (families.some((family) => family.includes("{{"))) {
+  if (families.some((family) => /\{\w+\}/.test(family))) {
     return badRequest(
       "placeholder",
-      "The Google Fonts family still contains an unresolved {{field}} placeholder; it was not sent to Google."
+      "The Google Fonts family still contains an unresolved {field} or {{field}} placeholder; it was not sent to Google."
     );
   }
   const entries = familyEntries(url.pathname, families);
