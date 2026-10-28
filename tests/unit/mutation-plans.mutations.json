@@ -1,0 +1,67 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "  if (!isLoopback(origin)) return;\n  const builds",
+      "to": "  if (!isLoopback(origin)) {return;}\n  const builds",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^every entry of every"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "usage(parts.length - 1 === occurrences,",
+      "to": "usage(parts.length - 1 >= 1,",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^a stale plan entry"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "usage(parts.length - 1 === occurrences,",
+      "to": "usage(parts.length - 1 === 1,",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^a stale plan entry"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "const occurrences = raw.occurrences ?? 1;",
+      "to": "const occurrences = raw.occurrences ?? 2;",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^a stale plan entry"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "readdir(resolve(root, 'tests'), {recursive: true})",
+      "to": "readdir(resolve(root, 'tests'))",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^a stale plan entry"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": ".filter(path => path.endsWith('.mutations.json'))",
+      "to": ".filter(path => path.endsWith('.json'))",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^a stale plan entry"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "catch (error) {problems.push(`${plan}: ${error.message}`); continue;}",
+      "to": "catch {continue;}",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^a stale plan entry"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "catch (error) {problems.push(`${plan}: Mutation ${index + 1} (${short(from)}): ${file}: ${error.message}`);}",
+      "to": "catch {}",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^a stale plan entry"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "if (!(error instanceof UsageError)) throw error;\n        problems.push(",
+      "to": "if (!(error instanceof UsageError)) throw error;\n        void (",
+      "test": "tests/unit/mutation-plans.test.mjs",
+      "name": "^a stale plan entry"
+    }
+  ]
+}
