@@ -4,6 +4,8 @@
 //   gate, holding the machine-wide render slot (~/.cache/render-slot, shared with background-creator):
 //   they wait for it in the queue, and for a free machine, up to four hours, and are skipped with the
 //   reason when the disk is low, this checkout left an orphan, or that wait runs out;
+// - the run stops at the first suite that fails, and names each suite after it NOT COVERED, with the command
+//   that runs them;
 // - each suite gets a temporary folder of its own (TMPDIR), which must be empty when the suite ends,
 //   and a render slot inside it, so a CLI render a test starts never waits for the machine's slot.
 //
@@ -189,7 +191,7 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
   const directory = await newDirectory();
   log(`Test logs: ${relative(ROOT, directory)}/`);
   const results = [];
-  for (const name of names) {
+  for (const [index, name] of names.entries()) {
     const suite = suites[name];
     const list = await files(suite);
     if (!list.length) { results.push({name, status: 'passed', detail: 'no files'}); continue; }
@@ -211,12 +213,18 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
     }
     const {code, seconds} = outcome;
     results.push({name, status: code === 0 ? 'passed' : 'failed', detail: `${seconds.toFixed(1)} s${waited}`});
-    if (code !== 0) break;
+    if (code !== 0) {
+      // The run stops at its first failed suite; the ones after it stay in the summary, so it does not read as one failure.
+      for (const later of names.slice(index + 1)) results.push({name: later, status: 'not run', detail: `after ${name} failed`});
+      break;
+    }
   }
   log('');
   for (const result of results) log(`${result.name.padEnd(12)} ${result.status.padEnd(8)} ${result.detail}`);
   const skipped = results.filter(result => result.status === 'skipped').map(result => result.name);
   if (skipped.length) log(`NOT COVERED: ${skipped.join(', ')}. This run did not test them; run npm run wait-free, then npm run test:browser.`);
+  const unrun = results.filter(result => result.status === 'not run').map(result => result.name);
+  if (unrun.length) log(`NOT COVERED: ${unrun.join(', ')}. This run did not test them: ${results.find(result => result.status === 'failed').name} failed and the run stopped there; run them with node scripts/run-tests.mjs ${unrun.join(' ')}.`);
   log(`Logs: ${relative(ROOT, directory)}/`);
   return results.some(result => result.status === 'failed') ? 1 : 0;
 }
