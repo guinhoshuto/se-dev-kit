@@ -118,6 +118,20 @@
       "to": "gate({take:",
       "test": "tests/unit/mutate.test.mjs",
       "name": "^with the render slot held by another process"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": ", ...(error?.code === 'RENDER_SLOT_BUSY' ? {wait: true} : {})",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite waits in the queue"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "repo: 'se-dev-kit', waitLimitMs: SLOT_WAIT_MS, ...options",
+      "to": "repo: 'se-dev-kit', waitLimitMs: SLOT_WAIT_MS, cede: true, ...options",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite that comes while a chain"
     }
   ]
 }

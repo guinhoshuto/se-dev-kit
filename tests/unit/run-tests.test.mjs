@@ -7,8 +7,10 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
 import {setTimeout as sleep} from "node:timers/promises";
+import {fileURLToPath} from "node:url";
 
 import {SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
+import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
 
 async function logFile(t) {
   const directory = await mkdtemp(join(tmpdir(), "sws-runner-log-"));
@@ -102,6 +104,7 @@ test("a browser suite waits in the queue for a held render slot and takes it whe
   const started = Date.now();
   const held = await takeBrowserSlot({dir, wait: false});
   assert.equal(held.ok, false);
+  assert.equal(held.wait, true, "waiting can end a held slot's refusal");
   assert.match(held.reason, new RegExp(`held by pid ${other.pid} \\(background-creator: npm run stills\\)`));
   assert.ok(Date.now() - started < 1000, "without wait, a held slot answers at once");
 
@@ -123,6 +126,29 @@ test("a browser suite waits in the queue for a held render slot and takes it whe
   assert.deepEqual([owner.repo, owner.protocol], ["se-dev-kit", 2], "the owner names this repo, not the package or the folder");
   taken.release();
   assert.equal(await exists(dir), false);
+});
+
+test("a browser suite that comes while a chain of the harness that cedes holds the slot goes in between two of its rounds, ahead of the round already waiting", {timeout: 60_000}, async (t) => {
+  gateOn(t);
+  const dir = await slotFolder(t);
+  const env = {...process.env, RENDER_SLOT_DIR: dir};
+  for (const name of ["RENDER_SLOT_HELD", "RENDER_SLOT_CEDE"]) delete env[name];
+  const script = fileURLToPath(new URL("../../dist/shared/render-slot.js", import.meta.url));
+  const first = chainRound(t, {script, label: "chain.1", env});
+  await first.holding;
+  const second = chainRound(t, {script, label: "chain.2", env});
+  await queueHolds(dir, 1);
+  let secondHeld = false;
+  second.holding.then(() => { secondHeld = true; });
+  const allowed = gate({take: (options) => takeBrowserSlot({...options, dir, pollMs: 50, log: () => {}}), check: async () => ({ok: true}), pauseMs: 0});
+  await queueHolds(dir, 2);
+  first.round.kill("SIGTERM");
+  const taken = await Promise.race([allowed, sleep(15_000, {ok: false, reason: "no slot within 15 s"}, {ref: false})]);
+  assert.equal(taken.ok, true, taken.reason);
+  assert.equal(await ownerPid(dir), process.pid);
+  assert.equal(secondHeld, false, "the chain's next round, first by place, let the suite go first");
+  taken.release();
+  await second.holding;
 });
 
 test("while the machine is busy the gate gives the slot back and asks again in its place, then runs; it gives up at its limit, and without wait at once", {timeout: 30_000}, async (t) => {

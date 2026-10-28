@@ -15,7 +15,9 @@
  * A test under tests/integration starts Chrome, so a run with one passes the test runner's gate for a
  * browser suite (scripts/run-tests.mjs): it takes the machine-wide render slot without waiting, asks
  * the machine check, and holds the slot until its last test ends; the tests inherit it
- * (RENDER_SLOT_HELD). A held slot or a busy machine stops the run before any test or mutation.
+ * (RENDER_SLOT_HELD). A held slot or a busy machine stops the run before any test or mutation, and it prints
+ * the command that runs it again in the render slot queue (render-slot.js run), which a chain of the harness that
+ * cedes (hold --ceder, HAR-301) lets in between two of its steps; npm run wait-free never sees such a chain's slot free.
  *
  * Exit codes: 0 every mutation was killed; 1 at least one survived; 2 usage or setup error, or no free
  * machine for a test that starts Chrome (nothing was judged and every file is back); 3 a file could
@@ -53,7 +55,8 @@ runs, so that mutant cannot kill it, and at the end.
 A mutation is killed when the run is not green: a failure, a cancellation (a timeout), a crash or a hang.
 A test under tests/integration starts Chrome: the run then holds the render slot, taken without waiting,
 once the machine check says the machine is free, as a browser suite of npm test does; otherwise it stops
-before anything runs.
+before anything runs and, when waiting can end that (the slot held, a busy machine), prints the command that
+runs it again waiting in the render slot queue.
 A plan is a JSON array of {file, from, to, test, name?, occurrences?}, or {"mutations": [...]}.
 Exit codes: 0 all killed, 1 some survived, 2 usage or setup error or no free machine, 3 a file could not be restored.`;
 
@@ -127,6 +130,9 @@ export const opensChrome = test => Object.values(SUITES).some(suite => suite.bro
 
 /** The test runner's gate for a browser suite, without its wait: the render slot, taken at once, then the machine check. */
 const machineGate = () => gate({wait: false, take: options => takeBrowserSlot({...options, command: `node scripts/mutate.mjs ${process.argv.slice(2).join(' ')}`.trim().slice(0, 200)})});
+
+/** An argument as a POSIX shell reads it back: as is when plain, else in single quotes. */
+export const shellWord = arg => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`);
 
 /** The spec reporter's totals and the names of the tests that failed. */
 export function summarize(output) {
@@ -310,7 +316,10 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
     if (rebuilds) await build(root);
     if (chrome) {
       const allowed = await machine();
-      usage(allowed.ok, `${chrome.test} starts Chrome, and the machine is not free for it: ${allowed.reason}\nNo test ran and nothing was mutated. Wait for the machine (npm run wait-free) and run mutate again.`);
+      // npm run wait-free never sees the slot free while a chain of the harness holds it step by step (hold --ceder):
+      // in the queue, as a product job, the same run goes in between two of its steps (#14).
+      const again = allowed.wait ? `\nTo wait for it in the render slot queue, which a chain of the harness lets in between two of its steps, run:\n  node dist/shared/render-slot.js run -- node scripts/mutate.mjs ${process.argv.slice(2).map(shellWord).join(' ')}` : '';
+      usage(allowed.ok, `${chrome.test} starts Chrome, and the machine is not free for it: ${allowed.reason}\nNo test ran and nothing was mutated.${again}`);
       slot = allowed;
     }
     const baselines = new Set();
