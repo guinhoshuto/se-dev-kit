@@ -1,0 +1,102 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "steps[index] > STILL && holds(index - beat + 1, index) && holds(index + 1, index + beat)",
+      "to": "steps[index] > STILL && holds(index + 1, index + beat)",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^findBeatLoop counts a change as a beat only between two holds"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "steps[index] > STILL && holds(index - beat + 1, index) && holds(index + 1, index + beat)",
+      "to": "steps[index] > STILL && holds(index - beat + 1, index)",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^findBeatLoop counts a change as a beat only between two holds"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "if (onBeat(start) && onBeat(rest)) {",
+      "to": "if (onBeat(start)) {",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^findBeatLoop"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "|| period < beat || period % beat !== 0) {",
+      "to": "|| period < beat) {",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^findBeatLoop starts the loop"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "(beating.length ? beating : wraps).reduce(",
+      "to": "wraps.reduce(",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^findBeatLoop starts the loop"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "wrap.mean < least.mean ? wrap : least",
+      "to": "wrap.mean > least.mean ? wrap : least",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^findBeatLoop starts the loop"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "mean < BEAT_FLOOR * Math.min(...beats)",
+      "to": "mean < BEAT_FLOOR * Math.max(...beats)",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^wrapError"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "if (mean > BEAT_LIMIT * Math.max(into, out)) return",
+      "to": "if (mean > BEAT_LIMIT * Math.min(into, out)) return",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^wrapError"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "if (beat !== undefined && periodMs === undefined) throw new Error('--beat needs --period');",
+      "to": "",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "--period --beat"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "const [before, first, last, after] = luma(",
+      "to": "const [first, before, last, after] = luma(",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "--period --beat"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "const filter = mode !== 'period'",
+      "to": "const filter = mode === 'cycles'",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "--period --beat"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": ": {periodMs, beat: {frames: beat}};",
+      "to": ": {periodMs};",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "--period --beat"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "if (!Number.isInteger(beat) || beat < 2 || periodMs === undefined) {",
+      "to": "if (!Number.isInteger(beat) || beat < 2) {",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "--period --beat"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "try {line = cutLoop(input, {periodMs, beat});}",
+      "to": "try {line = cutLoop(input, {periodMs});}",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "--period --beat"
+    }
+  ]
+}

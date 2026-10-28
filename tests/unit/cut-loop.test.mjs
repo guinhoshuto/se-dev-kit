@@ -8,7 +8,7 @@ import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
 import test from "node:test";
 
-import {cutLoop, findLoop, findPeriodLoop} from "../../skills/se-widget-studio/scripts/cut-loop.mjs";
+import {cutLoop, findBeatLoop, findLoop, findPeriodLoop, wrapError} from "../../skills/se-widget-studio/scripts/cut-loop.mjs";
 import {detectMediaTooling} from "../../dist/capture/media.js";
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +24,18 @@ function motion(count, changes, length = 5) {
   return moved;
 }
 
+/** A boil's four drawings, as levels over the picture: one every 4 frames, so the cycle repeats every 16. */
+const BOIL = [0, 16, 6, 26];
+
+/**
+ * Levels of a 92-frame video that never holds still: a chat that rests on 40, moves to 120 at 20, to 200 at 40 and
+ * back to 40 at 60 (see changeLevels), under the boil, whose redraw at frame 72 repeats its drawing.
+ */
+function boilLevels() {
+  return changeLevels(92, 40, [[20, 120], [40, 200], [60, 40]])
+    .map((level, index) => level + (index >= 72 && index < 76 ? BOIL[1] : BOIL[Math.floor(index / 4) % 4]));
+}
+
 /** The script as an installed skill runs it: through a link to the skill folder, as ~/.claude/skills/se-widget-studio is. */
 async function linkedScript(root) {
   await symlink(SKILL, join(root, "se-widget-studio"), "dir");
@@ -34,7 +46,7 @@ test("cut-loop run through a link to the skill folder prints its usage", async (
   const root = await mkdtemp(join(tmpdir(), "sws-cut-loop-link-"));
   try {
     const {stdout} = await execFileAsync(process.execPath, [await linkedScript(root), "--help"]);
-    assert.match(stdout, /^Usage: cut-loop\.mjs \[--period <ms>\] <video\.mp4> \[\.\.\.\]\n/);
+    assert.match(stdout, /^Usage: cut-loop\.mjs \[--period <ms> \[--beat <frames>\]\] <video\.mp4> \[\.\.\.\]\n/);
   } finally {
     await rm(root, {recursive: true, force: true});
   }
@@ -75,6 +87,37 @@ test("findPeriodLoop ends the loop where the last change settles and starts it o
   assert.equal(findPeriodLoop(new Array(50).fill(false), 20).error, "the video never changes");
   assert.equal(findPeriodLoop(chat(200), 8).error, "the period must be a whole number of frames longer than the 8-frame blend, not 8");
   assert.equal(findPeriodLoop(chat(200), 110.5).error, "the period must be a whole number of frames longer than the 8-frame blend, not 110.5");
+});
+
+test("findBeatLoop starts the loop on a beat one period before another, at the wrap that changes least without skipping a beat", () => {
+  const frames = boilLevels().map((level) => [level]);
+  // Beats at 4, 8, 12 and 16 have one 72 frames later. The wrap from 75 to 4 repeats a drawing, so it skips a beat;
+  // of the others, 87 to 16 changes least (16 levels, against 20 for 79 to 8 and 26 for 83 to 12).
+  assert.deepEqual(findBeatLoop(frames, 72, 4), {start: 16, rest: 88});
+  assert.equal(findBeatLoop(frames, 84, 4).error, "the wrap from frame 87 to frame 4 changes by 0.000, less than 0.5 of the beats around it (16.000 and 10.000): the period skips a beat");
+  // A period that lands on another picture: frame 35 rests on 120, frame 12 on 40.
+  assert.equal(findBeatLoop(frames, 24, 4).error, "the wrap from frame 35 to frame 12 changes by 54.000, more than 2 times the beats around it (20.000 and 16.000)");
+  assert.equal(findBeatLoop(frames, 88, 4).error, "no beat (a change between two 4-frame holds) has another one 88 frames later");
+  assert.equal(findBeatLoop(frames, 75, 4).error, "the period must be a whole number of 4-frame beats, not 75 frames");
+  assert.equal(findBeatLoop(frames, 72, 1).error, "the beat must be a whole number of frames, at least 2, not 1");
+  // The same video has no still stretch for --period to blend.
+  assert.equal(findPeriodLoop(frames.map(([level], index) => index > 0 && level !== frames[index - 1][0]), 72).error, "the final rest from 89 is 3 frames; the blend needs 8");
+});
+
+test("findBeatLoop counts a change as a beat only between two holds, so a change that starts on a beat cannot hide a skipped one", () => {
+  // The chat pops from 40 to 120 and back on frames 40 to 52, under the boil. 36 frames are 9 beats, so every wrap
+  // repeats a drawing of the boil. From frame 75 to frame 40, where the pop starts on a beat, the pop's own step would
+  // pass for a beat; frame 40 does not hold, and neither does 44, where the pop settles at 120.
+  const frames = changeLevels(100, 40, [[40, 120], [48, 40]]).map((level, index) => [level + BOIL[Math.floor(index / 4) % 4]]);
+  assert.equal(findBeatLoop(frames, 36, 4).error, "the wrap from frame 55 to frame 20 changes by 0.000, less than 0.5 of the beats around it (16.000 and 10.000): the period skips a beat");
+});
+
+test("wrapError takes a wrap between half the smaller beat around it and twice the larger", () => {
+  const wrap = (mean) => wrapError({start: 10, rest: 30, mean, beats: [4, 10]});
+  assert.equal(wrap(2), undefined);
+  assert.equal(wrap(20), undefined);
+  assert.equal(wrap(1.999), "the wrap from frame 29 to frame 10 changes by 1.999, less than 0.5 of the beats around it (4.000 and 10.000): the period skips a beat");
+  assert.equal(wrap(20.001), "the wrap from frame 29 to frame 10 changes by 20.001, more than 2 times the beats around it (4.000 and 10.000)");
 });
 
 /** Encodes one flat gray 64 x 36 frame per level at 30 FPS, nearly lossless. */
@@ -207,6 +250,49 @@ test("cut-loop --period cuts a video that repeats on uneven changes, blending th
 
     await assert.rejects(execFileAsync(process.execPath, [SCRIPT, "--period", "twelve", input]), (error) => error.code === 2
       && error.stderr.includes("--period takes the loop length in milliseconds"));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("cut-loop --period --beat cuts a video that never holds still on its beat, with a wrap that changes like one of its beats", media, async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-cut-loop-beat-"));
+  try {
+    const input = join(root, "boil.mp4");
+    await grayVideo(input, boilLevels());
+    assert.throws(() => cutLoop(input, {beat: 4}), /^Error: --beat needs --period$/);
+    // The boil never rests for the blend --period needs.
+    assert.equal(cutLoop(input, {periodMs: 2400}), "NO-LOOP boil.mp4: the final rest from 89 is 3 frames; the blend needs 8");
+    assert.equal(cutLoop(input, {periodMs: 2500, beat: 4}), "NO-LOOP boil.mp4: the period must be a whole number of 4-frame beats, not 75 frames");
+    assert.match(cutLoop(input, {periodMs: 800, beat: 4}), /^NO-LOOP boil\.mp4: the wrap from frame 35 to frame 12 changes by 5\d\.\d{3}, more than 2 times the beats around it \(/);
+
+    const cli = await execFileAsync(process.execPath, [SCRIPT, "--period", "2400", "--beat", "4", input]);
+    assert.match(cli.stdout, /^LOOP boil\.mp4: frames 16\.\.87 \(72 frames, 2\.400 s, period of 2400 ms on a 4-frame beat\) -> boil-loop\.mp4; cut without a blend; wrap 87 -> 16: mean 1\d\.\d{3} against beats of 2\d\.\d{3} and \d+\.\d{3};/);
+    const output = join(root, "boil-loop.mp4");
+    assert.deepEqual(await videoStream(output), {color_range: "tv", color_space: "bt709", color_transfer: "bt709", color_primaries: "bt709", nb_read_frames: "72"});
+    assert.equal(await x264Crf(output), "16.0");
+    // The loop opens on frame 16 (40) and closes on frame 87 (56), so its wrap is one more beat of the boil.
+    const [first, last] = [await meanLuma(output, 0), await meanLuma(output, 71)];
+    assert.ok(Math.abs(first - 40) <= 2, `the first frame is frame 16, mean luma ${first}`);
+    assert.ok(Math.abs(last - 56) <= 2, `the last frame is frame 87, mean luma ${last}`);
+
+    const record = JSON.parse(await readFile(join(root, "boil-loop.json"), "utf8"));
+    assert.equal(record.mode, "beat");
+    assert.deepEqual(record.loop, {firstFrame: 16, lastFrame: 87, frames: 72, durationMs: 2400, originalOffsetMs: 533.333, periodMs: 2400, beat: {frames: 4}});
+    assert.deepEqual(record.encoding, {codec: "h264", crf: 16, preset: "slow"});
+    assert.equal(record.input.sha256, await sha256(input));
+    assert.equal(record.output.sha256, await sha256(output));
+    // The wrap against the original's beats into the loop's first frame (26 levels) and out of its last (10).
+    const {match} = record;
+    assert.deepEqual([match.frames, match.beats.map(({frames}) => frames)], [[87, 16], [[15, 16], [87, 88]]]);
+    assert.ok(Math.abs(match.mean - 16) <= 1.5, `the wrap changes by the 16 levels of a beat: ${match.mean}`);
+    assert.ok(Math.abs(match.beats[0].mean - 26) <= 1.5 && Math.abs(match.beats[1].mean - 10) <= 1.5, `the beats: ${JSON.stringify(match.beats)}`);
+    assert.ok(Math.abs(match.limit - 2 * match.beats[0].mean) <= 0.002 && Math.abs(match.floor - match.beats[1].mean / 2) <= 0.002, `the bounds: ${match.floor}..${match.limit}`);
+
+    for (const args of [["--beat", "4"], ["--period", "2400", "--beat", "1.5"]]) {
+      await assert.rejects(execFileAsync(process.execPath, [SCRIPT, ...args, input]), (error) => error.code === 2
+        && error.stderr.includes("--beat takes the frames from one change of the widget to the next"));
+    }
   } finally {
     await rm(root, {recursive: true, force: true});
   }
