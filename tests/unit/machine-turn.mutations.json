@@ -1,0 +1,53 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/wait-free.mjs",
+      "from": "queue: 'wait-free', ",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^wait-free waits in the render slot queue with a ticket"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "verdict.reasons.filter((_, at) => verdict.kinds?.[at] !== \"fila\")",
+      "to": "verdict.reasons",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^wait-free waits in the render slot queue with a ticket"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": ", ...(named ? {kinds: tipos as string[]} : {})",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^wait-free waits in the render slot queue with a ticket"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "verdict.kinds.every((kind) => TURN_KINDS.has(kind))",
+      "to": "true",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine with a queue"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "        await sleep(pollMs);\n        continue;",
+      "to": "        continue;",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine with a queue"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "      queue = undefined;\n",
+      "to": "",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine with a queue"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "      if (asked || !line.startsWith(TURN_LINE)) return;",
+      "to": "      if (asked || !line.startsWith(TURN_LINE + \"!\")) return;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^wait-free waits in the render slot queue with a ticket"
+    }
+  ]
+}

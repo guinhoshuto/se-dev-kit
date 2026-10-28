@@ -17,7 +17,7 @@
  * the machine check, and holds the slot until its last test ends; the tests inherit it
  * (RENDER_SLOT_HELD). A held slot or a busy machine stops the run before any test or mutation, and it prints
  * the command that runs it again in the render slot queue (render-slot.js run), which a chain of the harness that
- * cedes (hold --ceder, HAR-301) lets in between two of its steps; npm run wait-free never sees such a chain's slot free.
+ * cedes (hold --ceder, HAR-301) lets in between two of its steps.
  *
  * Exit codes: 0 every mutation was killed; 1 at least one survived; 2 usage or setup error, or no free
  * machine for a test that starts Chrome (nothing was judged and every file is back); 3 a file could
@@ -316,8 +316,8 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
     if (rebuilds) await build(root);
     if (chrome) {
       const allowed = await machine();
-      // npm run wait-free never sees the slot free while a chain of the harness holds it step by step (hold --ceder):
-      // in the queue, as a product job, the same run goes in between two of its steps (#14).
+      // A chain of the harness that holds the slot step by step (hold --ceder) leaves no free slot to take without
+      // waiting: in the queue, as a product job, the same run goes in between two of its steps (#14).
       const again = allowed.wait ? `\nTo wait for it in the render slot queue, which a chain of the harness lets in between two of its steps, run:\n  node dist/shared/render-slot.js run -- node scripts/mutate.mjs ${process.argv.slice(2).map(shellWord).join(' ')}` : '';
       usage(allowed.ok, `${chrome.test} starts Chrome, and the machine is not free for it: ${allowed.reason}\nNo test ran and nothing was mutated.${again}`);
       slot = allowed;

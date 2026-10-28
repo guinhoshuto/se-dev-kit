@@ -547,12 +547,16 @@ export function engineBuilds({engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL} 
  * Before a job on a local Studio, waits while the machine check every repo shares says to wait (another session's
  * render or held render slot, the game, memory, swap, disk), up to 4 hours like the local CLI, and prints why. The
  * job's own worker waits 30 minutes at most, inside its two-hour life, so a long wait belongs here, before the job
- * exists. It never takes the render slot: the job takes it, or runs under the hold of a Studio started with
+ * exists. While the slot or its queue is the reason, it waits in that queue with a product ticket, "vez:
+ * se-widget-studio.job", which a chain that holds the slot step by step and cedes its turn (hold --ceder) lets go
+ * first between two of its steps, and submits at its turn: the chain leaves the free slot to the job's worker for
+ * 30 s (#15). It never takes the render slot: the job takes it, or runs under the hold of a Studio started with
  * RENDER_SLOT_HELD=<hold pid>, which this command then needs too, or the check counts that hold as another
  * session's. A remote Studio renders on another machine. A client without the engine build next to it (a new
  * worktree, a copied skill) asks through the live checkout's, the real path of the global skill's link; with neither,
  * or on a machine without the check, it submits at once and leaves the render slot to the job, saying so on stderr
- * when no build was found. SE_WIDGET_STUDIO_MACHINE_POLL_MS shortens the 20 s between checks for the tests.
+ * when no build was found. A build older than the queue ignores it and polls. SE_WIDGET_STUDIO_MACHINE_POLL_MS
+ * shortens the 20 s between checks for the tests.
  */
 export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL, check} = {}) {
   if (!isLoopback(origin)) return;
@@ -563,9 +567,9 @@ export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, li
   }
   if (!machine) {process.stderr.write(`[se-widget-studio] machine check skipped: no engine build at ${builds.join(' or ')}\n`); return;}
   const pollMs = Number(process.env.SE_WIDGET_STUDIO_MACHINE_POLL_MS);
-  const say = message => message.replace(/^Waiting for the machine: /, 'Waiting for the machine before submitting: ').replace(/^The machine is free; rendering\.$/, 'The machine is free; submitting the job.');
+  const say = message => message.replace(/^Waiting for the machine\b/, 'Waiting for the machine before submitting').replace(/^(The machine is free.*); rendering\.$/, '$1; submitting the job.');
   try {
-    await machine.waitForMachine({...(check ? {check} : {}), ...(Number.isSafeInteger(pollMs) && pollMs >= 50 && pollMs <= 20_000 ? {pollMs} : {}), log: message => process.stderr.write(`[se-widget-studio] ${say(message)}\n`)});
+    await machine.waitForMachine({queue: 'se-widget-studio.job', ...(check ? {check} : {}), ...(Number.isSafeInteger(pollMs) && pollMs >= 50 && pollMs <= 20_000 ? {pollMs} : {}), log: message => process.stderr.write(`[se-widget-studio] ${say(message)}\n`)});
   } catch (error) {
     fail([error instanceof Error ? error.message : String(error), error?.hint, 'No job was submitted.'].filter(Boolean).join(' '));
   }

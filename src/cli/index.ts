@@ -338,7 +338,7 @@ async function inRenderSlot<T>(task: (machineFree: () => Promise<void>) => Promi
     throw error instanceof RenderSlotError ? new StudioError(error.code, error.detail, error.hint, {cause: error}) : error;
   });
   try {
-    return await task(() => (slot.inherited ? Promise.resolve() : waitForMachine({wait, log})));
+    return await task(() => (slot.inherited ? Promise.resolve() : waitForMachine({wait, log}).then(() => {})));
   } finally {
     slot.release();
   }

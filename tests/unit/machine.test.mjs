@@ -12,6 +12,7 @@ import {fileURLToPath} from "node:url";
 import {BROWSER_MARKER as ENGINE_MARKER} from "../../dist/capture/browser.js";
 import {BROWSER_MARKER, HEAVY_PATTERNS, WRAPPERS, browserGate, checkoutOrphans, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseUsage, parseVerdict, readUsage, splitStalled} from "../../scripts/lib/machine.mjs";
 import {killStale} from "../../scripts/kill-stale.mjs";
+import {cedingChain, productStep, RENDER_SLOT, slotCheck, steps} from "./ceding-chain.mjs";
 
 const ROOT = "/work/se-dev-kit";
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -399,4 +400,48 @@ test("wait-free waits for what the machine check says, and exits 0 once it says 
   const free = await run(await fakeCheck(t, {livre: true, motivos: [], reasons: []}, 0));
   assert.equal(free.code, 0, free.output);
   assert.match(free.output, /^Machine free after 0 check\(s\)\.$/m);
+});
+
+test("wait-free waits in the render slot queue with a ticket, which a chain that cedes lets in between two of its steps", {timeout: 90_000}, async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-wait-free-chain-"));
+  const log = join(root, "steps.log");
+  const {RENDER_SLOT_HELD: _held, ...rest} = process.env;
+  const env = {...rest, RENDER_SLOT_DIR: join(root, "slot"), RENDER_SLOT_CHECK: "off", MACHINE_CHECK: await slotCheck(root)};
+  const status = () => JSON.parse(execFileSync(process.execPath, [RENDER_SLOT, "status", "--json"], {env, encoding: "utf8"}));
+  const until = async (condition, ms) => {
+    for (const deadline = Date.now() + ms; Date.now() < deadline; await sleep(50)) if (await condition()) return true;
+    return condition();
+  };
+  // A step of the chain holds the slot until the test has seen the waiter's ticket in the queue.
+  let gate = true;
+  const chain = cedingChain({env, log, gate: () => gate});
+  let waiter;
+  try {
+    assert.ok(await until(() => status().holder?.command.startsWith("hold: chain-"), 20_000), "the chain holds the slot");
+    waiter = spawn(process.execPath, [fileURLToPath(new URL("../../scripts/wait-free.mjs", import.meta.url)), "--timeout-min", "0.5", "--interval-s", "1"], {cwd: fileURLToPath(new URL("../../", import.meta.url)), env, stdio: ["ignore", "pipe", "pipe"]});
+    let output = "";
+    waiter.stdout.on("data", (chunk) => { output += chunk; });
+    waiter.stderr.on("data", (chunk) => { output += chunk; });
+    const exited = once(waiter, "exit");
+    // 2026-10-27: a wait-free that polled waited 22 min behind the vault's chain, and the queue named nobody (#15).
+    const ticket = () => status().queue.find((waiting) => waiting.command === "vez: wait-free");
+    assert.ok(await until(ticket, 20_000), `render-slot status lists the ticket of wait-free while the chain holds the slot: ${output}`);
+    assert.equal(ticket().cede, false, "a product ticket, which goes ahead of the chain's");
+    gate = false;
+    const [code] = await exited;
+    assert.equal(code, 0, output);
+    assert.match(output, /^Machine free after \d+ check\(s\), at its turn in the render slot queue: start the render now/m);
+    // The render that follows takes the slot that the chain leaves it, and the chain goes on after it.
+    await productStep(env, log, "render");
+    const render = () => steps(log).find((step) => step.who === "render");
+    assert.ok(await until(() => steps(log).some((step) => step.who === "chain" && step.from > render().to), 20_000), "the chain takes the slot again after the render");
+    const chainSteps = steps(log).filter((step) => step.who === "chain");
+    assert.ok(chainSteps.some((step) => step.to < render().from), "a step of the chain held the slot before the render");
+    assert.ok(chainSteps.every((step) => step.to < render().from || step.from > render().to), "no step of the chain overlaps the render");
+  } finally {
+    // SIGTERM, which takes its ticket out of the queue with it.
+    if (waiter?.exitCode === null) { waiter.kill("SIGTERM"); await once(waiter, "exit"); }
+    await chain.stop();
+    await rm(root, {recursive: true, force: true});
+  }
 });
