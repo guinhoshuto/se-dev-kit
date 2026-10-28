@@ -64,6 +64,41 @@
       "name": "^npm test waits"
     },
     {
+      "file": "scripts/run-tests.mjs",
+      "from": "for (const later of names.slice(index + 1)) results.push(",
+      "to": "for (const later of []) results.push(",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run stops at its first failed suite"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "names.slice(index + 1)",
+      "to": "names.slice(index)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run stops at its first failed suite"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "if (unrun.length) log(",
+      "to": "if (false) log(",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run stops at its first failed suite"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "run them with node scripts/run-tests.mjs ${unrun.join(' ')}.",
+      "to": "run them with node scripts/run-tests.mjs.",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run stops at its first failed suite"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "      break;\n    }\n  }\n  log('');",
+      "to": "    }\n  }\n  log('');",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run stops at its first failed suite"
+    },
+    {
       "file": "scripts/lib/machine.mjs",
       "from": "{ok: false, wait: true, reason: `the machine check says to wait:",
       "to": "{ok: false, reason: `the machine check says to wait:",

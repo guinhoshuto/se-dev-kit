@@ -195,6 +195,42 @@ test("npm test waits for a held slot, then runs integration and web:browser hold
   assert.equal(await exists(dir), false, "the run gives the slot back");
 });
 
+test("a run stops at its first failed suite and names each suite after it NOT COVERED, with the command that runs them", async () => {
+  const suites = {unit: {}, integration: {browser: true}, web: {}, "web:browser": {browser: true}};
+  const summary = async (failing, refused = []) => {
+    const lines = [];
+    const ran = [];
+    const code = await runSuites(Object.keys(suites), {
+      suites,
+      files: async () => ["fake.test.mjs"],
+      gateFor: async () => (refused.length ? {ok: false, reason: refused.shift()} : {ok: true, release: () => {}}),
+      run: async (name) => { ran.push(name); return {code: name === failing ? 1 : 0, seconds: 0.5}; },
+      // Nothing is written there: run is fake.
+      newDirectory: async () => join(tmpdir(), "sws-runner-unused"),
+      log: (line) => lines.push(line)
+    });
+    return {code, ran, text: lines.join("\n")};
+  };
+
+  // 2026-10-27: unit failed on the render-slot copy and the summary said only "unit failed".
+  const first = await summary("unit");
+  assert.equal(first.code, 1);
+  assert.deepEqual(first.ran, ["unit"], "the run still stops at the failure");
+  assert.match(first.text, /^unit +failed +0\.5 s$/m);
+  for (const name of ["integration", "web", "web:browser"]) assert.match(first.text, new RegExp(`^${literal(name)} +not run +after unit failed$`, "m"));
+  assert.match(first.text, /^NOT COVERED: integration, web, web:browser\. This run did not test them: unit failed and the run stopped there; run them with node scripts\/run-tests\.mjs integration web web:browser\.$/m);
+
+  // A browser suite the gate skipped keeps its own line and command; the suite after the failure gets the other.
+  const both = await summary("web", ["only 2.9 GiB free"]);
+  assert.deepEqual(both.ran, ["unit", "web"]);
+  assert.match(both.text, /^NOT COVERED: integration\. This run did not test them; run npm run wait-free, then npm run test:browser\.$/m);
+  assert.match(both.text, /^NOT COVERED: web:browser\. This run did not test them: web failed and the run stopped there; run them with node scripts\/run-tests\.mjs web:browser\.$/m);
+
+  const last = await summary("web:browser");
+  assert.deepEqual(last.ran, ["unit", "integration", "web", "web:browser"]);
+  assert.doesNotMatch(last.text, /NOT COVERED|not run/, "a failure in the last suite leaves nothing unrun");
+});
+
 test("the gate takes the slot before the machine check and gives it back at once when the check refuses for a reason waiting cannot end", async (t) => {
   gateOn(t);
   const dir = await slotFolder(t);
