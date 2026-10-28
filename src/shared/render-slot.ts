@@ -109,6 +109,50 @@
 // never who holds it, and the wait limit still counts from the arrival. A copy older than the places reads
 // order.json as no ticket and the queue in arrival order, so it can only jump it: PROTOCOL stays.
 //
+// Turns (2026-10-27, HAR-301): a waiter that cedes, a chain of the harness that takes the slot step by step
+// (`hold --ceder`, the hold of each round of mutar_copia.py; `run` with RENDER_SLOT_CEDE=1, a step of
+// cadeia_planos.py), lets a product job that comes while it waits go first, between two of its steps: the
+// step that holds the slot is never cut short. On 2026-10-26 the preview of the Shoji stinger waited 362
+// minutes behind 247 holds of mutation (two chains taking turns, a new hold every 1.5 minutes, each taking
+// the free slot within 2 seconds) and gave up without a render. Every ticket this copy writes carries
+// "fila": 2, and the ticket of a waiter that cedes "cede": true too, as does the owner.json it writes;
+// `run` takes RENDER_SLOT_CEDE out of its command's environment, so a test that a chain runs does not cede.
+// The turn: the tickets by place, as above; then, front to back, each product ticket ("fila": 2, without
+// "cede") goes ahead of the tickets that cede right before it, and stops at the first that does not cede.
+// Never a pairwise "product before cede" comparison: with a ticket of an older copy (no "fila") in between
+// it is not transitive (P < C, and by place C < O < P), and a sort has no answer. No ticket ever passes one
+// that does not cede, so an older copy's ticket has the same tickets ahead of it in the turn as by place: it
+// is first in the turn exactly when it is first by place, the order the older copy reads, and the two
+// copies never wait for each other. A product's ticket goes away between `maquina_livre.py --esperar`
+// (which waits with `vez`) and its `run`. Until 2026-10-27 a waiter that cedes then left a free slot for 30
+// seconds after it last saw a live product ticket ahead of it; the review found that this stopped the chain
+// while the product could not run: a product that gives its turn back with the memory low comes back within
+// 24 s, and a `run` that finds the machine busy gives the slot back for 20 s, so the 30 s renewed themselves
+// and the chain made no step for 79 and 84 s in the simulation, and in practice up to the limit of either.
+// Now one that cedes leaves a free slot for two short reasons only. The gap: CEDE_GAP_MS (5 s) after the last
+// live product ticket ahead of it in the turn went away, the hop of `vez` from one slice of its wait to the
+// next and from its turn to its baton. Only ahead: one behind it waits behind an older copy's ticket, which
+// waits for this one; and an older copy's ticket, without "fila", starts no gap. The baton: at its turn `vez`
+// writes <slot>.queue/baton.json ({protocol, pid, label, at}, through a temporary file and a rename), and
+// while a baton written after the last boot is less than BATON_MS (30 s) old, one that cedes leaves the free
+// slot to the `run` that follows. The first owner that does not cede to take the slot (that `run`, a `hold`
+// without --ceder, any other) removes the baton as it takes it, so the slot never stays free and idle after
+// the product's job; anyone removes a baton older than that or from before the boot. A product that will not
+// run leaves none: `vez --conferir` that hears "back", and a `run` that gives the slot back with the machine
+// busy, which comes back first through its `since`; the chain takes one step meanwhile.
+// `node render-slot.ts vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir]` waits in the queue
+// as a product, as the command "vez: <label>", and takes nothing: once it is the first live ticket and the
+// slot is free (or held by its family, RENDER_SLOT_HELD), it prints "Your turn in the render slot queue" on
+// stdout. Without --conferir it writes the baton, takes its ticket out and exits 0. With --conferir it keeps
+// its ticket beating while its caller decides (the memory floor of maquina_livre.py) and reads one line on
+// stdin: "go" or the end of stdin writes the baton, "back" writes none; either takes the ticket out and exits
+// 0. It exits 75 at the wait limit (4 hours, or --max minutes, from --since), also with no line by then;
+// --since keeps its place, as `run` does when it asks again. `status` and `status --json` say who cedes and
+// the baton, and a `move` that would trade a ticket that cedes with one that does not exits 1. The fields
+// are optional, and a copy older than the turns reads both tickets as any other, in the order of the places,
+// so it can only jump the turn; it reads only ticket names and .tmp files in the queue, so it never sees the
+// baton: PROTOCOL stays.
+//
 // `protocol` is PROTOCOL below. Raise it whenever a change would let an older copy break the slot of
 // a newer one (a new file in the slot, another way to clear the mutex). An owner.json without it was
 // written by protocol 1 (the copies before 2026-09-30) and is judged as always. A slot written by a
@@ -152,7 +196,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-export type SlotOwner = {protocol?: number; pid: number; repo: string; command: string; startedAt: string; commandPgid?: number};
+export type SlotOwner = {protocol?: number; pid: number; repo: string; command: string; startedAt: string; commandPgid?: number; cede?: boolean};
 export type SlotHandle = {release: () => void; inherited: boolean};
 export type SlotOptions = {
   command: string;
@@ -168,9 +212,30 @@ export type SlotOptions = {
    * gave the slot back and asks again. Before the last boot or after now, it is ignored. Default: now.
    */
   since?: number;
+  /** A chain of the harness (HAR-301): a product ticket that comes while it waits goes ahead of it. */
+  cede?: boolean;
+  /** How long one that cedes leaves a free slot after it last saw a product ticket ahead. Default: CEDE_GAP_MS. */
+  cedeGapMs?: number;
+  /** How long a product's baton keeps one that cedes off the free slot. Default: BATON_MS. */
+  batonMs?: number;
+  /** false (`vez`): at its turn, with the slot free, it leaves the queue without taking the slot. */
+  take?: boolean;
 };
 
 export const HELD_ENV = 'RENDER_SLOT_HELD';
+/** `run` cedes its turn with RENDER_SLOT_CEDE=1 in its environment (HAR-301), and takes it out of its command's. */
+export const CEDE_ENV = 'RENDER_SLOT_CEDE';
+/**
+ * How long one that cedes leaves a free slot after a product ticket ahead went away (HAR-301): the hop of `vez`
+ * from one slice of its wait to the next, and from its turn to its baton. Never the 20 s of a busy `run`.
+ */
+export const CEDE_GAP_MS = 5_000;
+/** How long the baton of `vez` keeps one that cedes off the free slot (HAR-301): from `vez` to its `run`, with room. */
+export const BATON_MS = 30_000;
+/** The baton, in the queue directory: a name an older copy's readQueue never reads. */
+const BATON_FILE = 'baton.json';
+/** The "fila" of every ticket this copy writes: a product ticket with it goes ahead of the ones that cede. */
+const FILA = 2;
 /** The protocol this copy writes and understands; see the top of this file. */
 export const PROTOCOL = 2;
 const POLL_MS = 2000;
@@ -572,7 +637,7 @@ export const queueDir = (dir = slotDir()) => `${dir}.queue`;
  * A waiter in the queue: arrival in ms since the epoch, its place in the queue (the arrival, unless a
  * move gave it another), and how long its ticket has gone untouched.
  */
-export type QueueTicket = {name: string; pid: number; enqueuedAt: number; place: number; repo: string; command: string; silentMs: number};
+export type QueueTicket = {name: string; pid: number; enqueuedAt: number; place: number; repo: string; command: string; silentMs: number; cede: boolean; fila: number | null};
 
 const ticketName = (at: number, pid: number) => `${String(at).padStart(15, '0')}-${String(pid).padStart(7, '0')}.json`;
 
@@ -616,14 +681,65 @@ const readQueue = (queue: string): {tickets: QueueTicket[]; strays: string[]; or
     }
     let repo = '?';
     let command = '?';
+    let cede = false;
+    let fila: number | null = null;
     try {
-      const data = JSON.parse(readFileSync(path.join(queue, name), 'utf8')) as {repo?: unknown; command?: unknown};
+      const data = JSON.parse(readFileSync(path.join(queue, name), 'utf8')) as {repo?: unknown; command?: unknown; cede?: unknown; fila?: unknown};
       if (typeof data.repo === 'string') repo = data.repo;
       if (typeof data.command === 'string') command = data.command;
+      cede = data.cede === true;
+      if (typeof data.fila === 'number') fila = data.fila;
     } catch { /* the name alone places it */ }
-    tickets.push({name, pid: Number(match[2]), enqueuedAt: Number(match[1]), place: placeOf(name, order), repo, command, silentMs});
+    tickets.push({name, pid: Number(match[2]), enqueuedAt: Number(match[1]), place: placeOf(name, order), repo, command, silentMs, cede, fila});
   }
   return {tickets: tickets.sort(byPlace), strays, order};
+};
+
+/** The baton of a product on its way to the slot (HAR-301): `vez` writes it at its turn, for the `run` that follows. */
+type Baton = {pid: number; label: string; at: number};
+
+/**
+ * The baton in `queue` while it holds: written after the last boot, less than `batonMs` ago. One that no longer
+ * holds, or cannot be read, is removed when `clear` (anyone that waits); `status` only reads.
+ */
+const readBaton = (queue: string, batonMs: number, clear: boolean): Baton | null => {
+  const file = path.join(queue, BATON_FILE);
+  let data: {pid?: unknown; label?: unknown; at?: unknown} | null;
+  try {
+    data = JSON.parse(readFileSync(file, 'utf8')) as typeof data;
+  } catch (error) {
+    if (clear && errorCode(error) !== 'ENOENT') removeQuietly(file);
+    return null;
+  }
+  const at = typeof data?.at === 'number' ? data.at : NaN;
+  // Read after the round began: a baton written meanwhile is a few ms ahead of that round's now.
+  if (at >= bootTimeMs() && Math.abs(Date.now() - at) < batonMs) return {pid: Number(data?.pid), label: typeof data?.label === 'string' ? data.label : '?', at};
+  if (clear) removeQuietly(file);
+  return null;
+};
+
+/** What the turn reads of a ticket: its place and name, and whether it cedes and which copy wrote it. */
+type Turnable = {name: string; place: number; cede: boolean; fila: number | null};
+
+/**
+ * The tickets in the order they take the slot, the turn of HAR-301 (see the top of this file): by place, then,
+ * front to back, each product ticket of this copy ("fila": 2, without "cede") goes ahead of the tickets that cede
+ * right before it, and stops at the first that does not cede. Not a pairwise comparison: with an older copy's
+ * ticket (no "fila") in between, "product before cede" is not transitive. Since no ticket passes one that does not
+ * cede, an older copy's ticket has the same tickets ahead of it here as by place, the order the older copy reads:
+ * it is first here exactly when it is first by place, and the two copies never wait for each other.
+ */
+export const inTurn = <T extends Turnable>(tickets: readonly T[]): T[] => {
+  const turn = [...tickets].sort(byPlace);
+  for (let at = 1; at < turn.length; at += 1) {
+    const ticket = turn[at] as T;
+    if (ticket.cede || ticket.fila !== FILA) continue;
+    let to = at;
+    while (to > 0 && (turn[to - 1] as T).cede) to -= 1;
+    turn.splice(at, 1);
+    turn.splice(to, 0, ticket);
+  }
+  return turn;
 };
 
 /**
@@ -640,25 +756,28 @@ const judgeTicket = (ticket: QueueTicket, judgeSilence: boolean): 'live' | 'quie
 
 /** The live waiters, in the order they take the slot. Read only: nothing is removed. */
 export const renderSlotQueue = (dir = slotDir()): QueueTicket[] =>
-  readQueue(queueDir(dir)).tickets.filter((ticket) => judgeTicket(ticket, true) === 'live');
+  inTurn(readQueue(queueDir(dir)).tickets.filter((ticket) => judgeTicket(ticket, true) === 'live'));
 
 /**
- * The live tickets ahead of `own`, or all of them when `own` is null, in order. Gone tickets and old
+ * The live tickets ahead of `own` in the turn, or all of them when `own` is null, in order. Gone tickets and old
  * temporary files are removed on the way; quiet tickets are skipped.
  */
-const ticketsAhead = (queue: string, own: string | null, judgeSilence: boolean): QueueTicket[] => {
+const ticketsAhead = (queue: string, own: {name: string; cede: boolean} | null, judgeSilence: boolean): QueueTicket[] => {
   const {tickets, strays, order} = readQueue(queue);
   for (const stray of strays) removeQuietly(path.join(queue, stray));
-  // Its place holds while its ticket is away (removed by another waiter, and not written again yet).
-  const mine = own === null ? null : {name: own, place: placeOf(own, order)};
-  const ahead: QueueTicket[] = [];
+  // The whole queue is judged: in the turn, a product behind this waiter by place can come ahead of it (HAR-301).
+  const live: QueueTicket[] = [];
   for (const ticket of tickets) {
-    if (mine !== null && byPlace(ticket, mine) >= 0) break;
+    if (ticket.name === own?.name) continue;
     const verdict = judgeTicket(ticket, judgeSilence);
     if (verdict === 'gone') removeQuietly(path.join(queue, ticket.name));
-    else if (verdict === 'live') ahead.push(ticket);
+    else if (verdict === 'live') live.push(ticket);
   }
-  return ahead;
+  if (own === null) return inTurn(live);
+  // Its place holds while its ticket is away (removed by another waiter, and not written again yet).
+  const mine: Turnable = {name: own.name, place: placeOf(own.name, order), cede: own.cede, fila: FILA};
+  const turn = inTurn<Turnable>([...live, mine]);
+  return turn.slice(0, turn.indexOf(mine)) as QueueTicket[];
 };
 
 /** Writes a ticket through a temporary file and a rename; false when the queue cannot be written. */
@@ -707,7 +826,13 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
   const waitLimitMs = options.waitLimitMs ?? WAIT_LIMIT_MS;
   const log = options.log ?? ((message: string) => console.log(message));
   const repo = options.repo ?? defaultRepo();
-  const body = `${JSON.stringify({protocol: PROTOCOL, pid: process.pid, repo, command: options.command})}\n`;
+  const cede = options.cede === true;
+  const take = options.take !== false;
+  const gapMs = options.cedeGapMs ?? CEDE_GAP_MS;
+  const batonMs = options.batonMs ?? BATON_MS;
+  const body = `${JSON.stringify({protocol: PROTOCOL, pid: process.pid, repo, command: options.command, fila: FILA, ...(cede ? {cede: true} : {})})}\n`;
+  // One that cedes: when it last saw a live product ticket ahead of it in the turn (HAR-301).
+  let productAheadAt = -Infinity;
   const started = Date.now();
   // The place in the queue: when this waiter first came, never before the last boot nor after now.
   const {since} = options;
@@ -765,16 +890,31 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
       if (now - lastRound > TICKET_FRESH_MS) awakeSince = now;
       lastRound = now;
       if (ticket !== null) touchTicket(queue, ticket, body);
-      const ahead = ticketsAhead(queue, ticket, now - awakeSince >= TICKET_FRESH_MS);
+      const ahead = ticketsAhead(queue, ticket === null ? null : {name: ticket, cede}, now - awakeSince >= TICKET_FRESH_MS);
+      if (cede && ahead.some((waiting) => !waiting.cede && waiting.fila === FILA)) productAheadAt = now;
       const next = ahead[0];
+      // One that cedes leaves the free slot to a product on its way (HAR-301): for the short gap after a product
+      // ticket ahead went away (the hop of `vez`), and while the baton of a `vez` at its turn holds, for its `run`.
+      const gap = now - productAheadAt < gapMs;
+      const baton = cede && next === undefined ? readBaton(queue, batonMs, true) : null;
+      // With an older copy's ticket in the queue (no "fila"), the baton holds nothing: the older copy waits for this
+      // one by place, and the product's `run` never passes it, so leaving the slot only stalls the three until the
+      // baton wears out (the second review, 2026-10-27: 30 s with nothing running, and the product last).
+      const olderWaits = baton !== null && renderSlotQueue(dir).some((waiting) => waiting.fila !== FILA);
+      const leavesIt = next === undefined && (gap || (baton !== null && !olderWaits)) && renderSlotHolder(dir) === undefined;
       let waitingFor: string;
       let wayOut: string;
-      if (next === undefined) {
-        if (makeSlotDir(dir)) {
-          const owner: SlotOwner = {protocol: PROTOCOL, pid: process.pid, repo, command: options.command, startedAt: new Date().toISOString()};
+      if (next === undefined && !leavesIt) {
+        // `vez`: its turn, with the slot free; the finally below takes the ticket out, and nothing is taken.
+        if (!take && !exists(dir)) return {inherited: false, release: () => {}};
+        if (take && makeSlotDir(dir)) {
+          const owner: SlotOwner = {protocol: PROTOCOL, pid: process.pid, repo, command: options.command, startedAt: new Date().toISOString(), ...(cede ? {cede: true} : {})};
           const temporary = path.join(dir, `${OWNER_FILE}.tmp`);
           writeFileSync(temporary, `${JSON.stringify(owner, null, 2)}\n`);
           renameSync(temporary, path.join(dir, OWNER_FILE));
+          // The first owner that does not cede spends the baton (HAR-301): the product's `run`, or one that came before
+          // it; either way the free slot is no longer one to wait for.
+          if (!cede) removeQuietly(path.join(queue, BATON_FILE));
           process.env[HELD_ENV] = String(process.pid);
           // The finally below takes the ticket out.
           const onExit = () => { releaseRenderSlot(dir); };
@@ -814,6 +954,15 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
         waitingFor = holder;
         // No promise of an automatic takeover while a mutex of a live pid blocks it.
         wayOut = `${blocker === null ? 'Run again when that render ends; a slot whose pid is gone is taken over automatically. ' : ''}${hint}`;
+      } else if (next === undefined) {
+        const why = baton === null
+          ? `a product job left the queue less than ${gapMs / 1000} s ago and may come back for it`
+          : `a product is on its way to it (pid ${baton.pid}, "${VEZ_PREFIX}${baton.label}", its turn ${Math.max(0, Math.round((now - baton.at) / 1000))} s ago)`;
+        if (options.wait === false) throw new RenderSlotError('RENDER_SLOT_BUSY', `The render slot (${dir}) is free, but ${why}.`, 'Run again in a few seconds.');
+        joinQueue();
+        say(baton === null ? 'gap' : `baton ${baton.pid} ${baton.at}`, `Waiting for the render slot: it is free, but this waiter cedes its turn and ${why} (HAR-301).`);
+        waitingFor = `the slot free, left to a product job: ${why}`;
+        wayOut = `A waiter that cedes takes a free slot ${gapMs / 1000} s after the last product job ahead of it left the queue, once no baton of a product holds it (${batonMs / 1000} s at most).`;
       } else {
         // Waiters that came first: the first of them takes the slot when it frees.
         const state = renderSlotHolder(dir);
@@ -989,7 +1138,7 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
   try {
     let slot: SlotHandle;
     try {
-      slot = await takeSlotToRun({command: command.join(' ').slice(0, 200), log: (message) => console.error(message), ...options});
+      slot = await takeSlotToRun({command: command.join(' ').slice(0, 200), log: (message) => console.error(message), ...options, cede: options.cede ?? process.env[CEDE_ENV] === '1'});
     } catch (error) {
       if (!(error instanceof RenderSlotError)) throw error;
       console.error(error.message);
@@ -1000,7 +1149,10 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
     for (const signal of SIGNALS) for (const listener of process.listeners(signal)) if (listener !== onSignal) process.off(signal, listener);
     try {
       // Detached: the command leads a process group of its own, which a forwarded signal reaches whole.
-      const started = spawn(program, args, {stdio: 'inherit', detached: true});
+      // The mark of a chain that cedes stays with this run: a test of the slot that a chain runs is no chain (HAR-301).
+      const env: NodeJS.ProcessEnv = {...process.env};
+      delete env[CEDE_ENV];
+      const started = spawn(program, args, {stdio: 'inherit', detached: true, env});
       child = started;
       if (started.pid !== undefined) recordCommandGroup(options.dir ?? slotDir(), started.pid);
       const status = await new Promise<number>((resolve) => {
@@ -1074,6 +1226,93 @@ export const holdSlot = async (label: string, maxMinutes: number, options: Parti
   }
 };
 
+export const VEZ_PREFIX = 'vez: ';
+const VEZ_USAGE = 'render-slot vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir]';
+
+/** One line of `input` without its newline: null at the end of `input`, undefined when `limitMs` passes first. */
+const readLine = (input: NodeJS.ReadableStream, limitMs: number) => new Promise<string | null | undefined>((resolve) => {
+  let text = '';
+  const done = (line: string | null | undefined) => {
+    clearTimeout(timer);
+    input.off('data', onData);
+    input.off('end', onEnd);
+    input.off('error', onEnd);
+    input.pause();
+    resolve(line);
+  };
+  const onData = (chunk: Buffer | string) => {
+    text += String(chunk);
+    const at = text.indexOf('\n');
+    if (at >= 0) done(text.slice(0, at));
+  };
+  const onEnd = () => done(text === '' ? null : text);
+  const timer = setTimeout(() => done(undefined), limitMs);
+  input.on('data', onData);
+  input.once('end', onEnd);
+  input.once('error', onEnd);
+});
+
+/** What `vez` alone takes (HAR-301): --conferir, and the stream it reads the answer from (stdin). */
+export type TurnOptions = {confirm?: boolean; input?: NodeJS.ReadableStream};
+
+/**
+ * `render-slot vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir]` (HAR-301): waits in the queue as
+ * a product job, as "vez: <label>", and takes nothing; at its turn (the first live ticket, with the slot free or its
+ * family's) it writes the baton and resolves to 0. With `confirm` it keeps its ticket beating and reads one line of
+ * `input` first: "go" or its end writes the baton, "back" none, both resolve to 0. It resolves to 75 at the wait
+ * limit (--max minutes, 240 by default, from `since`), with no answer by then too, and to 2 on a usage error.
+ */
+export const waitForTurn = async (label: string, maxMinutes = HOLD_MAX_MINUTES, options: Partial<SlotOptions> & TurnOptions = {}): Promise<number> => {
+  const {confirm = false, input = process.stdin, ...slotOptions} = options;
+  const refusal = refusedHold(label, maxMinutes);
+  if (refusal !== null) {
+    console.error(refusal.replace('render-slot hold --rotulo <label> --max <minutes>', VEZ_USAGE));
+    return EXIT_USAGE;
+  }
+  const now = Date.now();
+  const {since: asked} = slotOptions;
+  // Its place and its wait limit both count from when it first came, as for `run` (THB-28).
+  const since = asked !== undefined && asked >= bootTimeMs() && asked <= now ? asked : now;
+  const limitMs = slotOptions.waitLimitMs ?? maxMinutes * 60_000;
+  const command = `${VEZ_PREFIX}${label}`;
+  try {
+    await acquireRenderSlot({command, log: (message) => console.error(message), ...slotOptions, since, waitLimitMs: Math.max(0, limitMs - (now - since)), cede: false, take: false});
+  } catch (error) {
+    if (!(error instanceof RenderSlotError)) throw error;
+    console.error(error.message);
+    return EXIT_GAVE_UP;
+  }
+  const queue = queueDir(slotOptions.dir ?? slotDir());
+  const handBaton = () => writeTicket(queue, BATON_FILE, `${JSON.stringify({protocol: PROTOCOL, pid: process.pid, label, at: Date.now()})}\n`);
+  console.log(`Your turn in the render slot queue (pid ${process.pid}, "${command}", there since ${new Date(since).toISOString()}): take the slot now.`);
+  if (!confirm) {
+    handBaton();
+    return 0;
+  }
+  // --conferir: the turn stays its own while its caller decides, under the same ticket, beating as in the wait; it
+  // takes nothing and frees nothing meanwhile.
+  const name = ticketName(Math.floor(since), process.pid);
+  const ticketBody = `${JSON.stringify({protocol: PROTOCOL, pid: process.pid, repo: slotOptions.repo ?? defaultRepo(), command, fila: FILA})}\n`;
+  writeTicket(queue, name, ticketBody);
+  const beat = setInterval(() => touchTicket(queue, name, ticketBody), Math.min(slotOptions.pollMs ?? POLL_MS, TICKET_FRESH_MS / 4));
+  let answer: string | null | undefined;
+  try {
+    answer = await readLine(input, Math.max(0, limitMs - (Date.now() - since)));
+  } finally {
+    clearInterval(beat);
+  }
+  const back = answer !== null && answer !== undefined && answer.trim() === 'back';
+  // The baton goes in before the ticket goes out: one that cedes never sees the free slot without either.
+  if (!back && answer !== undefined) handBaton();
+  removeQuietly(path.join(queue, name));
+  if (answer === undefined) {
+    console.error(`Gave up after ${Math.round(limitMs / 60_000)} minutes in the render slot queue: no "go" or "back" came on stdin at its turn.`);
+    return EXIT_GAVE_UP;
+  }
+  if (back) console.error(`Gave the turn back ("back" on stdin): no baton, and those that cede take the free slot (HAR-301).`);
+  return 0;
+};
+
 /** `render-slot release --rotulo <label>`: ends the live hold of that label, holding the slot or queued. */
 export const releaseHold = async (label: string, dir = slotDir(), waitMs = 10_000): Promise<number> => {
   const refusal = refusedHold(label);
@@ -1115,7 +1354,7 @@ export const moveInQueue = (pid: number, direction: string | undefined, dir = sl
   }
   const queue = queueDir(dir);
   const {tickets, order} = readQueue(queue);
-  const live = tickets.filter((ticket) => judgeTicket(ticket, true) === 'live');
+  const live = inTurn(tickets.filter((ticket) => judgeTicket(ticket, true) === 'live'));
   const at = live.findIndex((ticket) => ticket.pid === pid);
   const mover = live[at];
   if (mover === undefined) {
@@ -1128,6 +1367,13 @@ export const moveInQueue = (pid: number, direction: string | undefined, dir = sl
     console.error(`Pid ${pid} is already the ${direction === 'up' ? 'first' : 'last'} in the render slot queue.`);
     return 1;
   }
+  // The turn puts a product ahead of the chains that cede (HAR-301); a move never undoes it.
+  if (mover.cede !== other.cede) {
+    console.error(`Pid ${pid} ${mover.cede ? 'cedes' : 'does not cede'} its turn and pid ${other.pid}, ${direction === 'up' ? 'ahead of' : 'behind'} it, ${other.cede ? 'does' : 'does not'}: a move never trades a ticket that cedes with one that does not.`);
+    return 1;
+  }
+  // In the turn, a product that went ahead of tickets that cede has a later place than theirs: the places
+  // written below rise along the new order, so the places and the turn agree from then on.
   for (const name of order.keys()) {
     const match = TICKET_NAME.exec(name);
     if (match === null || Number(match[1]) < bootTimeMs() || !alive(Number(match[2]))) order.delete(name);
@@ -1286,15 +1532,17 @@ export const slotStatus = (dir = slotDir(), now = Date.now()) => {
     lines.push(`The render slot (${dir}) is ${describeSlotHolder(null)}.`);
   } else {
     const [head, ...log] = about(owner.pid, Date.parse(owner.startedAt), owner.repo, owner.command);
-    lines.push(`The render slot (${dir}) is held by ${head}.`, ...log);
+    lines.push(`The render slot (${dir}) is held by ${head}${owner.cede === true ? ', which cedes its turn' : ''}.`, ...log);
     if (!alive(owner.pid) && typeof owner.commandPgid === 'number') lines.push(`  Its pid is gone, but its command still runs in process group ${owner.commandPgid}.`);
     if (newerProtocol(owner)) lines.push(`  Written by render-slot protocol ${owner.protocol}, while this copy speaks ${PROTOCOL}: update this copy from ~/obsidian/AI/scripts/render-slot.ts.`);
   }
+  const baton = readBaton(queueDir(dir), BATON_MS, false);
+  if (baton !== null) lines.push(`  And a product is on its way: pid ${baton.pid} ("${VEZ_PREFIX}${baton.label}") had its turn ${localSince(baton.at, now)}; those that cede leave the free slot to it for ${Math.max(0, Math.ceil((baton.at + BATON_MS - now) / 1000))} s more (HAR-301).`);
   const queue = renderSlotQueue(dir);
   lines.push(queue.length === 0 ? 'Nobody waits in the queue.' : `${queue.length} waiting in the queue, in the order they take the slot:`);
   queue.forEach((ticket, index) => {
     const [head, ...log] = about(ticket.pid, ticket.enqueuedAt, ticket.repo, ticket.command);
-    lines.push(`  ${index + 1}. ${head}${ticket.place === ticket.enqueuedAt ? '' : ', moved'}.`, ...log);
+    lines.push(`  ${index + 1}. ${head}${ticket.place === ticket.enqueuedAt ? '' : ', moved'}${ticket.cede ? ', cedes its turn' : ''}.`, ...log);
   });
   return lines.join('\n');
 };
@@ -1302,16 +1550,18 @@ export const slotStatus = (dir = slotDir(), now = Date.now()) => {
 /** `render-slot status --json`: what `status` says, as one JSON document for the job band. Read only. */
 export const slotStatusJson = (dir = slotDir()) => {
   const parents = processTable();
-  const about = (pid: number, since: number, repo: string, command: string) =>
-    ({pid, repo, command, since, session: sessionAbove(pid, parents), job: nearestJob(pid, parents)});
+  const about = (pid: number, since: number, repo: string, command: string, cede: boolean) =>
+    ({pid, repo, command, since, session: sessionAbove(pid, parents), job: nearestJob(pid, parents), cede});
   const state = exists(dir) ? renderSlotHolder(dir) : undefined;
   const owner = state?.owner ?? null;
+  const baton = readBaton(queueDir(dir), BATON_MS, false);
   return {
     free: state === undefined,
-    holder: owner === null ? null : about(owner.pid, Date.parse(owner.startedAt), owner.repo, owner.command),
+    baton: baton === null ? null : {...baton, until: baton.at + BATON_MS},
+    holder: owner === null ? null : about(owner.pid, Date.parse(owner.startedAt), owner.repo, owner.command, owner.cede === true),
     queue: renderSlotQueue(dir).map((ticket, index) => ({
       position: index + 1,
-      ...about(ticket.pid, ticket.enqueuedAt, ticket.repo, ticket.command),
+      ...about(ticket.pid, ticket.enqueuedAt, ticket.repo, ticket.command, ticket.cede),
       moved: ticket.place !== ticket.enqueuedAt,
     })),
   };
@@ -1338,7 +1588,13 @@ if (isMain()) {
     process.exitCode = await runCommand(command);
   } else if (verb === 'hold') {
     const max = optionValue(args, '--max');
-    process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max));
+    process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max), {cede: args.includes('--ceder')});
+  } else if (verb === 'vez') {
+    const max = optionValue(args, '--max');
+    const since = optionValue(args, '--since');
+    process.exitCode = await waitForTurn(optionValue(args, '--rotulo') ?? '', max === undefined ? HOLD_MAX_MINUTES : Number(max), {...(since === undefined ? {} : {since: Number(since)}), confirm: args.includes('--conferir')});
+    // The answer of --conferir was read from stdin, which left open keeps this process running.
+    process.stdin.destroy();
   } else if (verb === 'release') {
     process.exitCode = await releaseHold(optionValue(args, '--rotulo') ?? '');
   } else if (verb === 'move') {
@@ -1350,7 +1606,7 @@ if (isMain()) {
   } else if (verb === 'status' && separator === '--json' && command.length === 0) {
     console.log(JSON.stringify(slotStatusJson()));
   } else {
-    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
+    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> [--ceder] | vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir] | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
     process.exitCode = EXIT_USAGE;
   }
 }
