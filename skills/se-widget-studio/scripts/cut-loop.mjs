@@ -16,15 +16,26 @@
  * loop's first FADE frames blend from the original's own continuation (R onward) into S onward, so the wrap from the
  * loop's last frame to its first is two consecutive frames of the original. The video must end with FADE still frames.
  *
+ * --beat <frames>, with --period, cuts a widget that never holds still but changes on a fixed beat (a boiling line
+ * redrawn every 4 frames), which has no still frames to blend. A beat is a frame that changes between two holds: the
+ * picture is the same for the beat's length before it and from it, so nothing else is moving there (a message that
+ * pops in on a beat would hide a skipped one). The loop starts on a beat (S) whose frame one period later (R) is a beat
+ * too, so its last frame ends a whole hold, and it is cut without a blend: the wrap from R - 1 to S must change like
+ * the original's own beats there, from S - 1 to S and from R - 1 to R, at least BEAT_FLOOR times the smaller (less is
+ * a skipped beat) and at most BEAT_LIMIT times the larger. Of the starts that do not skip a beat, it takes the one
+ * whose wrap changes least.
+ *
  * Studio video before 2026-09-29 was encoded with the BT.601 matrix and no color tags; newer video is BT.709 and
  * tagged. FFmpeg reads the input's tags and decodes an untagged video as BT.601, so either kind comes out as a
  * tagged BT.709 master. Never force in_color_matrix=bt601: it shifts the colors of a newer video.
  *
  * Next to each loop goes <video>-loop.json: the mode, the loop's first frame and length, where it was in the original,
- * how close S and R were, the encoder settings with the CRF, and both files' SHA-256.
+ * how close S and R were (with --beat, how much the wrap and the beats around it changed), the encoder settings with
+ * the CRF, and both files' SHA-256.
  *
- * Usage: cut-loop.mjs [--period <ms>] <video.mp4> [...]   writes <video>-loop.mp4 and <video>-loop.json next to
- * each input; never replaces either. Needs ffmpeg and ffprobe on PATH. Exit code 1 when any input has no loop.
+ * Usage: cut-loop.mjs [--period <ms> [--beat <frames>]] <video.mp4> [...]   writes <video>-loop.mp4 and
+ * <video>-loop.json next to each input; never replaces either. Needs ffmpeg and ffprobe on PATH. Exit code 1 when any
+ * input has no loop.
  */
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -40,6 +51,12 @@ export const FADE = 8;     // --period: frames at the start of the loop that ble
 // --period: mean |luma difference| for S and R. The same chat picture measured 0.85-1.7 on four iMessage chats
 // encoded at x264's defaults (2026-10-08); a period that lands on another state measured 12 or more.
 export const PERIOD_MATCH = 4.0;
+// --beat: how much the wrap may change against the beats around it. On se-crayon-chat's 2026-10-27 video (a boil
+// redrawn every 4 frames), the wraps of a 12 s period measured 1.1-1.5 times the larger beat at full resolution; at
+// 480 x 270, a period that skips a beat (356 frames) measured 0.26 of the smaller, one on another chat state (300) 8.5
+// times the larger.
+export const BEAT_FLOOR = 0.5;
+export const BEAT_LIMIT = 2.0;
 export const ENCODING = {codec: 'h264', crf: 16, preset: 'slow'};
 const TO_BT709 = 'scale=in_color_matrix=auto:in_range=auto,format=gbrp,'
   + 'scale=out_color_matrix=bt709:out_range=limited,format=yuv420p,'
@@ -98,6 +115,46 @@ export function findPeriodLoop(moved, period) {
   return {start, rest};
 }
 
+const skipsBeat = ({mean, beats}) => mean < BEAT_FLOOR * Math.min(...beats);
+
+/** Why a wrap ({start, rest, mean, beats}) does not change like the beats around it, or undefined when it does. */
+export function wrapError(wrap) {
+  const {start, rest, mean, beats: [into, out]} = wrap;
+  const said = `the wrap from frame ${rest - 1} to frame ${start} changes by ${mean.toFixed(3)}`;
+  const around = `the beats around it (${into.toFixed(3)} and ${out.toFixed(3)})`;
+  if (skipsBeat(wrap)) return `${said}, less than ${BEAT_FLOOR} of ${around}: the period skips a beat`;
+  if (mean > BEAT_LIMIT * Math.max(into, out)) return `${said}, more than ${BEAT_LIMIT} times ${around}`;
+  return undefined;
+}
+
+/**
+ * Finds the loop of a known period on a known beat, both in frames, in a list of luma frames (see --beat above).
+ * Returns {start, rest} with the loop as frames start..rest-1, or {error}.
+ */
+export function findBeatLoop(frames, period, beat) {
+  if (!Number.isInteger(beat) || beat < 2) return {error: `the beat must be a whole number of frames, at least 2, not ${beat}`};
+  if (!Number.isInteger(period) || period < beat || period % beat !== 0) {
+    return {error: `the period must be a whole number of ${beat}-frame beats, not ${period} frames`};
+  }
+  const steps = frames.map((frame, index) => index > 0 ? meanDiff(frame, frames[index - 1]) : 0);
+  const holds = (from, to) => steps.slice(from, to).every(step => step <= STILL);
+  const onBeat = index => steps[index] > STILL && holds(index - beat + 1, index) && holds(index + 1, index + beat);
+  const wraps = [];
+  for (let start = beat; start + period + beat <= frames.length; start++) {
+    const rest = start + period;
+    if (onBeat(start) && onBeat(rest)) {
+      wraps.push({start, rest, mean: meanDiff(frames[rest - 1], frames[start]), beats: [steps[start], steps[rest]]});
+    }
+  }
+  if (!wraps.length) {
+    return {error: `no beat (a change between two ${beat}-frame holds) has another one ${period} frames later`};
+  }
+  const beating = wraps.filter(wrap => !skipsBeat(wrap));
+  const best = (beating.length ? beating : wraps).reduce((least, wrap) => wrap.mean < least.mean ? wrap : least);
+  const error = wrapError(best);
+  return error ? {error} : {start: best.start, rest: best.rest};
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, {maxBuffer: 2 ** 31 - 1});
   if (result.error?.code === 'ENOENT') throw new Error(`${command} was not found on PATH.`);
@@ -125,9 +182,12 @@ const sha256 = path => createHash('sha256').update(readFileSync(path)).digest('h
 
 /**
  * Cuts one video; returns a one-line report that starts with LOOP, NO-LOOP, or FAILED.
- * With periodMs, cuts at that period (see --period above) instead of finding even cycles.
+ * With periodMs, cuts at that period (see --period above) instead of finding even cycles; with beat too, at that
+ * period on that beat (see --beat above).
  */
-export function cutLoop(input, {periodMs} = {}) {
+export function cutLoop(input, {periodMs, beat} = {}) {
+  if (beat !== undefined && periodMs === undefined) throw new Error('--beat needs --period');
+  const mode = beat !== undefined ? 'beat' : periodMs !== undefined ? 'period' : 'cycles';
   const path = resolve(input);
   const name = basename(path);
   const stem = join(dirname(path), `${basename(path, extname(path))}-loop`);
@@ -147,19 +207,41 @@ export function cutLoop(input, {periodMs} = {}) {
   }
   const [w, h] = SMALL;
   const small = luma(path, `scale=${w}:${h}:flags=area,format=gray`, w * h);
-  const moved = small.map((frame, index) => index > 0 && meanDiff(frame, small[index - 1]) > STILL);
-  const found = period === undefined ? findLoop(moved) : findPeriodLoop(moved, period);
+  let found;
+  if (mode === 'beat') found = findBeatLoop(small, period, beat);
+  else {
+    const moved = small.map((frame, index) => index > 0 && meanDiff(frame, small[index - 1]) > STILL);
+    found = mode === 'cycles' ? findLoop(moved) : findPeriodLoop(moved, period);
+  }
   if (found.error) return `NO-LOOP ${name}: ${found.error}`;
   const {start, rest} = found;
-  const limit = period === undefined ? MATCH : PERIOD_MATCH;
-  const pair = luma(path, `select='eq(n\\,${start})+eq(n\\,${rest})',format=gray`, width * height);
-  const match = meanDiff(pair[0], pair[1]);
-  if (match > limit) return `NO-LOOP ${name}: frame ${start} and frame ${rest} differ (mean ${match.toFixed(3)})`;
+  const round = value => Number(value.toFixed(3));
+  let match;
+  let compared;
+  if (mode === 'beat') {
+    const at = [start - 1, start, rest - 1, rest];
+    const [before, first, last, after] = luma(path, `select='${at.map(n => `eq(n\\,${n})`).join('+')}',format=gray`, width * height);
+    const wrap = {start, rest, mean: meanDiff(last, first), beats: [meanDiff(before, first), meanDiff(last, after)]};
+    const error = wrapError(wrap);
+    if (error) return `NO-LOOP ${name}: ${error}`;
+    const [into, out] = wrap.beats;
+    match = {frames: [rest - 1, start], mean: round(wrap.mean), limit: round(BEAT_LIMIT * Math.max(into, out)),
+      floor: round(BEAT_FLOOR * Math.min(into, out)),
+      beats: [{frames: [start - 1, start], mean: round(into)}, {frames: [rest - 1, rest], mean: round(out)}]};
+    compared = `wrap ${rest - 1} -> ${start}: mean ${wrap.mean.toFixed(3)} against beats of ${into.toFixed(3)} and ${out.toFixed(3)}`;
+  } else {
+    const limit = mode === 'cycles' ? MATCH : PERIOD_MATCH;
+    const pair = luma(path, `select='eq(n\\,${start})+eq(n\\,${rest})',format=gray`, width * height);
+    const mean = meanDiff(pair[0], pair[1]);
+    if (mean > limit) return `NO-LOOP ${name}: frame ${start} and frame ${rest} differ (mean ${mean.toFixed(3)})`;
+    match = {frames: [start, rest], mean: round(mean), limit};
+    compared = `frame ${start} vs ${rest}: mean ${mean.toFixed(3)}`;
+  }
   const frames = rest - start;
   const select = (first, last) => `select='between(n\\,${first}\\,${last})'`;
   // The blend pairs its inputs by timestamp, so both count frames from 0 at the video's rate; with PTS-STARTPTS the
   // tpad clones came out late and the loop ran past its length.
-  const filter = period === undefined
+  const filter = mode !== 'period'
     ? ['-vf', `${select(start, rest - 1)},setpts=PTS-STARTPTS,${TO_BT709}`]
     : ['-filter_complex', `[0]split[x][y];[x]${select(start, rest - 1)},setpts=N/FRAME_RATE/TB[a];`
       + `[y]${select(rest, rest + FADE - 1)},setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=${frames - FADE}[b];`
@@ -168,26 +250,28 @@ export function cutLoop(input, {periodMs} = {}) {
     '-c:v', 'libx264', '-preset', ENCODING.preset, '-crf', String(ENCODING.crf), '-movflags', '+faststart', '-an', target]);
   const written = probe(target);
   if (written.frames !== frames) return `FAILED ${basename(target)}: wrote ${written.frames} frames, expected ${frames}`;
-  const shape = period === undefined
-    ? {cycle: found.cycle, changes: found.changes}
-    : {periodMs, blend: {frames: FADE, fromFrame: rest}};
+  const shape = mode === 'cycles' ? {cycle: found.cycle, changes: found.changes}
+    : mode === 'period' ? {periodMs, blend: {frames: FADE, fromFrame: rest}}
+    : {periodMs, beat: {frames: beat}};
   const record = {
     schemaVersion: 1,
     tool: 'se-widget-studio cut-loop.mjs',
-    mode: period === undefined ? 'cycles' : 'period',
+    mode,
     input: {file: name, sha256: sha256(path), frames: inputFrames, fps, width, height, color},
     output: {file: basename(target), sha256: sha256(target), frames: written.frames, color: written.color},
-    loop: {firstFrame: start, lastFrame: rest - 1, frames, durationMs: Number((frames * 1000 / fps).toFixed(3)),
-      originalOffsetMs: Number((start * 1000 / fps).toFixed(3)), ...shape},
-    match: {frames: [start, rest], mean: Number(match.toFixed(3)), limit},
+    loop: {firstFrame: start, lastFrame: rest - 1, frames, durationMs: round(frames * 1000 / fps),
+      originalOffsetMs: round(start * 1000 / fps), ...shape},
+    match,
     encoding: ENCODING
   };
   writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`, {flag: 'wx'});
-  const how = period === undefined
+  const how = mode === 'cycles'
     ? `${found.changes.length} cycles of ${found.cycle}) -> ${basename(target)}; changes at [${found.changes}]`
-    : `period of ${periodMs} ms) -> ${basename(target)}; blended from frames ${rest}..${rest + FADE - 1} over ${FADE} frames`;
+    : mode === 'period'
+      ? `period of ${periodMs} ms) -> ${basename(target)}; blended from frames ${rest}..${rest + FADE - 1} over ${FADE} frames`
+      : `period of ${periodMs} ms on a ${beat}-frame beat) -> ${basename(target)}; cut without a blend`;
   return `LOOP ${name}: frames ${start}..${rest - 1} (${frames} frames, ${(frames / fps).toFixed(3)} s, ${how}; `
-    + `frame ${start} vs ${rest}: mean ${match.toFixed(3)}; color ${color} -> ${written.color}; `
+    + `${compared}; color ${color} -> ${written.color}; `
     + `original t = loop t + ${(start / fps).toFixed(3)} s; crf ${ENCODING.crf}; record ${basename(recordPath)}`;
 }
 
@@ -205,7 +289,7 @@ function isEntryPoint() {
 if (isEntryPoint()) {
   const inputs = process.argv.slice(2);
   if (!inputs.length || inputs.includes('--help')) {
-    console.log('Usage: cut-loop.mjs [--period <ms>] <video.mp4> [...]\nCuts each Studio MP4 to an exact loop, written as <video>-loop.mp4 (tagged BT.709 H.264, CRF 16) with <video>-loop.json. --period cuts at the widget\'s known period, in milliseconds, instead of finding even cycles. Needs ffmpeg and ffprobe on PATH.');
+    console.log('Usage: cut-loop.mjs [--period <ms> [--beat <frames>]] <video.mp4> [...]\nCuts each Studio MP4 to an exact loop, written as <video>-loop.mp4 (tagged BT.709 H.264, CRF 16) with <video>-loop.json. --period cuts at the widget\'s known period, in milliseconds, instead of finding even cycles. --beat, with --period, cuts a widget that never holds still on its beat, the frames from one of its changes to the next. Needs ffmpeg and ffprobe on PATH.');
     process.exit(inputs.length ? 0 : 2);
   }
   let periodMs;
@@ -218,10 +302,20 @@ if (isEntryPoint()) {
     }
     inputs.splice(flag, 2);
   }
+  let beat;
+  const beatFlag = inputs.indexOf('--beat');
+  if (beatFlag !== -1) {
+    beat = Number(inputs[beatFlag + 1]);
+    if (!Number.isInteger(beat) || beat < 2 || periodMs === undefined) {
+      console.error('--beat takes the frames from one change of the widget to the next, for example --beat 4, and needs --period.');
+      process.exit(2);
+    }
+    inputs.splice(beatFlag, 2);
+  }
   let failed = false;
   for (const input of inputs) {
     let line;
-    try {line = cutLoop(input, {periodMs});} catch (error) {line = `FAILED ${basename(input)}: ${error.message}`;}
+    try {line = cutLoop(input, {periodMs, beat});} catch (error) {line = `FAILED ${basename(input)}: ${error.message}`;}
     if (!line.startsWith('LOOP ')) failed = true;
     console.log(line);
   }
