@@ -43,6 +43,8 @@ async function checkout(t, {dirty = false, commit = COMMIT, builtAt, sources = {
 }
 
 const codes = (freshness) => freshness.warnings.map((warning) => warning.code);
+const gitIn = (root) => (...args) => execFileSync("git", ["-C", root, ...args], {encoding: "utf8", stdio: ["ignore", "pipe", "ignore"]}).trim();
+const gitCommit = (git, message, ...args) => git("-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet", ...args, "-m", message);
 
 test("a clean build newer than every source has no warning, and the doctor reports its commit", async (t) => {
   const root = await checkout(t, {builtAt: new Date("2026-09-28T12:00:00Z"), sources: {"src/index.ts": new Date("2026-09-28T11:00:00Z")}});
@@ -81,9 +83,9 @@ test("a dirty build and sources changed after it are warnings in the doctor", as
 test("a build from another commit than the checkout's HEAD is stale; a build without a commit is unknown", async (t) => {
   const builtAt = new Date("2026-09-28T12:00:00Z");
   const root = await checkout(t, {builtAt, commit: "b".repeat(40)});
-  const git = (...args) => execFileSync("git", ["-C", root, ...args], {encoding: "utf8", stdio: ["ignore", "pipe", "ignore"]}).trim();
+  const git = gitIn(root);
   git("init", "--quiet");
-  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "test");
+  gitCommit(git, "test", "--allow-empty");
   const head = git("rev-parse", "HEAD");
   const moved = await buildFreshness(join(root, "dist"));
   assert.deepEqual(codes(moved), ["BUILD_STALE"]);
@@ -94,4 +96,40 @@ test("a build from another commit than the checkout's HEAD is stale; a build wit
   assert.deepEqual(codes(await buildFreshness(join(root, "dist"))), ["BUILD_UNKNOWN"]);
   await rm(join(root, "dist/build-info.json"));
   assert.deepEqual(codes(await buildFreshness(join(root, "dist"))), ["BUILD_UNKNOWN"]);
+});
+
+test("a commit after the build that changes no build:engine input is not stale; one under src/ is", async (t) => {
+  const builtAt = new Date("2026-09-28T12:00:00Z");
+  const before = new Date("2026-09-28T11:00:00Z");
+  const root = await checkout(t, {builtAt, sources: {"src/index.ts": before}});
+  const git = gitIn(root);
+  git("init", "--quiet");
+  git("add", "src");
+  gitCommit(git, "engine");
+  const built = git("rev-parse", "HEAD");
+  const info = join(root, "dist/build-info.json");
+  await writeFile(info, JSON.stringify({version: "9.9.9", commit: built, dirty: false}));
+  await utimes(info, builtAt, builtAt);
+  const buildWarnings = async () => (await runDoctor({distDirectory: join(root, "dist")})).diagnostics.filter((diagnostic) => diagnostic.code.startsWith("BUILD_"));
+
+  // Only the skill's references change: they never reach dist/.
+  await mkdir(join(root, "skills/se-widget-studio/references"), {recursive: true});
+  await writeFile(join(root, "skills/se-widget-studio/references/known-limits.md"), "# Known limits\n");
+  git("add", "skills");
+  gitCommit(git, "docs");
+  const docs = await buildFreshness(join(root, "dist"));
+  assert.deepEqual(docs.warnings, []);
+  assert.equal(docs.head, git("rev-parse", "HEAD"), "the checkout did move past the build");
+  assert.deepEqual(await buildWarnings(), []);
+
+  // A source change, dated before the build so that only the commit check can see it.
+  await writeFile(join(root, "src/index.ts"), "// changed\n");
+  await utimes(join(root, "src/index.ts"), before, before);
+  gitCommit(git, "source", "--all");
+  const head = git("rev-parse", "HEAD");
+  const source = await buildFreshness(join(root, "dist"));
+  assert.deepEqual(codes(source), ["BUILD_STALE"]);
+  assert.deepEqual(source.newerSources, []);
+  assert.match(source.warnings[0].detail, new RegExp(`built from ${built.slice(0, 12)}, but the checkout is at ${head.slice(0, 12)}`));
+  assert.deepEqual((await buildWarnings()).map((diagnostic) => diagnostic.code), ["BUILD_STALE"]);
 });

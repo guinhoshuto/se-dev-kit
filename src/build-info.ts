@@ -67,10 +67,23 @@ function checkoutHead(root: string): string | undefined {
   }
 }
 
+/** What npm run build:engine reads: a commit that changes none of these leaves dist/ as it was. */
+const ENGINE_INPUTS = ["src", "tsconfig.engine.json", "scripts/copy-assets.mjs", "package.json", "package-lock.json"];
+
+/** Whether a build:engine input differs between two commits; undefined when git cannot say (an unknown commit, no git). */
+function engineInputsChanged(root: string, from: string, to: string): boolean | undefined {
+  try {
+    execFileSync("git", ["-C", root, "diff", "--quiet", from, to, "--", ...ENGINE_INPUTS], {stdio: "ignore", timeout: 5_000});
+    return false;
+  } catch (error) {
+    return (error as {status?: unknown}).status === 1 ? true : undefined;
+  }
+}
+
 /**
- * Whether dist/ still matches its checkout: built without uncommitted changes, from the commit the
- * checkout is on, and after the last change under src/. An installed package has no src/ and no git,
- * so only the recorded dirty flag applies there. `distDirectory` is for tests.
+ * Whether dist/ still matches its checkout: built without uncommitted changes, from a commit whose
+ * build:engine inputs match the checkout's, and after the last change under src/. An installed package
+ * has no src/ and no git, so only the recorded dirty flag applies there. `distDirectory` is for tests.
  */
 export async function buildFreshness(distDirectory = dirname(fileURLToPath(import.meta.url))): Promise<BuildFreshness> {
   const infoPath = join(distDirectory, "build-info.json");
@@ -103,7 +116,7 @@ export async function buildFreshness(distDirectory = dirname(fileURLToPath(impor
   if (newerSources.length > 0) {
     warnings.push({code: "BUILD_STALE", detail: `dist/ is older than src/: ${newerSources.join(", ")} changed after the build, so renders do not run that code yet.`, hint: rebuild});
   }
-  if (head && info.commit) {
+  if (head && info.commit && engineInputsChanged(root, info.commit, head) !== false) {
     warnings.push({code: "BUILD_STALE", detail: `dist/ was built from ${short(info.commit)}, but the checkout is at ${short(head)}.`, hint: rebuild});
   }
   return {info, newerSources, ...(head ? {head} : {}), warnings};
