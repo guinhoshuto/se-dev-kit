@@ -3,7 +3,8 @@
 // - the suites that start Chrome (integration, web:browser) run one file at a time behind the machine
 //   gate, holding the machine-wide render slot (~/.cache/render-slot, shared with background-creator):
 //   they wait for it in the queue, and for a free machine, up to four hours, and are skipped with the
-//   reason when the disk is low, this checkout left an orphan, or that wait runs out;
+//   reason when the disk is low, this checkout left an orphan, or that wait runs out, NOT COVERED with
+//   the step that runs them;
 // - the run stops at the first suite that fails, and names each suite after it NOT COVERED, with the command
 //   that runs them;
 // - each suite gets a temporary folder of its own (TMPDIR), which must be empty when the suite ends,
@@ -88,6 +89,18 @@ export async function takeBrowserSlot(options = {}) {
 
 /** A wait in the unit a person reads: seconds under a minute, else minutes. */
 export const duration = ms => (ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60_000)} min`);
+
+/**
+ * The step that covers a browser suite the gate skipped, by its refusal's `cause`: a low disk and an orphan of this
+ * checkout end only by hand; any other refusal is a wait that ran out, and npm run test:browser waits its turn in the
+ * queue again. npm run wait-free first would not help: it never sees the slot of a chain of the harness that cedes
+ * (hold --ceder) free, and that chain lets a suite waiting in the queue in between two of its rounds (#16).
+ */
+const COVER = {
+  disk: ': the disk is low; free some space, then run npm run test:browser',
+  orphan: ': this checkout left an orphan; run npm run kill-stale, then npm run test:browser'
+};
+const cover = cause => COVER[cause] ?? '; run npm run test:browser, which waits its turn in the render slot queue';
 
 /**
  * Whether a browser suite may run now: it waits for the render slot, then asks the machine gate. A refusal
@@ -200,7 +213,7 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
     for (const warning of allowed.warnings ?? []) log(`\nWarning: ${warning}`);
     if (!allowed.ok) {
       log(`\nSkipped ${name}: ${allowed.reason}`);
-      results.push({name, status: 'skipped', detail: allowed.reason});
+      results.push({name, status: 'skipped', detail: allowed.reason, cause: allowed.cause});
       continue;
     }
     // A wait under a second is no wait worth naming.
@@ -222,8 +235,9 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
   }
   log('');
   for (const result of results) log(`${result.name.padEnd(12)} ${result.status.padEnd(8)} ${result.detail}`);
-  const skipped = results.filter(result => result.status === 'skipped').map(result => result.name);
-  if (skipped.length) log(`NOT COVERED: ${skipped.join(', ')}. This run did not test them; run npm run wait-free, then npm run test:browser.`);
+  const skipped = results.filter(result => result.status === 'skipped');
+  // A line per cause, in the order its first suite came.
+  for (const cause of new Set(skipped.map(result => result.cause))) log(`NOT COVERED: ${skipped.filter(result => result.cause === cause).map(result => result.name).join(', ')}. This run did not test them${cover(cause)}.`);
   const unrun = results.filter(result => result.status === 'not run').map(result => result.name);
   if (unrun.length) log(`NOT COVERED: ${unrun.join(', ')}. This run did not test them: ${results.find(result => result.status === 'failed').name} failed and the run stopped there; run them with node scripts/run-tests.mjs ${unrun.join(' ')}.`);
   log(`Logs: ${relative(ROOT, directory)}/`);
