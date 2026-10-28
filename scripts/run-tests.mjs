@@ -93,8 +93,8 @@ export const duration = ms => (ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${
 /**
  * The step that covers a browser suite the gate skipped, by its refusal's `cause`: a low disk and an orphan of this
  * checkout end only by hand; any other refusal is a wait that ran out, and npm run test:browser waits its turn in the
- * queue again. npm run wait-free first would not help: it never sees the slot of a chain of the harness that cedes
- * (hold --ceder) free, and that chain lets a suite waiting in the queue in between two of its rounds (#16).
+ * queue again. npm run wait-free first adds nothing: test:browser waits in the queue itself, up to 4 hours against the
+ * 30 minutes of wait-free, and a chain of the harness that cedes (hold --ceder) lets it in between two of its rounds (#16).
  */
 const COVER = {
   disk: ': the disk is low; free some space, then run npm run test:browser',

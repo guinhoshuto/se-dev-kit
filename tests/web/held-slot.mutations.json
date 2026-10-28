@@ -23,14 +23,14 @@
     },
     {
       "file": "skills/se-widget-studio/scripts/studio-client.mjs",
-      "from": "  if (!isLoopback(origin)) return;\n  let machine;",
-      "to": "  let machine;",
+      "from": "  if (!isLoopback(origin)) return;\n  const builds",
+      "to": "  const builds",
       "test": "tests/web/skill-client-machine.test.ts",
       "name": "asks the machine check only for a loopback Studio"
     },
     {
       "file": "skills/se-widget-studio/scripts/studio-client.mjs",
-      "from": "message.replace(/^Waiting for the machine: /, 'Waiting for the machine before submitting: ')",
+      "from": "message.replace(/^Waiting for the machine\\b/, 'Waiting for the machine before submitting')",
       "to": "message",
       "test": "tests/web/skill-client-machine.test.ts",
       "name": "says why it waits"

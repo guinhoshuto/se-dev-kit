@@ -20,6 +20,13 @@
       "to": "return;",
       "test": "tests/web/skill-client-machine.test.ts",
       "name": "^a client without dist"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "queue: 'se-widget-studio.job', ",
+      "to": "",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "^run on a local Studio waits in the render slot queue"
     }
   ]
 }

@@ -112,6 +112,59 @@ test("waitForMachine counts its limit from startedAt: a Studio job's 20 minutes 
   assert.equal(checks, 11, "checked at 20, 21, … and 30 minutes after the job began to wait");
 });
 
+test("waitForMachine with a queue waits out the slot and its queue as a ticket, and asks the check again at its turn without the queue behind it", async () => {
+  const slot = {free: false, reasons: ["the render slot is held by pid 7", "28% of memory free"], kinds: ["trava", "memoria"]};
+  const behind = {free: false, reasons: ["1 waiting in the render slot queue"], kinds: ["fila"]};
+  const low = {free: false, reasons: ["1 waiting in the render slot queue", "28% of memory free"], kinds: ["fila", "memoria"]};
+  const game = {free: false, reasons: ["the game is open"], kinds: ["jogo"]};
+  const run = async (verdicts, turns, options = {}) => {
+    const log = [];
+    const slept = [];
+    const asked = [];
+    const check = answers(verdicts);
+    const result = await waitForMachine({
+      queue: "wait-free", check, pollMs: 7, waitLimitMs: 30 * 60_000, startedAt: Date.now() - 60_000,
+      log: (message) => log.push(message), sleep: async (ms) => { slept.push(ms); },
+      turn: async (request) => {
+        asked.push(request);
+        const next = turns.shift();
+        return next.turn ? {code: 0, answer: await request.answer(), said: ""} : next;
+      },
+      ...options
+    });
+    return {result, log, slept, asked};
+  };
+  // The slot (and memory) sends the wait to the queue; at its turn the queue behind it no longer counts.
+  const go = await run([slot, behind], [{turn: true}]);
+  assert.deepEqual(go.result, {turn: true});
+  assert.deepEqual(go.log, ['Waiting for the machine, in the render slot queue as "vez: wait-free": the render slot is held by pid 7; 28% of memory free', "The machine is free at its turn in the render slot queue; rendering."]);
+  assert.equal(go.asked[0].label, "wait-free");
+  assert.equal(go.asked[0].maxMinutes, 30, "its limit, from its place");
+  assert.ok(Math.abs(go.asked[0].since - (Date.now() - 60_000)) < 5_000, "its place is when the wait began");
+  // Memory still low at the turn: the turn goes back, and after pollMs the wait asks again, from the same place.
+  const back = await run([slot, low, slot, behind], [{turn: true}, {turn: true}]);
+  assert.deepEqual(back.result, {turn: true});
+  assert.equal(back.log[1], "Waiting for the machine: at its turn in the render slot queue, 28% of memory free");
+  assert.deepEqual(back.slept, [7]);
+  assert.equal(back.asked[1].since, back.asked[0].since);
+  // A vez that cannot run leaves the wait polling; a reason the queue does not wait out never takes a ticket.
+  const broken = await run([slot, slot, {free: true, reasons: []}], [{code: 2, said: "Usage: render-slot vez"}]);
+  assert.deepEqual(broken.result, {turn: false});
+  assert.equal(broken.asked.length, 1);
+  assert.equal(broken.log[1], "Waiting for the machine without a place in the render slot queue: its vez ended with 2: Usage: render-slot vez");
+  assert.deepEqual((await run([{...slot, reasons: [...slot.reasons, "the game is open"], kinds: [...slot.kinds, "jogo"]}, game, {free: true, reasons: []}], [])).asked, []);
+  assert.deepEqual((await run([slot, {free: true, reasons: []}], [], {queue: undefined})).asked, [], "no queue without a label");
+  // The vez at its limit is the wait's limit.
+  await assert.rejects(run([slot], [{code: 75, said: "Gave up after 30 minutes waiting for the render slot"}]), (error) => error.code === "MACHINE_BUSY_TIMEOUT" && /in the render slot queue: Gave up after 30 minutes/.test(error.message));
+});
+
+test("parseVerdict keeps the check's kind of each reason only when it names one per reason", () => {
+  assert.deepEqual(parseVerdict('{"livre": false, "reasons": ["the slot", "memory"], "tipos": ["trava", "memoria"]}'), {free: false, reasons: ["the slot", "memory"], kinds: ["trava", "memoria"]});
+  assert.deepEqual(parseVerdict('{"livre": false, "reasons": ["the slot", "memory"], "tipos": ["trava"]}'), {free: false, reasons: ["the slot", "memory"]});
+  assert.deepEqual(parseVerdict('{"livre": false, "reasons": ["the slot", 3], "tipos": ["trava", "memoria"]}'), {free: false, reasons: ["the slot"]});
+  assert.deepEqual(parseVerdict('{"livre": true, "reasons": [], "tipos": []}'), {free: true, reasons: []});
+});
+
 test("machineVerdict asks the check for this process's family and reads its busy answer", async (t) => {
   const dir = await folder(t);
   const script = await fakeCheck(dir, "the game is open", 1);
