@@ -147,6 +147,18 @@ test('preview field priority matches shared engine defaults, theme, fixture, sce
   assert.throws(() => previewState(source, {sessionId: 'test', themeId: 'missing'}), /Theme not found/);
 });
 
+test('preview recents are the scene fixture\'s array of events, copied, and [] without one', () => {
+  const source = snapshot();
+  const recents = [{type: 'follower', name: 'Cy', createdAt: '2025-01-15T11:58:00.000Z'}, {type: 'tip', name: 'Ana', amount: 5, createdAt: '2025-01-15T11:50:00.000Z'}];
+  source.fixtures = [{schemaVersion: 1, id: 'chat', name: 'Chat', recents, events: []}];
+  source.scenes = [{schemaVersion: 1, id: 'hero', name: 'Hero', fixture: 'chat'}];
+  const state = previewState(source, {sessionId: 'test', sceneId: 'hero'});
+  assert.deepEqual(state.recents, recents);
+  assert.notEqual(state.recents, recents, 'a copy, not the snapshot\'s array');
+  assert.notEqual(state.recents[0], recents[0]);
+  assert.deepEqual(previewState(source, {sessionId: 'test'}).recents, []);
+});
+
 test('tampered asset content is rejected before preview', async () => {
   const source = snapshot(); source.assets = [{path: 'assets/example.txt', content: 'original'}];
   const store = new MemoryStore();

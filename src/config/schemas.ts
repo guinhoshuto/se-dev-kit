@@ -123,6 +123,15 @@ export const themeSchema = z
   })
   .strict();
 
+const RECENTS_MESSAGE = "recents is an array of events, as StreamElements passes onWidgetLoad's recents";
+const isEmptyPlainObject = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === 0;
+/** onWidgetLoad's `recents`. Older fixtures and stored revisions wrote `{}`, which still reads as `[]`. */
+const recentsSchema = z.preprocess(
+  (value) => (isEmptyPlainObject(value) ? [] : value),
+  z.array(jsonObjectSchema, {invalid_type_error: RECENTS_MESSAGE})
+);
+
 export const fixtureSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -130,7 +139,7 @@ export const fixtureSchema = z
     name: z.string().min(1),
     description: z.string().optional(),
     channel: jsonObjectSchema.optional(),
-    recents: jsonObjectSchema.optional(),
+    recents: recentsSchema.optional(),
     session: jsonObjectSchema.optional(),
     fieldData: jsonObjectSchema.optional(),
     events: z.array(timelineEventSchema).default([])

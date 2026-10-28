@@ -1377,6 +1377,9 @@ function installFixedDate(fixedTime: string): void {
   globalThis.Date = FixedDate;
 }
 
+/** The vendored jQuery StreamElements' custom widget frame loads first (vendor/README.md), next to this module. */
+const JQUERY_URL = new URL("./vendor/jquery-3.3.1.min.js", import.meta.url).href;
+
 function loadClassicScript(source: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
@@ -1729,6 +1732,8 @@ export function installFrameRuntime(options: FrameRuntimeOptions): void {
     }
     await waitForDocument();
     watchStylesheets();
+    // StreamElements loads jQuery 3.3.1 before any widget script; a widget that ships its own still replaces it.
+    await withTimeout(loadClassicScript(JQUERY_URL), options.timeoutMs, "jQuery");
     for (const script of Array.from(document.querySelectorAll<HTMLScriptElement>('script[type="application/x-sws-classic"]'))) {
       if (script.dataset.swsSrc) await withTimeout(loadClassicScript(script.dataset.swsSrc), options.timeoutMs, "Dependency script");
       else {

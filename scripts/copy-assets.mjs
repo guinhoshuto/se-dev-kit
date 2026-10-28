@@ -17,6 +17,9 @@ for (const [source, destination] of copies) {
 // The editor replica's fonts and their licenses (src/studio-ui/fonts/README.md).
 await cp(resolve(projectRoot, "src/studio-ui/fonts"), resolve(projectRoot, "dist/studio-ui/fonts"), {recursive: true});
 
+// The widget frame's vendored jQuery and its license (src/runtime/vendor/README.md), before dist/runtime is published.
+await cp(resolve(projectRoot, "src/runtime/vendor"), resolve(projectRoot, "dist/runtime/vendor"), {recursive: true});
+
 await chmod(resolve(projectRoot, "dist/cli/index.js"), 0o755);
 await mkdir(resolve(projectRoot, "public/engine/runtime"), {recursive: true});
 await cp(resolve(projectRoot, "dist/runtime"), resolve(projectRoot, "public/engine/runtime"), {recursive: true});

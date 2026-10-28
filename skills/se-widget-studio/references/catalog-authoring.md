@@ -11,7 +11,7 @@ FIELDS defaults → theme → fixture → scene → temporary preview override
 ```
 
 - A **theme** contains `fieldData` only.
-- A **fixture** provides synthetic `channel`, `recents`, `session` (session data keys such as `follower-goal`, which events then update), `fieldData`, and timed events.
+- A **fixture** provides synthetic `channel`, `recents` (an array of events, as `onWidgetLoad` passes it; `[]` by default), `session` (session data keys such as `follower-goal`, which events then update), `fieldData`, and timed events.
 - A **scene** selects a theme/fixture and presentation: background, viewport, output, camera, crop, and capture time.
 - A **scenario** performs deterministic dispatch, field update, wait, and DOM assertion steps. Its steps start once its scene's fixture has been replayed in full, on a clock 1 ms past the fixture's last event: not at zero, and not at the scene's `captureAtMs`, which only screenshots and videos use. A `wait` counts from there (`replayFixture` in `src/scenarios/runner.ts`). On a 12-message burst whose last event came at 3000 ms, a scenario that waited 1500 ms and looked for the first message failed, because the 5-message limit had already removed it (se-jelly-chat, 2026-10-21). Assert on the newest messages, or give the scenario a `fixture` of its own.
 - A **recipe** selects scenes and optional theme/background/viewport/camera matrices, then requests screenshots, thumbnails, contact sheets, or video.

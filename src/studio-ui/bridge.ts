@@ -4,7 +4,7 @@ interface RuntimeState {
   sessionId: string;
   fieldData: Record<string, unknown>;
   channel: Record<string, unknown>;
-  recents: Record<string, unknown>;
+  recents: Record<string, unknown>[];
   session?: Record<string, unknown>;
   seed: number;
   fixedTime: string;

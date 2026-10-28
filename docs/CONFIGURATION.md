@@ -58,7 +58,7 @@ Fixtures contain synthetic context and a deterministic event timeline. Event pay
   "id": "friendly-chat",
   "name": "Friendly chat",
   "channel": {"username": "streamer"},
-  "recents": {},
+  "recents": [],
   "session": {"follower-goal": {"amount": 42}, "tip-session": {"amount": 25}},
   "fieldData": {},
   "events": [

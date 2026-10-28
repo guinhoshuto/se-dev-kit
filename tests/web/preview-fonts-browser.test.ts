@@ -59,6 +59,15 @@ document.head.append(link);`
     html: `<h1 id="t" style="font-family:'Late Face'">Studio</h1><main id="ready">Ready</main>`,
     js: `const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = '${css2('Late Face')}'; document.head.append(link);`
   },
+  // StreamElements' custom widget frame loads jQuery 3.3.1 before the widget's HTML and JS.
+  jquery: {
+    html: `<ul id="list"></ul><script>window.htmlSawJquery = typeof $ === 'function';</script><main id="ready">Ready</main>`,
+    js: `window.addEventListener('onWidgetLoad', obj => {
+  const recents = obj.detail.recents;
+  recents.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const event of recents) $('#list').append($('<li>').text(event.name));
+});`
+  },
   cjk: {
     html: `<h1 id="t" style="font-family:'Studio Display'">Studio</h1><main id="ready">Ready</main>`,
     js: `window.__probe = {loads: 0, errors: 0};
@@ -68,6 +77,19 @@ link.addEventListener('load', () => { window.__probe.loads += 1; });
 link.setAttribute('href', '${css2('Studio Display')}');
 document.head.append(link);
 window.__link = link;`
+  }
+};
+
+/** A case's fixtures and scenes, and the scene its preview opens. */
+const catalogs: Record<string, Pick<WidgetSnapshot, 'fixtures' | 'scenes'> & {sceneId: string}> = {
+  jquery: {
+    fixtures: [{schemaVersion: 1, id: 'recent', name: 'Recent', events: [], recents: [
+      {type: 'follower', name: 'Cy', createdAt: '2025-01-15T11:58:00.000Z'},
+      {type: 'tip', name: 'Ana', amount: 5, createdAt: '2025-01-15T11:50:00.000Z'},
+      {type: 'follower', name: 'Bo', createdAt: '2025-01-15T11:55:00.000Z'}
+    ]}],
+    scenes: [{schemaVersion: 1, id: 'hero', name: 'Hero', fixture: 'recent'}],
+    sceneId: 'hero'
   }
 };
 
@@ -86,7 +108,7 @@ async function startStudio() {
       const url = new URL(request.url!, origin);
       if (url.pathname.startsWith('/engine/')) {
         const file = url.pathname === '/engine/version.js' ? 'version.js' : `runtime/${url.pathname.slice('/engine/runtime/'.length)}`;
-        if (!/^(?:version|runtime\/[\w-]+)\.js$/.test(file)) { response.writeHead(404).end(); return; }
+        if (!/^(?:version|runtime\/[\w-]+|runtime\/vendor\/jquery-3\.3\.1\.min)\.js$/.test(file)) { response.writeHead(404).end(); return; }
         response.writeHead(200, {'content-type': 'text/javascript', 'access-control-allow-origin': '*'});
         response.end(await readFile(join(dist, file)));
         return;
@@ -99,9 +121,10 @@ async function startStudio() {
       }
       if (url.pathname === '/preview') {
         const widget = widgets[url.searchParams.get('case')!]!;
-        const source: WidgetSnapshot = {schemaVersion: 1, name: 'Broker', widget: {html: '', css: 'body{margin:0;font-size:20px}', js: '', fields: {}, viewport: {width: 320, height: 120}, ...widget}, channel: {}, themes: [], fixtures: [], scenes: [], scenarios: [], recipes: [], assets: []};
+        const catalog = catalogs[url.searchParams.get('case')!];
+        const source: WidgetSnapshot = {schemaVersion: 1, name: 'Broker', widget: {html: '', css: 'body{margin:0;font-size:20px}', js: '', fields: {}, viewport: {width: 320, height: 120}, ...widget}, channel: {}, themes: [], fixtures: catalog?.fixtures ?? [], scenes: catalog?.scenes ?? [], scenarios: [], recipes: [], assets: []};
         const prepared = await prepareSnapshot(source, store, 'fixture');
-        const options = {origin, sessionId: 'session-0123456789', nonce: 'nonce-0123456789abcdef', fonts: (font: string, {sampleText}: {sampleText: string}) => cssForPreview(font, fontOptions(sampleText))};
+        const options = {origin, sessionId: 'session-0123456789', nonce: 'nonce-0123456789abcdef', ...(catalog ? {sceneId: catalog.sceneId} : {}), fonts: (font: string, {sampleText}: {sampleText: string}) => cssForPreview(font, fontOptions(sampleText))};
         const page = await previewDocument(prepared, store, options);
         response.writeHead(200, {'content-type': 'application/json'});
         response.end(JSON.stringify({html: page.html, warnings: page.warnings, state: previewState(prepared.snapshot, options), sessionId: options.sessionId, nonce: options.nonce}));
@@ -151,12 +174,16 @@ document.body.append(iframe);
   return {origin, google, fontRequests, close: async () => { await new Promise(resolve => server.close(resolve)); await rm(directory, {recursive: true, force: true}); }};
 }
 
-interface Opened {page: Page; frame: Frame; csp: string[]; googleRequests: string[]; lastFonts: () => Promise<FontReport>}
+interface Opened {page: Page; frame: Frame; csp: string[]; googleRequests: string[]; problems: string[]; lastFonts: () => Promise<FontReport>}
 async function open(browser: Browser, origin: string, widget: string): Promise<Opened> {
   const page = await browser.newPage();
   const csp: string[] = [];
   const googleRequests: string[] = [];
+  const problems: string[] = [];
   page.on('console', message => { if (/Content Security Policy/i.test(message.text())) csp.push(message.text()); });
+  // The host page has no favicon; that 404 is the test server's, not the preview's.
+  page.on('console', message => { if (message.type() === 'error' && !message.location().url.endsWith('/favicon.ico')) problems.push(`console.error ${message.text()} ${message.location().url}`); });
+  page.on('pageerror', error => problems.push(`pageerror ${error.message}`));
   // Chromium reports a CSP-refused request too; only one that got a response reached the network.
   page.on('requestfinished', request => { if (/fonts\.(?:googleapis|gstatic)\.com/.test(request.url())) googleRequests.push(request.url()); });
   page.on('response', response => { if (/fonts\.(?:googleapis|gstatic)\.com/.test(response.url())) googleRequests.push(response.url()); });
@@ -166,7 +193,7 @@ async function open(browser: Browser, origin: string, widget: string): Promise<O
   assert.deepEqual(errors, []);
   const frame = page.frames().find(item => item !== page.mainFrame())!;
   const lastFonts = () => page.evaluate(() => (window as unknown as {__events: {type: string; payload: {report: FontReport}}[]}).__events.filter(event => event.type === 'frame:fonts').at(-1)!.payload.report);
-  return {page, frame, csp, googleRequests, lastFonts};
+  return {page, frame, csp, googleRequests, problems, lastFonts};
 }
 
 const settle = (frame: Frame) => frame.evaluate(() => Promise.race([
@@ -288,6 +315,27 @@ test('[browser] an answer that arrives after the preview became ready updates th
       const reports = (window as unknown as {__events: {type: string; payload: {report: FontReport}}[]}).__events.filter(event => event.type === 'frame:fonts');
       return reports.at(-1)?.payload.report.families.some(entry => entry.family === 'Late Face' && entry.status === 'loaded');
     }, undefined, {timeout: 10_000});
+    await page.close();
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
+test('[browser] a hosted preview loads the vendored jQuery from the engine path before the widget, and onWidgetLoad gets the fixture\'s recents as an array', {timeout: 60_000}, async t => {
+  if (!(await detectBrowser()).executablePath) { t.skip('No compatible local Chromium executable is installed; the Studio must not download one implicitly.'); return; }
+  const studio = await startStudio();
+  const {browser} = await launchStudioBrowser({});
+  try {
+    const {page, frame, csp, problems} = await open(browser, studio.origin, 'jquery');
+    const seen = await frame.evaluate(() => ({
+      version: (window as unknown as {jQuery?: {fn: {jquery: string}}}).jQuery?.fn.jquery,
+      htmlSawJquery: (window as unknown as {htmlSawJquery?: boolean}).htmlSawJquery,
+      names: Array.from(document.querySelectorAll('#list li'), item => item.textContent)
+    }));
+    assert.deepEqual(seen, {version: '3.3.1', htmlSawJquery: true, names: ['Ana', 'Bo', 'Cy']});
+    assert.deepEqual(csp, []);
+    assert.deepEqual(problems, []);
     await page.close();
   } finally {
     await browser.close();
