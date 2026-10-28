@@ -2,6 +2,20 @@
   "mutations": [
     {
       "file": "scripts/lib/machine.mjs",
+      "from": "const isTestWorker = command => executable(command) === 'node' &&",
+      "to": "const isTestWorker = command => /\\bnode\\b/.test(command) &&",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a detached shell whose command line names node"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "const isJobWorker = command => executable(command) === 'node' &&",
+      "to": "const isJobWorker = command => /\\bnode\\b/.test(command) &&",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^a detached shell whose command line names node"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
       "from": ",\n  String.raw`^(?:\\S*/)?ffmpeg\\s(?!.*\\s-(?:frames:v|vframes)\\s+1(?:\\s|$))` +\n    String.raw`.*(?:\\s-f\\s+image2(?:\\s|$)|%0?\\d*d\\.\\w+|\\s(?:libx26[45]|libvpx(?:-vp9)?|libaom-av1|libsvtav1|\\w+_videotoolbox|prores\\w*)(?:\\s|$))`",
       "to": "",
       "test": "tests/unit/machine.test.mjs",

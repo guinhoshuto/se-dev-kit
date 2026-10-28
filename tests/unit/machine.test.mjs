@@ -57,6 +57,25 @@ test("orphans are this checkout's marked Chromes and dead runners' workers with 
   assert.deepEqual(reported.map((item) => item.pid).sort((a, b) => a - b), [30, 31, 61]);
 });
 
+test("a detached shell whose command line names node and a test file or the job worker is not an orphan; the node it leaves behind is", async () => {
+  // #12: on 2026-10-25 this wrapper, started inside the checkout with `nohup ... &!` and adopted by launchd,
+  // stopped its own run twice with `this checkout left 1 orphan process(es)`. ps shows it so, $PATH and $(date) unexpanded.
+  const log = `${ROOT}/.cache/css-transition`;
+  const wrapper = `/bin/zsh -c export PATH=/opt/homebrew/opt/node@24/bin:$PATH; cd ${ROOT}; echo "=== $(date '+%F %T') start css-transition-test1" >> ${log}/progress.log; node ~/obsidian/AI/scripts/render-slot.ts run -- npm run test:repeat -- tests/integration/css-transition.test.mjs 1 > ${log}/test-1.log 2>&1; rc=$?; python3 ~/obsidian/AI/scripts/fim_job.py --tarefa css-transition-test1 --rc $rc --log ${log}/progress.log --sem-notificacao`;
+  const list = [
+    {pid: 70, ppid: 1, command: wrapper},
+    {pid: 71, ppid: 1, command: `-zsh -c node scripts/job-worker.mjs ${ROOT}/.studio-data/jobs/j1/input.json 1; echo "worker exited $?"`},
+    {pid: 72, ppid: 1, command: `/opt/homebrew/opt/node@24/bin/node ${ROOT}/tests/integration/css-transition.test.mjs`},
+    {pid: 73, ppid: 1, command: `/opt/homebrew/opt/node@24/bin/node ${ROOT}/scripts/job-worker.mjs ${ROOT}/.studio-data/jobs/j1/input.json 1`}
+  ];
+  const {orphans, reported} = await checkoutOrphans(ROOT, list, {cwd: async () => ROOT});
+  assert.deepEqual(orphans.map((item) => item.pid), [72, 73]);
+  assert.deepEqual(reported, []);
+  const gate = (processes) => browserGate({root: ROOT, paths: ["/work"], ownRoots: [900], processes, free: async () => 10 * 1024 ** 3, cwd: async () => ROOT, usage: async () => new Map(), machine: async () => ({free: true, reasons: []})});
+  assert.deepEqual(await gate(list.slice(0, 2)), {ok: true});
+  assert.match((await gate(list)).reason, /this checkout left 2 orphan process\(es\) \(PID 72, 73\)/);
+});
+
 test("another session's work is any headless or piped Chrome, Remotion or local render outside the caller's own tree", () => {
   const busy = otherSessionsWork(processes(), [900]).map((item) => item.pid).sort((a, b) => a - b);
   // 12 and 40 belong to the caller (900). A test worker (20), a runner (30), a plain renderer (60)
