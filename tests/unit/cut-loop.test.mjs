@@ -1,21 +1,30 @@
 import assert from "node:assert/strict";
 import {execFile, spawn} from "node:child_process";
 import {createHash} from "node:crypto";
-import {mkdtemp, readFile, rm, stat, symlink, writeFile} from "node:fs/promises";
+import {once} from "node:events";
+import {existsSync, mkdtempSync, rmSync} from "node:fs";
+import {mkdtemp, readdir, readFile, rm, stat, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+import {setTimeout as sleep} from "node:timers/promises";
 import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
-import test from "node:test";
+import test, {after} from "node:test";
 
 import {cutLoop, findBeatLoop, findLoop, findPeriodLoop, wrapError} from "../../skills/se-widget-studio/scripts/cut-loop.mjs";
 import {detectMediaTooling} from "../../dist/capture/media.js";
+import {RENDER_SLOT} from "./ceding-chain.mjs";
 
 const execFileAsync = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL("../../skills/se-widget-studio/scripts/cut-loop.mjs", import.meta.url));
 const SKILL = fileURLToPath(new URL("../../skills/se-widget-studio", import.meta.url));
 // Detected before the first test: a test declared after a top-level await is lost under --test-force-exit.
 const tooling = await detectMediaTooling();
+// A cut encodes in the render slot: this file's own, with no machine check, so no test waits in the machine-wide
+// queue (npm test gives each suite its own slot; npm run mutate and node --test do not).
+const SLOT_ROOT = mkdtempSync(join(tmpdir(), "sws-cut-loop-slot-"));
+Object.assign(process.env, {RENDER_SLOT_DIR: join(SLOT_ROOT, "render-slot"), MACHINE_CHECK: join(SLOT_ROOT, "no-machine-check")});
+after(() => rmSync(SLOT_ROOT, {recursive: true, force: true}));
 
 /** A motion list: true on every frame of each change, which lasts `length` frames. */
 function motion(count, changes, length = 5) {
@@ -46,7 +55,7 @@ test("cut-loop run through a link to the skill folder prints its usage", async (
   const root = await mkdtemp(join(tmpdir(), "sws-cut-loop-link-"));
   try {
     const {stdout} = await execFileAsync(process.execPath, [await linkedScript(root), "--help"]);
-    assert.match(stdout, /^Usage: cut-loop\.mjs \[--period <ms> \[--beat <frames>\]\] <video\.mp4> \[\.\.\.\]\n/);
+    assert.match(stdout, /^Usage: cut-loop\.mjs \[--check\] \[--period <ms> \[--beat <frames>\]\] <video\.mp4> \[\.\.\.\]\n/);
   } finally {
     await rm(root, {recursive: true, force: true});
   }
@@ -172,7 +181,9 @@ test("cut-loop writes the loop as a tagged BT.709 MP4 whose first frame is the p
     const input = join(root, "listing.mp4");
     await grayVideo(input, changeLevels(100, 40, [[30, 120], [50, 200], [70, 40]]));
 
-    assert.match(cutLoop(input), /^LOOP listing\.mp4: frames 15\.\.74 \(60 frames, 2\.000 s, 3 cycles of 20\) -> listing-loop\.mp4;/);
+    assert.match(await cutLoop(input), /^LOOP listing\.mp4: frames 15\.\.74 \(60 frames, 2\.000 s, 3 cycles of 20\) -> listing-loop\.mp4;/);
+    // The slot goes back with the encode, before the next input is measured.
+    assert.equal(existsSync(process.env.RENDER_SLOT_DIR), false, "the cut kept the render slot after its encode");
     const output = join(root, "listing-loop.mp4");
     assert.deepEqual(await videoStream(output), {color_range: "tv", color_space: "bt709", color_transfer: "bt709", color_primaries: "bt709", nb_read_frames: "60"});
     const mean = await meanLuma(output, 0);
@@ -192,9 +203,9 @@ test("cut-loop writes the loop as a tagged BT.709 MP4 whose first frame is the p
 
     // An existing loop or record is never replaced.
     await writeFile(output, "keep");
-    assert.equal(cutLoop(input), "FAILED listing.mp4: listing-loop.mp4 already exists; move it away first");
+    assert.equal(await cutLoop(input), "FAILED listing.mp4: listing-loop.mp4 already exists; move it away first");
     await rm(output);
-    assert.equal(cutLoop(input), "FAILED listing.mp4: listing-loop.json already exists; move it away first");
+    assert.equal(await cutLoop(input), "FAILED listing.mp4: listing-loop.json already exists; move it away first");
     assert.equal(await readFile(join(root, "listing-loop.json"), "utf8"), `${JSON.stringify(record, null, 2)}\n`);
   } finally {
     await rm(root, {recursive: true, force: true});
@@ -222,10 +233,10 @@ test("cut-loop --period cuts a video that repeats on uneven changes, blending th
     // the same picture in the first rest, as compression leaves each still stretch with the error of its first frame.
     const input = join(root, "chat.mp4");
     await grayVideo(input, changeLevels(180, 40, [[30, 120], [45, 200], [70, 40], [90, 120], [105, 200], [130, 43]]));
-    assert.equal(cutLoop(input), "NO-LOOP chat.mp4: uneven cycles [15,25,20,15,25]");
-    assert.equal(cutLoop(input, {periodMs: 2010}), "NO-LOOP chat.mp4: a period of 2010 ms is 60.300 frames at 30 fps, not a whole number");
+    assert.equal(await cutLoop(input), "NO-LOOP chat.mp4: uneven cycles [15,25,20,15,25]");
+    assert.equal(await cutLoop(input, {periodMs: 2010}), "NO-LOOP chat.mp4: a period of 2010 ms is 60.300 frames at 30 fps, not a whole number");
     // A period that lands on another picture: frame 60 rests on 200.
-    assert.match(cutLoop(input, {periodMs: 2500}), /^NO-LOOP chat\.mp4: frame 60 and frame 135 differ \(mean 15\d\.\d{3}\)$/);
+    assert.match(await cutLoop(input, {periodMs: 2500}), /^NO-LOOP chat\.mp4: frame 60 and frame 135 differ \(mean 15\d\.\d{3}\)$/);
 
     const cli = await execFileAsync(process.execPath, [SCRIPT, "--period", "2000", input]);
     assert.match(cli.stdout, /^LOOP chat\.mp4: frames 75\.\.134 \(60 frames, 2\.000 s, period of 2000 ms\) -> chat-loop\.mp4; blended from frames 135\.\.142 over 8 frames;/);
@@ -260,11 +271,16 @@ test("cut-loop --period --beat cuts a video that never holds still on its beat, 
   try {
     const input = join(root, "boil.mp4");
     await grayVideo(input, boilLevels());
-    assert.throws(() => cutLoop(input, {beat: 4}), /^Error: --beat needs --period$/);
+    await assert.rejects(cutLoop(input, {beat: 4}), /^Error: --beat needs --period$/);
     // The boil never rests for the blend --period needs.
-    assert.equal(cutLoop(input, {periodMs: 2400}), "NO-LOOP boil.mp4: the final rest from 89 is 3 frames; the blend needs 8");
-    assert.equal(cutLoop(input, {periodMs: 2500, beat: 4}), "NO-LOOP boil.mp4: the period must be a whole number of 4-frame beats, not 75 frames");
-    assert.match(cutLoop(input, {periodMs: 800, beat: 4}), /^NO-LOOP boil\.mp4: the wrap from frame 35 to frame 12 changes by 5\d\.\d{3}, more than 2 times the beats around it \(/);
+    assert.equal(await cutLoop(input, {periodMs: 2400}), "NO-LOOP boil.mp4: the final rest from 89 is 3 frames; the blend needs 8");
+    assert.equal(await cutLoop(input, {periodMs: 2500, beat: 4}), "NO-LOOP boil.mp4: the period must be a whole number of 4-frame beats, not 75 frames");
+    assert.match(await cutLoop(input, {periodMs: 800, beat: 4}), /^NO-LOOP boil\.mp4: the wrap from frame 35 to frame 12 changes by 5\d\.\d{3}, more than 2 times the beats around it \(/);
+
+    // --check measures the same cut and writes nothing.
+    const checked = await execFileAsync(process.execPath, [SCRIPT, "--check", "--period", "2400", "--beat", "4", input]);
+    assert.match(checked.stdout, /^LOOP boil\.mp4: frames 16\.\.87 \(72 frames, 2\.400 s, period of 2400 ms on a 4-frame beat\); cut without a blend; wrap 87 -> 16: mean 1\d\.\d{3} against beats of 2\d\.\d{3} and \d+\.\d{3}; original t = loop t \+ 0\.533 s; --check: nothing encoded or written\n$/);
+    assert.deepEqual(await readdir(root), ["boil.mp4"]);
 
     const cli = await execFileAsync(process.execPath, [SCRIPT, "--period", "2400", "--beat", "4", input]);
     assert.match(cli.stdout, /^LOOP boil\.mp4: frames 16\.\.87 \(72 frames, 2\.400 s, period of 2400 ms on a 4-frame beat\) -> boil-loop\.mp4; cut without a blend; wrap 87 -> 16: mean 1\d\.\d{3} against beats of 2\d\.\d{3} and \d+\.\d{3};/);
@@ -277,6 +293,8 @@ test("cut-loop --period --beat cuts a video that never holds still on its beat, 
     assert.ok(Math.abs(last - 56) <= 2, `the last frame is frame 87, mean luma ${last}`);
 
     const record = JSON.parse(await readFile(join(root, "boil-loop.json"), "utf8"));
+    // A check after the cut measures again, next to the loop it never replaces.
+    assert.match(await cutLoop(input, {periodMs: 2400, beat: 4, check: true}), /^LOOP boil\.mp4: frames 16\.\.87 .*; --check: nothing encoded or written$/);
     assert.equal(record.mode, "beat");
     assert.deepEqual(record.loop, {firstFrame: 16, lastFrame: 87, frames: 72, durationMs: 2400, originalOffsetMs: 533.333, periodMs: 2400, beat: {frames: 4}});
     assert.deepEqual(record.encoding, {codec: "h264", crf: 16, preset: "slow"});
@@ -294,6 +312,118 @@ test("cut-loop --period --beat cuts a video that never holds still on its beat, 
         && error.stderr.includes("--beat takes the frames from one change of the widget to the next"));
     }
   } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+/** An environment with the render slot in `root`, the machine check `check` (none by default) and no inherited slot. */
+function slotEnv(root, check = join(root, "no-machine-check")) {
+  const {RENDER_SLOT_HELD: _held, RENDER_SLOT_CEDE: _cede, NODE_TEST_CONTEXT: _context, ...rest} = process.env;
+  return {...rest, RENDER_SLOT_DIR: join(root, "render-slot"), RENDER_SLOT_CHECK: "off", MACHINE_CHECK: check};
+}
+
+/** cut-loop.mjs in the background: what it printed so far, and its exit status once it ends. */
+function background(args, env) {
+  const child = spawn(process.execPath, [SCRIPT, ...args], {env, stdio: ["ignore", "pipe", "pipe"]});
+  const run = {child, stdout: "", stderr: "", exited: once(child, "close").then(([code]) => code)};
+  child.stdout.on("data", (chunk) => { run.stdout += chunk; });
+  child.stderr.on("data", (chunk) => { run.stderr += chunk; });
+  return run;
+}
+
+/** Waits until `ready()` or until `run` ends, for 30 s at most. */
+async function until(run, ready) {
+  const deadline = Date.now() + 30_000;
+  while (!(await ready()) && run.child.exitCode === null && Date.now() < deadline) await sleep(50);
+}
+
+const LISTING = changeLevels(100, 40, [[30, 120], [50, 200], [70, 40]]);
+
+test("cut-loop --check measures the loop and writes nothing, and takes no turn in the render slot", media, async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-cut-loop-check-"));
+  const env = slotEnv(root);
+  const hold = spawn(process.execPath, [RENDER_SLOT, "hold", "--rotulo", "cut-loop-check", "--max", "5"], {env, stdio: ["ignore", "pipe", "ignore"]});
+  const released = once(hold, "close");
+  try {
+    let held = "";
+    hold.stdout.on("data", (chunk) => { held += chunk; });
+    const input = join(root, "listing.mp4");
+    await grayVideo(input, LISTING);
+    while (!held.includes("Holding the render slot") && hold.exitCode === null) await sleep(20);
+    assert.match(held, /Holding the render slot/);
+    // Another process holds the slot, and the check answers at once.
+    const checked = await execFileAsync(process.execPath, [SCRIPT, "--check", input], {env, timeout: 30_000});
+    assert.match(checked.stdout, /^LOOP listing\.mp4: frames 15\.\.74 \(60 frames, 2\.000 s, 3 cycles of 20\); changes at \[30,50,70\]; frame 15 vs 75: mean \d\.\d{3}; original t = loop t \+ 0\.500 s; --check: nothing encoded or written\n$/);
+    assert.equal(await cutLoop(input, {check: true}), checked.stdout.trimEnd());
+    // A period that lands on another picture is still NO-LOOP, with exit code 1.
+    await assert.rejects(execFileAsync(process.execPath, [SCRIPT, "--check", "--period", "1000", input], {env, timeout: 30_000}), (error) => error.code === 1
+      && /^NO-LOOP listing\.mp4: frame 50 changes inside the blend frames 45\.\.52\n$/.test(error.stdout));
+    assert.deepEqual((await readdir(root)).filter((name) => !name.startsWith("render-slot")), ["listing.mp4"]);
+  } finally {
+    hold.kill("SIGTERM");
+    await released;
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("cut-loop waits for its turn in the render slot before the encoding ffmpeg starts, and gives the slot back after it", media, async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-cut-loop-turn-"));
+  const env = slotEnv(root);
+  const hold = spawn(process.execPath, [RENDER_SLOT, "hold", "--rotulo", "cut-loop-turn", "--max", "5"], {env, stdio: ["ignore", "pipe", "ignore"]});
+  const released = once(hold, "close");
+  let cut;
+  try {
+    let held = "";
+    hold.stdout.on("data", (chunk) => { held += chunk; });
+    const input = join(root, "listing.mp4");
+    await grayVideo(input, LISTING);
+    while (!held.includes("Holding the render slot") && hold.exitCode === null) await sleep(20);
+    assert.match(held, /Holding the render slot/);
+
+    cut = background([input], env);
+    const ticket = `-${String(cut.child.pid).padStart(7, "0")}.json`;
+    await until(cut, async () => (await readdir(`${env.RENDER_SLOT_DIR}.queue`).catch(() => [])).some((name) => name.endsWith(ticket)));
+    // Measured, then in the queue behind the hold, with no ffmpeg on the loop's file yet.
+    assert.equal(cut.child.exitCode, null, `the cut ended while another process held the slot: ${cut.stdout}${cut.stderr}`);
+    assert.match(cut.stderr, /^Waiting for the render slot, held by pid \d+ \(.*hold: cut-loop-turn\)/m);
+    await sleep(1000);
+    assert.equal(existsSync(join(root, "listing-loop.mp4")), false, "the encode started before its turn");
+
+    hold.kill("SIGTERM");
+    assert.equal(await cut.exited, 0, cut.stderr);
+    assert.match(cut.stdout, /^LOOP listing\.mp4: frames 15\.\.74 \(60 frames, 2\.000 s, 3 cycles of 20\) -> listing-loop\.mp4;/);
+    assert.equal(existsSync(env.RENDER_SLOT_DIR), false, "the cut kept the render slot after its encode");
+  } finally {
+    hold.kill("SIGTERM");
+    cut?.child.kill("SIGTERM");
+    await Promise.all([released, cut?.exited]);
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("cut-loop holds the render slot and encodes only once the machine check says the machine is free", media, async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-cut-loop-machine-"));
+  const check = join(root, "maquina_livre.py");
+  await writeFile(check, ["import json, sys", "print(json.dumps({'livre': False, 'motivos': [], 'reasons': ['the game is open']}))", "sys.exit(3)"].join("\n"));
+  const env = slotEnv(root, check);
+  let cut;
+  try {
+    const input = join(root, "listing.mp4");
+    await grayVideo(input, LISTING);
+    cut = background([input], env);
+    await until(cut, () => cut.stderr.includes("Waiting for the machine: the game is open"));
+    assert.equal(cut.child.exitCode, null, `the cut ended on a busy machine: ${cut.stdout}${cut.stderr}`);
+    assert.match(cut.stderr, /^Waiting for the machine: the game is open$/m);
+    assert.ok(existsSync(env.RENDER_SLOT_DIR), "the cut asks the machine check with the slot in hand");
+    assert.equal(existsSync(join(root, "listing-loop.mp4")), false, "the encode started on a busy machine");
+    // Stopped while it waits, it gives the slot back and leaves nothing.
+    cut.child.kill("SIGTERM");
+    await cut.exited;
+    assert.equal(existsSync(env.RENDER_SLOT_DIR), false);
+    assert.deepEqual((await readdir(root)).filter((name) => !name.startsWith("render-slot")).sort(), ["listing.mp4", "maquina_livre.py"]);
+  } finally {
+    cut?.child.kill("SIGTERM");
+    await cut?.exited;
     await rm(root, {recursive: true, force: true});
   }
 });

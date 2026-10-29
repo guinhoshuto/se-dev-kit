@@ -33,15 +33,25 @@
  * how close S and R were (with --beat, how much the wrap and the beats around it changed), the encoder settings with
  * the CRF, and both files' SHA-256.
  *
- * Usage: cut-loop.mjs [--period <ms> [--beat <frames>]] <video.mp4> [...]   writes <video>-loop.mp4 and
- * <video>-loop.json next to each input; never replaces either. Needs ffmpeg and ffprobe on PATH. Exit code 1 when any
- * input has no loop.
+ * --check finds and measures the loop the same way and prints its LOOP or NO-LOOP line, but encodes and writes
+ * nothing: check a period with it before the cut. Finding and measuring only decode. The encode is the heavy step: it
+ * waits for the machine-wide render slot in the order of its queue, then for the machine check, as a local render does
+ * (src/shared/render-slot.ts and src/shared/machine-check.ts, from the engine build next to this script or the live
+ * checkout's), and gives the slot back as soon as ffmpeg ends. On 2026-10-28 a check of --period 11867 --beat 4,
+ * expected to come out NO-LOOP, came out LOOP and encoded a 1080p cut outside the slot while mutation chains held
+ * their turns in it (#21).
+ *
+ * Usage: cut-loop.mjs [--check] [--period <ms> [--beat <frames>]] <video.mp4> [...]   writes <video>-loop.mp4 and
+ * <video>-loop.json next to each input, or with --check nothing; never replaces either. Needs ffmpeg and ffprobe on
+ * PATH. Exit code 1 when any input has no loop.
  */
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync, readFileSync, realpathSync, writeFileSync} from 'node:fs';
 import {basename, dirname, extname, join, resolve} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+
+import {engineBuilds} from './studio-client.mjs';
 
 const SMALL = [480, 270];  // motion is measured on a downscaled luma copy
 export const STILL = 0.02; // mean |luma step| (0-255) at or below which a frame counts as unchanged
@@ -180,12 +190,38 @@ function luma(path, filter, size) {
 
 const sha256 = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 
+/** The render slot and the machine check of the engine build next to this script, else of the live checkout's. */
+async function engine() {
+  const builds = engineBuilds();
+  for (const build of builds) {
+    try {
+      const modules = await Promise.all(['render-slot.js', 'machine-check.js'].map(file => import(pathToFileURL(resolve(build, 'shared', file)).href)));
+      return Object.assign({}, ...modules);
+    } catch {/* the next build */}
+  }
+  throw new Error(`the encode waits for the render slot, and no engine build was found at ${builds.join(' or ')}; run npm run build in the Studio checkout, or measure the loop with --check, which encodes nothing`);
+}
+
+/** Runs the encoding ffmpeg holding the render slot: in the order of its queue, then once the machine check says free. */
+async function encode(args, command) {
+  const {acquireRenderSlot, waitForMachine} = await engine();
+  const log = message => process.stderr.write(`${message}\n`);
+  const slot = await acquireRenderSlot({command, repo: 'se-dev-kit', log});
+  try {
+    // Under a slot inherited from a parent (RENDER_SLOT_HELD), the parent asked the machine check.
+    if (!slot.inherited) await waitForMachine({log});
+    run('ffmpeg', args);
+  } finally {
+    slot.release();
+  }
+}
+
 /**
- * Cuts one video; returns a one-line report that starts with LOOP, NO-LOOP, or FAILED.
+ * Cuts one video; resolves to a one-line report that starts with LOOP, NO-LOOP, or FAILED.
  * With periodMs, cuts at that period (see --period above) instead of finding even cycles; with beat too, at that
- * period on that beat (see --beat above).
+ * period on that beat (see --beat above). With check, only finds and measures the loop (see --check above).
  */
-export function cutLoop(input, {periodMs, beat} = {}) {
+export async function cutLoop(input, {periodMs, beat, check = false} = {}) {
   if (beat !== undefined && periodMs === undefined) throw new Error('--beat needs --period');
   const mode = beat !== undefined ? 'beat' : periodMs !== undefined ? 'period' : 'cycles';
   const path = resolve(input);
@@ -193,7 +229,7 @@ export function cutLoop(input, {periodMs, beat} = {}) {
   const stem = join(dirname(path), `${basename(path, extname(path))}-loop`);
   const target = `${stem}.mp4`;
   const recordPath = `${stem}.json`;
-  for (const file of [target, recordPath]) {
+  for (const file of check ? [] : [target, recordPath]) {
     if (existsSync(file)) return `FAILED ${name}: ${basename(file)} already exists; move it away first`;
   }
   const {width, height, fps, frames: inputFrames, color} = probe(path);
@@ -238,6 +274,14 @@ export function cutLoop(input, {periodMs, beat} = {}) {
     compared = `frame ${start} vs ${rest}: mean ${mean.toFixed(3)}`;
   }
   const frames = rest - start;
+  const [how, detail] = mode === 'cycles'
+    ? [`${found.changes.length} cycles of ${found.cycle}`, `changes at [${found.changes}]`]
+    : mode === 'period'
+      ? [`period of ${periodMs} ms`, `blended from frames ${rest}..${rest + FADE - 1} over ${FADE} frames`]
+      : [`period of ${periodMs} ms on a ${beat}-frame beat`, 'cut without a blend'];
+  const loop = `LOOP ${name}: frames ${start}..${rest - 1} (${frames} frames, ${(frames / fps).toFixed(3)} s, ${how})`;
+  const offset = `original t = loop t + ${(start / fps).toFixed(3)} s`;
+  if (check) return `${loop}; ${detail}; ${compared}; ${offset}; --check: nothing encoded or written`;
   const select = (first, last) => `select='between(n\\,${first}\\,${last})'`;
   // The blend pairs its inputs by timestamp, so both count frames from 0 at the video's rate; with PTS-STARTPTS the
   // tpad clones came out late and the loop ran past its length.
@@ -246,8 +290,9 @@ export function cutLoop(input, {periodMs, beat} = {}) {
     : ['-filter_complex', `[0]split[x][y];[x]${select(start, rest - 1)},setpts=N/FRAME_RATE/TB[a];`
       + `[y]${select(rest, rest + FADE - 1)},setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=${frames - FADE}[b];`
       + `[a][b]blend=all_expr='A*min(N/${FADE}\\,1)+B*(1-min(N/${FADE}\\,1))',${TO_BT709}[out]`, '-map', '[out]'];
-  run('ffmpeg', ['-v', 'error', '-n', '-i', path, ...filter, '-fps_mode', 'passthrough',
-    '-c:v', 'libx264', '-preset', ENCODING.preset, '-crf', String(ENCODING.crf), '-movflags', '+faststart', '-an', target]);
+  await encode(['-v', 'error', '-n', '-i', path, ...filter, '-fps_mode', 'passthrough',
+    '-c:v', 'libx264', '-preset', ENCODING.preset, '-crf', String(ENCODING.crf), '-movflags', '+faststart', '-an', target],
+  `cut-loop.mjs ${basename(target)}`);
   const written = probe(target);
   if (written.frames !== frames) return `FAILED ${basename(target)}: wrote ${written.frames} frames, expected ${frames}`;
   const shape = mode === 'cycles' ? {cycle: found.cycle, changes: found.changes}
@@ -265,14 +310,8 @@ export function cutLoop(input, {periodMs, beat} = {}) {
     encoding: ENCODING
   };
   writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`, {flag: 'wx'});
-  const how = mode === 'cycles'
-    ? `${found.changes.length} cycles of ${found.cycle}) -> ${basename(target)}; changes at [${found.changes}]`
-    : mode === 'period'
-      ? `period of ${periodMs} ms) -> ${basename(target)}; blended from frames ${rest}..${rest + FADE - 1} over ${FADE} frames`
-      : `period of ${periodMs} ms on a ${beat}-frame beat) -> ${basename(target)}; cut without a blend`;
-  return `LOOP ${name}: frames ${start}..${rest - 1} (${frames} frames, ${(frames / fps).toFixed(3)} s, ${how}; `
-    + `${compared}; color ${color} -> ${written.color}; `
-    + `original t = loop t + ${(start / fps).toFixed(3)} s; crf ${ENCODING.crf}; record ${basename(recordPath)}`;
+  return `${loop} -> ${basename(target)}; ${detail}; ${compared}; color ${color} -> ${written.color}; `
+    + `${offset}; crf ${ENCODING.crf}; record ${basename(recordPath)}`;
 }
 
 // Node resolves symlinks for the ESM entry point, so import.meta.url is the real path while argv[1] keeps the linked
@@ -288,8 +327,10 @@ function isEntryPoint() {
 
 if (isEntryPoint()) {
   const inputs = process.argv.slice(2);
+  const check = inputs.includes('--check');
+  if (check) inputs.splice(inputs.indexOf('--check'), 1);
   if (!inputs.length || inputs.includes('--help')) {
-    console.log('Usage: cut-loop.mjs [--period <ms> [--beat <frames>]] <video.mp4> [...]\nCuts each Studio MP4 to an exact loop, written as <video>-loop.mp4 (tagged BT.709 H.264, CRF 16) with <video>-loop.json. --period cuts at the widget\'s known period, in milliseconds, instead of finding even cycles. --beat, with --period, cuts a widget that never holds still on its beat, the frames from one of its changes to the next. Needs ffmpeg and ffprobe on PATH.');
+    console.log('Usage: cut-loop.mjs [--check] [--period <ms> [--beat <frames>]] <video.mp4> [...]\nCuts each Studio MP4 to an exact loop, written as <video>-loop.mp4 (tagged BT.709 H.264, CRF 16) with <video>-loop.json; the encode waits for its turn in the render slot. --check finds and measures the loop and prints LOOP or NO-LOOP, but encodes and writes nothing: check a period with it first. --period cuts at the widget\'s known period, in milliseconds, instead of finding even cycles. --beat, with --period, cuts a widget that never holds still on its beat, the frames from one of its changes to the next. Needs ffmpeg and ffprobe on PATH.');
     process.exit(inputs.length ? 0 : 2);
   }
   let periodMs;
@@ -315,7 +356,7 @@ if (isEntryPoint()) {
   let failed = false;
   for (const input of inputs) {
     let line;
-    try {line = cutLoop(input, {periodMs, beat});} catch (error) {line = `FAILED ${basename(input)}: ${error.message}`;}
+    try {line = await cutLoop(input, {periodMs, beat, check});} catch (error) {line = `FAILED ${basename(input)}: ${error.message}`;}
     if (!line.startsWith('LOOP ')) failed = true;
     console.log(line);
   }
