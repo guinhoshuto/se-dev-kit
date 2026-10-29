@@ -93,10 +93,59 @@
     },
     {
       "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
-      "from": "try {line = cutLoop(input, {periodMs, beat});}",
-      "to": "try {line = cutLoop(input, {periodMs});}",
+      "from": "try {line = await cutLoop(input, {periodMs, beat, check});}",
+      "to": "try {line = await cutLoop(input, {periodMs, check});}",
       "test": "tests/unit/cut-loop.test.mjs",
       "name": "--period --beat"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "if (check) return `${loop}; ${detail}; ${compared}; ${offset}; --check: nothing encoded or written`;",
+      "to": "",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "--check"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "for (const file of check ? [] : [target, recordPath]) {",
+      "to": "for (const file of [target, recordPath]) {",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "--period --beat"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "const check = inputs.includes('--check');",
+      "to": "const check = false;",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^cut-loop --check"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "try {line = await cutLoop(input, {periodMs, beat, check});}",
+      "to": "try {line = await cutLoop(input, {periodMs, beat});}",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^cut-loop --check"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "const slot = await acquireRenderSlot({command, repo: 'se-dev-kit', log});",
+      "to": "const slot = {inherited: false, release: () => {}};",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "render slot"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "if (!slot.inherited) await waitForMachine({log});",
+      "to": "",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^cut-loop holds the render slot and encodes only once the machine check"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/cut-loop.mjs",
+      "from": "  } finally {\n    slot.release();\n  }",
+      "to": "  } finally {\n  }",
+      "test": "tests/unit/cut-loop.test.mjs",
+      "name": "^cut-loop writes the loop"
     }
   ]
 }
