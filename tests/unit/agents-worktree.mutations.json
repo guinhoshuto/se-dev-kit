@@ -1,0 +1,22 @@
+{
+  "mutations": [
+    {
+      "file": "AGENTS.md",
+      "from": "`python3 ~/obsidian/AI/scripts/novo_worktree.py ~/dev/firulas/se-dev-kit <task> --base main --node-modules`",
+      "to": "`git worktree add .claude/worktrees/<task> -b wip/<task> main`",
+      "test": "tests/unit/agents-worktree.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "<task> --base main --node-modules`",
+      "to": "<task> --base main`",
+      "test": "tests/unit/agents-worktree.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "Test there;",
+      "to": "Or `git worktree add .claude/worktrees/<task>`. Test there;",
+      "test": "tests/unit/agents-worktree.test.mjs"
+    }
+  ]
+}
