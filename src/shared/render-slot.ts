@@ -153,6 +153,17 @@
 // so it can only jump the turn; it reads only ticket names and .tmp files in the queue, so it never sees the
 // baton: PROTOCOL stays.
 //
+// History (2026-10-29): every grant, cession and release of the slot, and every product turn of `vez`, is one line
+// of JSON in <slot>.historico/<UTC day>.jsonl, beside the slot and never in it (no copy reads that name, so PROTOCOL
+// stays): {hora, evento, pid, rotulo, repo, bilhete, cede, ...}. "toma": the slot taken, with the seconds it waited
+// since its arrival (espera_s); "solta": released, with the seconds it was held (segundos); "vez": a product's turn,
+// which takes nothing (its `run` takes the slot next); "cede": a waiter that cedes saw a product ticket that came after
+// it go ahead in the turn, or left the free slot to a product's baton, once per product pid ("a": its pid and
+// command). On 2026-10-27 a gumroad render took 16 minutes as a chain of mutations began, and nothing on disk said
+// whether it had waited behind the chain. The history only witnesses: a write that fails is lost, never an error and
+// never a wait, and the first write of a process deletes the days older than HISTORY_DAYS (7). `node render-slot.ts
+// vez --historico [--horas <n>] [--json]` prints the events of the last n hours (24 by default), in local time.
+//
 // `protocol` is PROTOCOL below. Raise it whenever a change would let an older copy break the slot of
 // a newer one (a new file in the slot, another way to clear the mutex). An owner.json without it was
 // written by protocol 1 (the copies before 2026-09-30) and is judged as always. A slot written by a
@@ -191,7 +202,7 @@
 // directory (whose maker then gives up, as above).
 import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
-import {closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync} from 'node:fs';
+import {appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -280,6 +291,17 @@ export class RenderSlotError extends Error {
     this.hint = hint;
   }
 }
+
+// HAR-350 (2026-10-29): with the disk full, the mkdir of the slot threw ENOSPC, which only EEXIST was handled for, and a
+// detached run waiting in the queue died with a stack trace, its command never run.
+const DISK_FULL = new Set(['ENOSPC', 'EDQUOT']);
+const DISK_FULL_HINT = 'Free some disk and run again; python3 ~/obsidian/AI/scripts/maquina_livre.py says how much is free.';
+/** ENOSPC or EDQUOT, raw or as RENDER_SLOT_DISK_FULL: the disk is full, not a bug of the slot. */
+export const diskFull = (error: unknown) => (error instanceof RenderSlotError
+  ? error.code === 'RENDER_SLOT_DISK_FULL'
+  : DISK_FULL.has((error as NodeJS.ErrnoException | undefined)?.code ?? ''));
+const diskFullError = (error: unknown) => (error instanceof RenderSlotError ? error : new RenderSlotError('RENDER_SLOT_DISK_FULL',
+  `The disk is full: the render slot could not write ${(error as NodeJS.ErrnoException).path ?? 'its files'} (${(error as NodeJS.ErrnoException).code}).`, DISK_FULL_HINT));
 
 /** The name of the package whose folder holds the working directory, else the folder's name. */
 export const defaultRepo = (from = process.cwd()) => {
@@ -601,11 +623,80 @@ const removeSlotDir = (dir: string) => {
   rmSync(gone, {recursive: true, force: true});
 };
 
+/** The folder of the slot's history, beside the slot: one JSONL file a day (UTC). */
+export const historyDir = (dir = slotDir()) => `${dir}.historico`;
+const HISTORY_DAYS = 7;
+const HISTORY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const historyDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+/** The history folders this process has pruned already: once per process is enough. */
+const prunedHistories = new Set<string>();
+export type SlotEvent = {hora: string; evento: 'toma' | 'solta' | 'vez' | 'cede'; pid: number; rotulo: string; repo?: string; bilhete?: string | null; cede?: boolean; espera_s?: number; segundos?: number; a?: {pid: number; rotulo: string}};
+
+/** Appends one event to the slot's history. It never throws: a lost line is better than a slot that fails or waits. */
+export const recordSlotEvent = (dir: string, event: Omit<SlotEvent, 'hora'>, now = Date.now()) => {
+  try {
+    const history = historyDir(dir);
+    mkdirSync(history, {recursive: true});
+    appendFileSync(path.join(history, `${historyDay(now)}.jsonl`), `${JSON.stringify({hora: new Date(now).toISOString(), ...event})}\n`);
+    if (prunedHistories.has(history)) return;
+    prunedHistories.add(history);
+    const oldest = historyDay(now - HISTORY_DAYS * DAY_MS);
+    for (const name of readdirSync(history)) {
+      const day = HISTORY_FILE.exec(name)?.[1];
+      if (day !== undefined && day < oldest) rmSync(path.join(history, name), {force: true});
+    }
+  } catch {
+    // The history never stops the slot: the line is lost, and the slot goes on.
+  }
+};
+
+/** The events of the slot's history from `sinceMs` on, oldest first; a line that does not parse is skipped. */
+export const slotHistory = (dir = slotDir(), sinceMs = Date.now() - DAY_MS): SlotEvent[] => {
+  const history = historyDir(dir);
+  let names: string[];
+  try { names = readdirSync(history).sort(); } catch { return []; }
+  const first = historyDay(sinceMs);
+  const events: SlotEvent[] = [];
+  for (const name of names) {
+    const day = HISTORY_FILE.exec(name)?.[1];
+    if (day === undefined || day < first) continue;
+    let text: string;
+    try { text = readFileSync(path.join(history, name), 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      if (line.trim() === '') continue;
+      try {
+        const event = JSON.parse(line) as SlotEvent;
+        if (Date.parse(event.hora) >= sinceMs) events.push(event);
+      } catch {
+        // A line cut short by a crash.
+      }
+    }
+  }
+  return events.sort((a, b) => Date.parse(a.hora) - Date.parse(b.hora));
+};
+
+/** "2026-10-29 01:02:03", in the local time of this machine. */
+const localTime = (ms: number) => new Date(ms - new Date(ms).getTimezoneOffset() * 60_000).toISOString().slice(0, 19).replace('T', ' ');
+
+/** `render-slot vez --historico`: one line per event, oldest first, in local time. */
+export const historyText = (events: SlotEvent[], hours: number) => {
+  if (events.length === 0) return `No grant, cession or release of the render slot in the last ${hours} h.`;
+  return events.map((event) => {
+    const extra = event.evento === 'solta' ? `, held ${event.segundos ?? 0} s`
+      : event.evento === 'cede' ? `, to pid ${event.a?.pid} (${event.a?.rotulo})`
+        : `, waited ${event.espera_s ?? 0} s`;
+    return `${localTime(Date.parse(event.hora))}  ${event.evento.padEnd(5)}  pid ${event.pid} (${event.repo ?? '?'}: ${event.rotulo})${event.cede === true ? ', cedes' : ''}${extra}`;
+  }).join('\n');
+};
+
 /** Removes the slot only when this process owns it. */
 export const releaseRenderSlot = (dir = slotDir()) => {
-  if (readOwner(dir)?.pid !== process.pid) return false;
+  const owner = readOwner(dir);
+  if (owner === null || owner.pid !== process.pid) return false;
   removeSlotDir(dir);
   if (process.env[HELD_ENV] === String(process.pid)) delete process.env[HELD_ENV];
+  recordSlotEvent(dir, {evento: 'solta', pid: process.pid, rotulo: owner.command, repo: owner.repo, cede: owner.cede === true, segundos: Math.round((Date.now() - Date.parse(owner.startedAt)) / 1000)});
   return true;
 };
 
@@ -802,7 +893,10 @@ const touchTicket = (queue: string, name: string, body: string) => {
 
 const describeTicket = (ticket: QueueTicket) => `pid ${ticket.pid} (${ticket.repo}: ${ticket.command}) since ${new Date(ticket.enqueuedAt).toISOString()}`;
 
-/** Takes the slot directory with the atomic mkdir: false when another process has it. */
+/**
+ * Takes the slot directory with the atomic mkdir: false when another process has it. A full disk (ENOSPC, EDQUOT) goes
+ * up: `run` waits for it as for a busy machine, and `run`, `hold` and `vez` end with one line and EXIT_DISK_FULL.
+ */
 const makeSlotDir = (dir: string) => {
   try {
     mkdirSync(dir);
@@ -833,13 +927,17 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
   const body = `${JSON.stringify({protocol: PROTOCOL, pid: process.pid, repo, command: options.command, fila: FILA, ...(cede ? {cede: true} : {})})}\n`;
   // One that cedes: when it last saw a live product ticket ahead of it in the turn (HAR-301).
   let productAheadAt = -Infinity;
+  // One that cedes: the product pids it has written a "cede" for in the history, one line each.
+  const cededTo = new Set<number>();
   const started = Date.now();
   // The place in the queue: when this waiter first came, never before the last boot nor after now.
   const {since} = options;
   const arrival = since !== undefined && since >= bootTimeMs() && since <= started ? Math.floor(since) : started;
   let said = '';
   let warnedBlocked = false;
-  let ticket: string | null = null;
+  // Typed with `as`: assigned only in the closures below, a `string | null` declared as null narrows to null in the
+  // loop, and tsc in the repos that copy this file refused the history's `waiting.name < ticket` (BGC, issue #3).
+  let ticket = null as string | null;
   let lastRound = started;
   // A waiter that just started judges silence at once; only one that finds it slept waits a minute.
   let awakeSince = started - TICKET_FRESH_MS;
@@ -892,6 +990,14 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
       if (ticket !== null) touchTicket(queue, ticket, body);
       const ahead = ticketsAhead(queue, ticket === null ? null : {name: ticket, cede}, now - awakeSince >= TICKET_FRESH_MS);
       if (cede && ahead.some((waiting) => !waiting.cede && waiting.fila === FILA)) productAheadAt = now;
+      // A product ticket that came after this one and goes ahead of it in the turn: a cession, in the history.
+      if (cede && ticket !== null) {
+        for (const waiting of ahead) {
+          if (waiting.cede || waiting.fila !== FILA || waiting.name < ticket || cededTo.has(waiting.pid)) continue;
+          cededTo.add(waiting.pid);
+          recordSlotEvent(dir, {evento: 'cede', pid: process.pid, rotulo: options.command, repo, bilhete: ticket, cede: true, a: {pid: waiting.pid, rotulo: waiting.command}});
+        }
+      }
       const next = ahead[0];
       // One that cedes leaves the free slot to a product on its way (HAR-301): for the short gap after a product
       // ticket ahead went away (the hop of `vez`), and while the baton of a `vez` at its turn holds, for its `run`.
@@ -902,16 +1008,24 @@ export const acquireRenderSlot = async (options: SlotOptions): Promise<SlotHandl
       // baton wears out (the second review, 2026-10-27: 30 s with nothing running, and the product last).
       const olderWaits = baton !== null && renderSlotQueue(dir).some((waiting) => waiting.fila !== FILA);
       const leavesIt = next === undefined && (gap || (baton !== null && !olderWaits)) && renderSlotHolder(dir) === undefined;
+      if (leavesIt && baton !== null && !cededTo.has(baton.pid)) {
+        cededTo.add(baton.pid);
+        recordSlotEvent(dir, {evento: 'cede', pid: process.pid, rotulo: options.command, repo, bilhete: ticket, cede: true, a: {pid: baton.pid, rotulo: `${VEZ_PREFIX}${baton.label}`}});
+      }
       let waitingFor: string;
       let wayOut: string;
       if (next === undefined && !leavesIt) {
         // `vez`: its turn, with the slot free; the finally below takes the ticket out, and nothing is taken.
-        if (!take && !exists(dir)) return {inherited: false, release: () => {}};
+        if (!take && !exists(dir)) {
+          recordSlotEvent(dir, {evento: 'vez', pid: process.pid, rotulo: options.command, repo, bilhete: ticket, espera_s: Math.round((Date.now() - arrival) / 1000)});
+          return {inherited: false, release: () => {}};
+        }
         if (take && makeSlotDir(dir)) {
           const owner: SlotOwner = {protocol: PROTOCOL, pid: process.pid, repo, command: options.command, startedAt: new Date().toISOString(), ...(cede ? {cede: true} : {})};
           const temporary = path.join(dir, `${OWNER_FILE}.tmp`);
           writeFileSync(temporary, `${JSON.stringify(owner, null, 2)}\n`);
           renameSync(temporary, path.join(dir, OWNER_FILE));
+          recordSlotEvent(dir, {evento: 'toma', pid: process.pid, rotulo: options.command, repo, bilhete: ticket, cede, espera_s: Math.round((Date.now() - arrival) / 1000)});
           // The first owner that does not cede spends the baton (HAR-301): the product's `run`, or one that came before
           // it; either way the free slot is no longer one to wait for.
           if (!cede) removeQuietly(path.join(queue, BATON_FILE));
@@ -1000,6 +1114,17 @@ const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 const EXIT_USAGE = 2;
 const EXIT_GAVE_UP = 75;
+const EXIT_DISK_FULL = 74; // EX_IOERR: the disk is full (HAR-350)
+/** The exit of a refused slot: one line and EXIT_DISK_FULL for a full disk, EXIT_GAVE_UP for a refusal; the rest throws. */
+const gaveUp = (error: unknown) => {
+  if (diskFull(error)) {
+    console.error(diskFullError(error).message);
+    return EXIT_DISK_FULL;
+  }
+  if (!(error instanceof RenderSlotError)) throw error;
+  console.error(error.message);
+  return EXIT_GAVE_UP;
+};
 
 /** Why `run` refuses this command line, or null: a .sh script, run directly or through a shell. */
 export const refusedCommand = (command: string[]) => {
@@ -1088,11 +1213,21 @@ const takeSlotToRun = async (options: SlotOptions & RunOptions): Promise<SlotHan
   const waitLimitMs = slotOptions.waitLimitMs ?? WAIT_LIMIT_MS;
   let gaveBack = 0;
   let said = '';
+  let diskSaid = '';
   for (;;) {
     let slot: SlotHandle;
     try {
       slot = await acquireRenderSlot({...slotOptions, since, waitLimitMs: Math.max(0, waitLimitMs - (Date.now() - since))});
     } catch (error) {
+      if (diskFull(error)) {
+        const full = diskFullError(error);
+        const waited = Date.now() - since;
+        if (waited >= waitLimitMs || slotOptions.wait === false) throw full;
+        if (full.detail !== diskSaid) log(`${full.detail} Asking again in ${backoffMs / 1000} s, in the place it first came (${new Date(since).toISOString()}).`);
+        diskSaid = full.detail;
+        await sleep(Math.min(backoffMs, Math.max(0, waitLimitMs - waited)));
+        continue;
+      }
       if (!(error instanceof RenderSlotError) || gaveBack === 0) throw error;
       throw new RenderSlotError(error.code, `${error.detail} It had given the slot back ${gaveBack}× since ${new Date(since).toISOString()}, the machine busy outside it: ${said}.`, error.hint);
     }
@@ -1140,9 +1275,7 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
     try {
       slot = await takeSlotToRun({command: command.join(' ').slice(0, 200), log: (message) => console.error(message), ...options, cede: options.cede ?? process.env[CEDE_ENV] === '1'});
     } catch (error) {
-      if (!(error instanceof RenderSlotError)) throw error;
-      console.error(error.message);
-      return EXIT_GAVE_UP;
+      return gaveUp(error);
     }
     // The slot's own signal handlers would release it at once, while the command still runs: only
     // onSignal stays, and the slot is released below, or by its 'exit' handler.
@@ -1204,9 +1337,7 @@ export const holdSlot = async (label: string, maxMinutes: number, options: Parti
     try {
       slot = await acquireRenderSlot({command: `${HOLD_PREFIX}${label}`, log: (message) => console.error(message), ...options});
     } catch (error) {
-      if (!(error instanceof RenderSlotError)) throw error;
-      console.error(error.message);
-      return EXIT_GAVE_UP;
+      return gaveUp(error);
     }
     // Only onSignal stays: the slot is released below, once, whatever ends the hold.
     for (const signal of SIGNALS) for (const listener of process.listeners(signal)) if (listener !== onSignal) process.off(signal, listener);
@@ -1278,9 +1409,7 @@ export const waitForTurn = async (label: string, maxMinutes = HOLD_MAX_MINUTES, 
   try {
     await acquireRenderSlot({command, log: (message) => console.error(message), ...slotOptions, since, waitLimitMs: Math.max(0, limitMs - (now - since)), cede: false, take: false});
   } catch (error) {
-    if (!(error instanceof RenderSlotError)) throw error;
-    console.error(error.message);
-    return EXIT_GAVE_UP;
+    return gaveUp(error);
   }
   const queue = queueDir(slotOptions.dir ?? slotDir());
   const handBaton = () => writeTicket(queue, BATON_FILE, `${JSON.stringify({protocol: PROTOCOL, pid: process.pid, label, at: Date.now()})}\n`);
@@ -1589,6 +1718,15 @@ if (isMain()) {
   } else if (verb === 'hold') {
     const max = optionValue(args, '--max');
     process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max), {cede: args.includes('--ceder')});
+  } else if (verb === 'vez' && args.includes('--historico')) {
+    const hours = Number(optionValue(args, '--horas') ?? 24);
+    if (hours > 0) {
+      const events = slotHistory(slotDir(), Date.now() - hours * 3_600_000);
+      console.log(args.includes('--json') ? JSON.stringify(events) : historyText(events, hours));
+    } else {
+      console.error('Usage: render-slot vez --historico [--horas <n>] [--json]; --horas is more than 0 (24 by default).');
+      process.exitCode = EXIT_USAGE;
+    }
   } else if (verb === 'vez') {
     const max = optionValue(args, '--max');
     const since = optionValue(args, '--since');
@@ -1606,7 +1744,7 @@ if (isMain()) {
   } else if (verb === 'status' && separator === '--json' && command.length === 0) {
     console.log(JSON.stringify(slotStatusJson()));
   } else {
-    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> [--ceder] | vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir] | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
+    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> [--ceder] | vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir] | vez --historico [--horas <n>] [--json] | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
     process.exitCode = EXIT_USAGE;
   }
 }

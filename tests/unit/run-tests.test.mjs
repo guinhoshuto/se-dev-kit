@@ -4,11 +4,12 @@ import {once} from "node:events";
 import {existsSync} from "node:fs";
 import {mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {basename, join} from "node:path";
 import test from "node:test";
 import {setTimeout as sleep} from "node:timers/promises";
 import {fileURLToPath} from "node:url";
 
+import {historyDir} from "../../dist/shared/render-slot.js";
 import {browserGate} from "../../scripts/lib/machine.mjs";
 import {SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
 import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
@@ -41,11 +42,15 @@ test("a web test that calls runJob starts Chrome, so its name starts with [brows
   assert.ok(checked >= 6, `found ${checked} web tests that call runJob; the split no longer finds them`);
 });
 
-test("a repeated file keeps its suite, and only tsx's cache may stay in a suite's temporary folder", () => {
+test("a repeated file keeps its suite, and only tsx's cache and the suite slot's history may stay in a suite's temporary folder", () => {
   assert.equal(suiteForFile("tests/integration/tutorial.test.mjs").suite, SUITES.integration);
   assert.equal(suiteForFile("./tests/web/jobs.test.ts").suite, SUITES.web);
   assert.throws(() => suiteForFile("tests/fixtures/runner/tidy.test.mjs"), /Not a test file of a known suite/);
   assert.deepEqual(leftovers(["tsx-501", "studio-fonts-a1b2c3", "playwright_chromiumdev_profile-x"]), ["playwright_chromiumdev_profile-x", "studio-fonts-a1b2c3"]);
+  // The history the slot module writes beside the suite's slot (#23), named as that module names it; a slot still
+  // held, its queue or another slot's history is a leftover.
+  const history = basename(historyDir(suiteEnvironment({}, "/tmp/sws-x").RENDER_SLOT_DIR));
+  assert.deepEqual(leftovers([history, "render-slot", "render-slot.queue", "other-slot.historico"]), ["other-slot.historico", "render-slot", "render-slot.queue"]);
 });
 
 test("a suite that leaves a folder in its temporary directory fails and names it; a tidy one passes", {timeout: 60_000}, async (t) => {
@@ -58,7 +63,7 @@ test("a suite that leaves a folder in its temporary directory fails and names it
   assert.match(await readFile(tidy, "utf8"), /# tidy: exit 0 after/);
 });
 
-test("a suite runs with its render slot inside its own TMPDIR", {timeout: 60_000}, async (t) => {
+test("a suite runs with its render slot inside its own TMPDIR, and taking it fails no suite for the history it leaves", {timeout: 60_000}, async (t) => {
   const log = await logFile(t);
   const {code} = await execute("slot-env", {flags: []}, ["tests/fixtures/runner/slot-env.test.mjs"], log, {echo: false});
   assert.equal(code, 0, await readFile(log, "utf8"));

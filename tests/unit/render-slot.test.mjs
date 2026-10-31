@@ -183,6 +183,33 @@ test("local capture and render wait for the render slot another process holds, a
   }
 });
 
+// HAR-335 (issue #23): the copy predated the slot's history, so a product job from this repo left no line in it, and
+// the vault's triage read "no product job between two grants" while a local render had held the slot.
+test("a local capture through this repo's copy leaves its grant and release in `render-slot vez --historico`", {timeout: 90_000}, async (t) => {
+  const dir = await slotFolder(t);
+  const output = await mkdtemp(join(tmpdir(), "sws-slot-history-"));
+  t.after(() => rm(output, {recursive: true, force: true}));
+  const {[HELD_ENV]: _held, ...rest} = process.env;
+  const env = {...rest, RENDER_SLOT_DIR: dir, MACHINE_CHECK: join(output, "no-machine-check.py")};
+  const args = [cliPath, "capture", exampleRoot, "--scene", "hero", "--json", "--output", join(output, "capture"), "--allow-low-disk", "--allow-unsupported-node", "--browser-path", join(output, "missing-chrome")];
+  const cli = spawn(process.execPath, args, {env, stdio: ["ignore", "ignore", "pipe"]});
+  t.after(() => cli.kill("SIGKILL"));
+  let stderr = "";
+  cli.stderr.on("data", (chunk) => { stderr += chunk; });
+  const [code] = await once(cli, "exit");
+  assert.equal(code, 3, stderr);
+  assert.match(stderr, /"code": "BROWSER_NOT_FOUND"/, "the capture ran under the slot and gave it back");
+
+  const slotCli = fileURLToPath(moduleUrl);
+  const json = await execFileAsync(process.execPath, [slotCli, "vez", "--historico", "--json"], {env});
+  const events = JSON.parse(json.stdout).filter((event) => event.pid === cli.pid);
+  assert.deepEqual(events.map(({evento, repo}) => [evento, repo]), [["toma", "se-dev-kit"], ["solta", "se-dev-kit"]], json.stdout);
+  for (const event of events) assert.ok(event.rotulo.startsWith("se-widget-studio capture "), event.rotulo);
+  const text = await execFileAsync(process.execPath, [slotCli, "vez", "--historico"], {env});
+  assert.match(text.stdout, new RegExp(`toma +pid ${cli.pid} \\(se-dev-kit: se-widget-studio capture `));
+  assert.match(text.stdout, new RegExp(`solta +pid ${cli.pid} \\(se-dev-kit: se-widget-studio capture .*, held \\d+ s`));
+});
+
 test("src/shared/render-slot.ts is the vault source, byte for byte", async (t) => {
   const source = join(homedir(), "obsidian", "AI", "scripts", "render-slot.ts");
   if (!(await exists(source))) return t.skip("no vault on this machine");

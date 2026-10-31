@@ -1,0 +1,18 @@
+{
+  "mutations": [
+    {
+      "file": "src/shared/render-slot.ts",
+      "from": "recordSlotEvent(dir, {evento: 'toma',",
+      "to": "recordSlotEvent(`${dir}.elsewhere`, {evento: 'toma',",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^a local capture through this repo's copy leaves its grant and release"
+    },
+    {
+      "file": "src/shared/render-slot.ts",
+      "from": "recordSlotEvent(dir, {evento: 'solta',",
+      "to": "recordSlotEvent(`${dir}.elsewhere`, {evento: 'solta',",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^a local capture through this repo's copy leaves its grant and release"
+    }
+  ]
+}
