@@ -167,6 +167,20 @@
       "to": "${skipped.map(result => result.name)",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a browser suite the gate skipped"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": " && entry !== `${SUITE_SLOT}.historico`).sort();",
+      "to": ").sort();",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite runs with its render slot inside its own TMPDIR"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "entry !== `${SUITE_SLOT}.historico`",
+      "to": "!entry.startsWith(SUITE_SLOT)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a repeated file keeps its suite"
     }
   ]
 }

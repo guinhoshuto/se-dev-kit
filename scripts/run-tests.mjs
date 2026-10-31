@@ -69,8 +69,14 @@ export function suiteForFile(file) {
   return {path, suite: SUITES[name]};
 }
 
-/** Entries a suite left in its temporary folder; tsx keeps its compile cache there and is exempt. */
-export const leftovers = entries => entries.filter(entry => !/^tsx-\d+$/.test(entry)).sort();
+/** The render slot a suite's tests take (suiteEnvironment), inside its temporary folder. */
+const SUITE_SLOT = 'render-slot';
+/**
+ * Entries a suite left in its temporary folder. Exempt: tsx's compile cache, and the history of the suite's own render
+ * slot, which src/shared/render-slot.ts writes beside the slot and never removes (#23): a CLI render a test starts
+ * takes that slot, and the runner removes the folder. The slot itself or its queue left behind still counts.
+ */
+export const leftovers = entries => entries.filter(entry => !/^tsx-\d+$/.test(entry) && entry !== `${SUITE_SLOT}.historico`).sort();
 
 /**
  * The machine-wide render slot for one browser suite. It waits its turn in the queue, up to SLOT_WAIT_MS from
@@ -151,7 +157,7 @@ export async function gate({
 export function suiteEnvironment(environment, temporary) {
   // NODE_TEST_CONTEXT would make a runner started from inside a test file act as that file's child.
   const {NODE_TEST_CONTEXT: _context, ...rest} = environment;
-  return {...rest, TMPDIR: temporary, RENDER_SLOT_DIR: join(temporary, 'render-slot'), MACHINE_CHECK: join(temporary, 'no-machine-check')};
+  return {...rest, TMPDIR: temporary, RENDER_SLOT_DIR: join(temporary, SUITE_SLOT), MACHINE_CHECK: join(temporary, 'no-machine-check')};
 }
 
 export async function execute(label, suite, files, logPath, {echo = true} = {}) {
