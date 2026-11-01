@@ -17,6 +17,30 @@
       "from": "Test there;",
       "to": "Or `git worktree add .claude/worktrees/<task>`. Test there;",
       "test": "tests/unit/agents-worktree.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "`python3 ~/obsidian/AI/scripts/remover_worktree.py ~/dev/firulas/se-dev-kit/.claude/worktrees/<task>`",
+      "to": "`git worktree remove .claude/worktrees/<task>`",
+      "test": "tests/unit/agents-worktree.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "remover_worktree.py ~/dev/firulas/se-dev-kit/.claude/worktrees/<task>`",
+      "to": "remover_worktree.py .claude/worktrees/<task>`",
+      "test": "tests/unit/agents-worktree.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "(`--dry-run` first shows what it would do).",
+      "to": "(`--dry-run` first shows what it would do), or `git -C ~/dev/firulas/se-dev-kit worktree remove .claude/worktrees/<task>`.",
+      "test": "tests/unit/agents-worktree.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "that the worktree goes after the session closes",
+      "to": "that the worktree goes after the session closes (`orca worktree rm`)",
+      "test": "tests/unit/agents-worktree.test.mjs"
     }
   ]
 }
