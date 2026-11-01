@@ -1,0 +1,28 @@
+{
+  "mutations": [
+    {
+      "file": "AGENTS.md",
+      "from": "An issue opened outside a round of the vault's /melhorias ends, like the round's, with `Tracker: <ID>`.",
+      "to": "An issue opened in a round of the vault's /melhorias ends with `Tracker: <ID>`.",
+      "test": "tests/unit/agents-issue-tracker.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "`python3 ~/obsidian/.claude/skills/melhorias/scripts/aplicar.py --novo-item <AREA>` (it writes nothing)",
+      "to": "`aplicar.py --novo-item <AREA>`",
+      "test": "tests/unit/agents-issue-tracker.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "linhas.py --nova \"<text>\"`",
+      "to": "linhas.py \"<text>\"`",
+      "test": "tests/unit/agents-issue-tracker.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "(`Tracker: none — <why>`)",
+      "to": "(`Tracker: none`)",
+      "test": "tests/unit/agents-issue-tracker.test.mjs"
+    }
+  ]
+}
