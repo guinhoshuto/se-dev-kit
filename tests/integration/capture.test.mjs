@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import {execFile} from "node:child_process";
+import {mkdtempSync, rmSync} from "node:fs";
 import {chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
-import test from "node:test";
+import test, {after} from "node:test";
 
 import {buildInfo} from "../../dist/build-info.js";
 import {detectBrowser} from "../../dist/capture/browser.js";
@@ -17,6 +18,12 @@ import {DEFAULT_FIXED_TIME} from "../../dist/scenarios/state.js";
 import {stableStringify} from "../../dist/shared/json.js";
 
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
+// The CLI capture below takes the render slot: this file's own, with no machine check, so it never waits in the
+// machine-wide queue or writes to its history (npm test gives each suite its own slot and holds the machine's for it;
+// npm run mutate holds the machine's too; node --test does neither).
+const SLOT_ROOT = mkdtempSync(join(tmpdir(), "sws-capture-slot-"));
+Object.assign(process.env, {RENDER_SLOT_DIR: join(SLOT_ROOT, "render-slot"), MACHINE_CHECK: join(SLOT_ROOT, "no-machine-check")});
+after(() => rmSync(SLOT_ROOT, {recursive: true, force: true}));
 
 async function exists(path) {
   try {

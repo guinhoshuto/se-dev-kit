@@ -1,0 +1,58 @@
+{
+  "mutations": [
+    {
+      "file": "tests/unit/render-disk.test.mjs",
+      "from": "Object.assign(process.env, {RENDER_SLOT_DIR: join(SLOT_ROOT, \"render-slot\"), MACHINE_CHECK: join(SLOT_ROOT, \"no-machine-check\")});",
+      "to": "void SLOT_ROOT;",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    },
+    {
+      "file": "tests/unit/node-support.test.mjs",
+      "from": "Object.assign(process.env, {RENDER_SLOT_DIR: join(SLOT_ROOT, \"render-slot\"), MACHINE_CHECK: join(SLOT_ROOT, \"no-machine-check\")});",
+      "to": "void SLOT_ROOT;",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    },
+    {
+      "file": "tests/unit/render-recipes-cli.test.mjs",
+      "from": "Object.assign(process.env, {RENDER_SLOT_DIR: join(SLOT_ROOT, \"render-slot\"), MACHINE_CHECK: join(SLOT_ROOT, \"no-machine-check\")});",
+      "to": "void SLOT_ROOT;",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    },
+    {
+      "file": "tests/integration/capture.test.mjs",
+      "from": "Object.assign(process.env, {RENDER_SLOT_DIR: join(SLOT_ROOT, \"render-slot\"), MACHINE_CHECK: join(SLOT_ROOT, \"no-machine-check\")});",
+      "to": "void SLOT_ROOT;",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    },
+    {
+      "file": "tests/unit/render-disk.test.mjs",
+      "from": "MACHINE_CHECK: join(SLOT_ROOT, \"no-machine-check\")});",
+      "to": "});",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    },
+    {
+      "file": "tests/unit/own-render-slot.test.mjs",
+      "from": "(?:capture|record|render)",
+      "to": "(?:capture|render)",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    },
+    {
+      "file": "tests/unit/own-render-slot.test.mjs",
+      "from": "(?:capture|record|render)",
+      "to": "(?:record|render)",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    },
+    {
+      "file": "tests/unit/own-render-slot.test.mjs",
+      "from": "(?:capture|record|render)",
+      "to": "(?:capture|record)",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    },
+    {
+      "file": "tests/unit/own-render-slot.test.mjs",
+      "from": "const SLOT_IN_EACH_ENV = [\"tests/unit/machine-check.test.mjs\", \"tests/unit/render-slot.test.mjs\"];",
+      "to": "const SLOT_IN_EACH_ENV = [\"tests/unit/render-slot.test.mjs\"];",
+      "test": "tests/unit/own-render-slot.test.mjs"
+    }
+  ]
+}

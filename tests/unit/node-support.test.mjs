@@ -1,17 +1,23 @@
 import assert from "node:assert/strict";
 import {execFile} from "node:child_process";
+import {mkdtempSync, rmSync} from "node:fs";
 import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
-import test from "node:test";
+import test, {after} from "node:test";
 
 import {SUPPORTED_NODE, assertSupportedNode, satisfiesNodeRange} from "../../dist/shared/node-support.js";
 
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL("../../dist/cli/index.js", import.meta.url));
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
+// The CLI processes below take the render slot: this file's own, with no machine check, so none waits in the
+// machine-wide queue or writes to its history (npm test gives each suite its own slot; npm run mutate and node --test do not).
+const SLOT_ROOT = mkdtempSync(join(tmpdir(), "sws-node-support-slot-"));
+Object.assign(process.env, {RENDER_SLOT_DIR: join(SLOT_ROOT, "render-slot"), MACHINE_CHECK: join(SLOT_ROOT, "no-machine-check")});
+after(() => rmSync(SLOT_ROOT, {recursive: true, force: true}));
 
 test("the supported range is package.json engines: Node 22 from 22.20, and Node 24", async () => {
   const pkg = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
