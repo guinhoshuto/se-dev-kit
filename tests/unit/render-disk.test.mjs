@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import {execFile} from "node:child_process";
+import {mkdtempSync, rmSync} from "node:fs";
 import {chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
-import test from "node:test";
+import test, {after} from "node:test";
 
 import {
   assertDiskBudget,
@@ -24,6 +25,11 @@ import {StudioError} from "../../dist/shared/errors.js";
 const execFileAsync = promisify(execFile);
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
 const cliPath = fileURLToPath(new URL("../../dist/cli/index.js", import.meta.url));
+// The CLI processes below take the render slot: this file's own, with no machine check, so none waits in the
+// machine-wide queue or writes to its history (npm test gives each suite its own slot; npm run mutate and node --test do not).
+const SLOT_ROOT = mkdtempSync(join(tmpdir(), "sws-render-disk-slot-"));
+Object.assign(process.env, {RENDER_SLOT_DIR: join(SLOT_ROOT, "render-slot"), MACHINE_CHECK: join(SLOT_ROOT, "no-machine-check")});
+after(() => rmSync(SLOT_ROOT, {recursive: true, force: true}));
 
 async function temporaryDirectory(t, prefix) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), prefix)));
