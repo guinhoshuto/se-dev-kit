@@ -206,7 +206,7 @@
     },
     {
       "file": "src/config/init.ts",
-      "from": "- Say so before each Save in StreamElements. Check a saved change by opening the editor in a new tab, never by forcing a navigation or reload of the tab you edited.\n",
+      "from": "- Say so before each Save in StreamElements. Check a saved change by navigating the tab you edited to the editor URL again, never with \\`force\\`. Close each editor tab you opened one at a time, listing the tabs after each close.\n",
       "to": "",
       "test": "tests/unit/init.test.mjs"
     },

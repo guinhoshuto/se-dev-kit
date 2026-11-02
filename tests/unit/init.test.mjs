@@ -83,7 +83,7 @@ const INDEX_LAYOUT_AGENTS = `# Agent instructions
 - Themes are field values, not code, and \`themes/\` ships with the widget for buyers to paste into the DATA tab: \`themes/<id>.data.json\` is a whole DATA-tab payload, and \`themes/<id>.json\` is the Studio theme of the same look, partial when a \`.data.json\` sits beside it and the shipped theme when none does.
 - After any change to \`fields.json\` or \`themes/\`, run SE Widget Studio's \`validate\` and fix every error: a button label stays within 24 characters, and each shipped theme sets every key with the value that fits its look, unless \`themes.keepDefault\` in \`se-widget-studio.config.mjs\` lists the key because the widget behaves the same without it as with its FIELDS default.
 - In real StreamElements, after a FIELDS change, check the overlay editor's field panel for overflow (its \`scrollWidth\` greater than its \`clientWidth\`), and report every visual anomaly you see, even when the feature under test works: a test with an anomaly did not pass.
-- Say so before each Save in StreamElements. Check a saved change by opening the editor in a new tab, never by forcing a navigation or reload of the tab you edited.
+- Say so before each Save in StreamElements. Check a saved change by navigating the tab you edited to the editor URL again, never with \`force\`. Close each editor tab you opened one at a time, listing the tabs after each close.
 - Studio output goes to \`.se-widget-studio/output/\`; it is regenerable, so keep it out of git.
 `;
 const GITIGNORE = ".DS_Store\n.se-widget-studio/\n.claude/settings.local.json\n";
