@@ -1,0 +1,22 @@
+{
+  "mutations": [
+    {
+      "file": "README.md",
+      "from": " The runner gives every suite a slot of its own; outside it, the file would otherwise queue on the machine's real slot.",
+      "to": " The runner gives every suite a slot of its own.",
+      "test": "tests/unit/readme-pitfalls.test.mjs"
+    },
+    {
+      "file": "README.md",
+      "from": "removed in `after` (`tests/unit/cut-loop.test.mjs`).",
+      "to": "removed in `after`.",
+      "test": "tests/unit/readme-pitfalls.test.mjs"
+    },
+    {
+      "file": "README.md",
+      "from": "- Taking the render slot leaves a folder beside it:",
+      "to": "- A test file whose code takes the render slot in its own process sets its own `RENDER_SLOT_DIR` at the top.\n- Taking the render slot leaves a folder beside it:",
+      "test": "tests/unit/readme-pitfalls.test.mjs"
+    }
+  ]
+}
