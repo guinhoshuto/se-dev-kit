@@ -20,6 +20,15 @@
 // wait gave up. It refuses a .sh script, run directly or through a shell: the slot covers each heavy
 // step, never the script that chains them (2026-10-06, a chain held it 50 minutes through light steps).
 //
+// `node render-slot.ts run --repo <dir> -- <cmd> [args]` (2026-10-31) also guards the worktree the command reads: on
+// joining the queue it records the HEAD of <dir> and a hash of what `git status --porcelain` lists there (each path
+// with the sha256 of its content, so a second edit to a file already dirty counts too), and with the slot in hand it
+// reads them again. Changed: it gives the slot back, runs nothing, exits 2 and says on stderr what changed (the HEAD
+// before and after, each path that became dirty, became clean or changed again). Why: on 2026-10-29 a base build
+// joined the queue with the worktree clean, the session edited two files of that same worktree while it waited, and
+// only the session noticing it kept a before-and-after comparison that proved nothing. A <dir> that is not a git
+// worktree is a usage error (2), before the queue.
+//
 // With the slot in hand, `run` asks the machine check about what the slot does not cover (HAR-32,
 // 2026-10-16): `python3 ~/obsidian/AI/scripts/maquina_livre.py --json --fora-da-trava --familia <its pid>`,
 // without RENDER_SLOT_HELD (under the slot it names, the check looks only at the disk and at renders
@@ -201,7 +210,7 @@
 // critical section), and the move back can replace a mutex that was just made and is still an empty
 // directory (whose maker then gives up, as above).
 import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
-import {randomBytes} from 'node:crypto';
+import {createHash, randomBytes} from 'node:crypto';
 import {appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1195,8 +1204,55 @@ const checkMachine = async (dir: string, timeoutMs: number): Promise<{busy: stri
   return {busy: null, note: `The machine check failed (${answer.failure ?? `exit ${answer.status}`}): running without it.`};
 };
 
-/** What only `run` takes (HAR-32): how long it leaves the slot to the next when the machine is busy, and how long the check may take. */
-export type RunOptions = {backoffMs?: number; checkTimeoutMs?: number};
+/** What only `run` takes (HAR-32): how long it leaves the slot to the next when the machine is busy, and how long the check may take; and the worktree it guards (--repo). */
+export type RunOptions = {backoffMs?: number; checkTimeoutMs?: number; repo?: string};
+
+/** The worktree `run --repo` guards: its HEAD and, for each path `git status --porcelain` lists, the sha256 of its content ("" when gone). */
+export type WorktreeState = {head: string; dirty: Record<string, string>};
+
+const git = (dir: string, args: string[]) => {
+  const result = spawnSync('git', ['-C', dir, ...args], {encoding: 'buffer', maxBuffer: 64 * 1024 * 1024});
+  if (result.status !== 0) throw new Error(String(result.stderr ?? result.error?.message ?? `git exited ${result.status}`).trim() || `git ${args[0]} failed`);
+  return result.stdout;
+};
+
+/** The state of the worktree at dir, or an Error when it is not a git worktree. A repo with no commit has the HEAD "none". */
+export const worktreeState = (dir: string): WorktreeState | Error => {
+  try {
+    git(dir, ['rev-parse', '--is-inside-work-tree']);
+    let head = 'none';
+    try { head = String(git(dir, ['rev-parse', 'HEAD'])).trim(); } catch { /* no commit yet */ }
+    const top = String(git(dir, ['rev-parse', '--show-toplevel'])).trim();
+    const fields = String(git(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])).split('\0');
+    const dirty: Record<string, string> = {};
+    for (let i = 0; i < fields.length; i += 1) {
+      const entry = fields[i] ?? '';
+      if (entry.length < 4) continue;
+      const file = entry.slice(3);
+      if (entry[0] === 'R' || entry[0] === 'C') i += 1; // -z: the path it came from follows, as a field of its own
+      let hash = '';
+      try { hash = createHash('sha256').update(readFileSync(path.join(top, file))).digest('hex'); } catch { /* deleted */ }
+      dirty[file] = `${entry.slice(0, 2)} ${hash}`;
+    }
+    return {head, dirty};
+  } catch (error) {
+    return new Error(`${dir} is not a git worktree (${error instanceof Error ? error.message : String(error)}).`);
+  }
+};
+
+/** What changed between two states of a worktree, one line per change; empty when nothing did. */
+export const worktreeChanges = (before: WorktreeState, after: WorktreeState): string[] => {
+  const lines = before.head === after.head ? [] : [`HEAD ${before.head.slice(0, 12)} → ${after.head.slice(0, 12)}`];
+  for (const file of [...new Set([...Object.keys(before.dirty), ...Object.keys(after.dirty)])].sort()) {
+    const was = before.dirty[file];
+    const now = after.dirty[file];
+    if (was === now) continue;
+    if (was === undefined) lines.push(`+ ${now?.slice(0, 2)} ${file} (dirty since it joined the queue)`);
+    else if (now === undefined) lines.push(`- ${was.slice(0, 2)} ${file} (clean again)`);
+    else lines.push(`~ ${now.slice(0, 2)} ${file} (changed again${was.slice(0, 2) === now.slice(0, 2) ? '' : `, was ${was.slice(0, 2).trim()}`})`);
+  }
+  return lines;
+};
 
 /**
  * Takes the slot for `run` on a machine free besides it (HAR-32). With the slot in hand it asks the machine
@@ -1259,6 +1315,12 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
     return EXIT_USAGE;
   }
   const [program = '', ...args] = command;
+  const {repo, ...runOptions} = options;
+  const guarded = repo === undefined ? null : worktreeState(repo);
+  if (guarded instanceof Error) {
+    console.error(`render-slot run --repo: ${guarded.message}`);
+    return EXIT_USAGE;
+  }
   let child: ChildProcess | null = null;
   const forwarded = new Set<NodeJS.Signals>();
   // Registered before the slot's own handlers: while waiting, a signal leaves the queue (the 'exit'
@@ -1273,9 +1335,19 @@ export const runCommand = async (command: string[], options: Partial<SlotOptions
   try {
     let slot: SlotHandle;
     try {
-      slot = await takeSlotToRun({command: command.join(' ').slice(0, 200), log: (message) => console.error(message), ...options, cede: options.cede ?? process.env[CEDE_ENV] === '1'});
+      slot = await takeSlotToRun({command: command.join(' ').slice(0, 200), log: (message) => console.error(message), ...runOptions, cede: options.cede ?? process.env[CEDE_ENV] === '1'});
     } catch (error) {
       return gaveUp(error);
+    }
+    if (guarded !== null && repo !== undefined) {
+      // The command reads the worktree as it is now, not as it was when the job joined the queue.
+      const now = worktreeState(repo);
+      const changes = now instanceof Error ? [now.message] : worktreeChanges(guarded, now);
+      if (changes.length > 0) {
+        slot.release();
+        console.error(`render-slot run --repo: the worktree ${repo} changed while this job waited in the queue, and the command would read it as it is now; it did not run. What changed:\n${changes.map((line) => `  ${line}`).join('\n')}\nRun it again from a commit, or once the edits are done.`);
+        return EXIT_USAGE;
+      }
     }
     // The slot's own signal handlers would release it at once, while the command still runs: only
     // onSignal stays, and the slot is released below, or by its 'exit' handler.
@@ -1715,6 +1787,8 @@ if (isMain()) {
   const args = process.argv.slice(3);
   if (verb === 'run' && separator === '--') {
     process.exitCode = await runCommand(command);
+  } else if (verb === 'run' && separator === '--repo' && command[0] !== undefined && command[1] === '--') {
+    process.exitCode = await runCommand(command.slice(2), {repo: command[0]});
   } else if (verb === 'hold') {
     const max = optionValue(args, '--max');
     process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max), {cede: args.includes('--ceder')});
@@ -1744,7 +1818,7 @@ if (isMain()) {
   } else if (verb === 'status' && separator === '--json' && command.length === 0) {
     console.log(JSON.stringify(slotStatusJson()));
   } else {
-    console.error('Usage: node render-slot.ts run -- <command> [args] | hold --rotulo <label> --max <minutes> [--ceder] | vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir] | vez --historico [--horas <n>] [--json] | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
+    console.error('Usage: node render-slot.ts run [--repo <dir>] -- <command> [args] | hold --rotulo <label> --max <minutes> [--ceder] | vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir] | vez --historico [--horas <n>] [--json] | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
     process.exitCode = EXIT_USAGE;
   }
 }
