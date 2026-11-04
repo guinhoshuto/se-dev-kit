@@ -68,6 +68,167 @@
       "to": "keys.join('|')",
       "test": "tests/unit/se-editor-plan.test.mjs",
       "name": "^a template splits"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "dir ? `${sha}:${dir}` : sha",
+      "to": "sha",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "throw dir ? new Error(`${sha.slice(0, 7)} has no folder ${dir}/.`) : error;",
+      "to": "throw error;",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const layout = layoutAt(root, next, inside);",
+      "to": "const layout = layoutAt(root, old, inside);",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const layout = layoutAt(root, next, inside);",
+      "to": "const layout = layoutAt(root, next);",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const previousLayout = layoutAt(root, old, inside);",
+      "to": "const previousLayout = layoutAt(root, old);",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const path = inside ? `${inside}/${file}` : file;",
+      "to": "const path = file;",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "subfolder's build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const path = inside ? `${inside}/${file}` : file;",
+      "to": "const path = `${inside}/${file}`;",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "^plan writes"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "previous[tab] = text(root, old, path);",
+      "to": "previous[tab] = text(root, old, file);",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "subfolder's build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "sources[tab] = text(root, next, path);",
+      "to": "sources[tab] = text(root, next, file);",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "subfolder's build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "parseFields(path, old, previous[tab])",
+      "to": "parseFields(file, old, previous[tab])",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "parseFields(path, next, sources[tab])",
+      "to": "parseFields(file, next, sources[tab])",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": ".filter((part) => part && part !== '.')",
+      "to": ".filter((part) => part)",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "if (dir.startsWith('/') || !parts.length || parts.includes('..')) {",
+      "to": "if (!parts.length || parts.includes('..')) {",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "if (dir.startsWith('/') || !parts.length || parts.includes('..')) {",
+      "to": "if (dir.startsWith('/') || parts.includes('..')) {",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "if (dir.startsWith('/') || !parts.length || parts.includes('..')) {",
+      "to": "if (dir.startsWith('/') || !parts.length) {",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "return parts.join('/');",
+      "to": "return dir;",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "subfolder's build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "const inside = dir === undefined ? '' : subfolder(dir);",
+      "to": "const inside = dir ? subfolder(dir) : '';",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "${dir ? `in ${dir}/` : 'at the repository root'}",
+      "to": "at the repository root",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "${dir ? `in ${dir}/` : 'at the repository root'}",
+      "to": "in ${dir}/",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a refusal still speaks of the repository root"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "No code tab changes ${inside ? `in ${inside}/ ` : ''}between",
+      "to": "No code tab changes between",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "refuses a commit without the build"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "No code tab changes ${inside ? `in ${inside}/ ` : ''}between",
+      "to": "No code tab changes in ${inside}/ between",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a refusal still speaks of the repository root"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": " dir: argument(args, '--dir'),",
+      "to": "",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "the CLI passes"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "[--to <commit>] [--dir <subfolder>] --out <new folder>\\n'",
+      "to": "[--to <commit>] --out <new folder>\\n'",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "the CLI passes"
     }
   ]
 }
