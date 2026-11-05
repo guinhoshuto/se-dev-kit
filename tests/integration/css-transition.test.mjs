@@ -69,6 +69,7 @@ test("a video draws a CSS opacity transition over the frames of its duration, ea
   for (const {timestampMs, plain} of levels) {
     const progress = Math.min(1, Math.max(0, (timestampMs - CHANGE_MS) / FADE_MS));
     const expected = Math.round(255 * (1 - progress));
+    // 2 levels: Chrome's rounding of the opacity. 8 at the change instant was a compositor tick, which no capture has now (#33).
     assert.ok(Math.abs(plain - expected) <= 2, `at ${timestampMs} ms the plain box is ${plain}, not ${expected}`);
     if (plain > 0 && plain < 255) between += 1;
   }

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import {spawn} from "node:child_process";
+import {execFileSync, spawn} from "node:child_process";
 import {once} from "node:events";
 import {existsSync} from "node:fs";
-import {mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {basename, join} from "node:path";
 import test from "node:test";
@@ -12,7 +12,11 @@ import {fileURLToPath} from "node:url";
 import {historyDir} from "../../dist/shared/render-slot.js";
 import {browserGate} from "../../scripts/lib/machine.mjs";
 import {SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
+import {failedTests, historyFile, historyReport, launchRetries, readHistory} from "../../scripts/lib/test-history.mjs";
 import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
+
+// This file runs the runner's own functions: its fake suites stay out of the live checkout's test history.
+process.env.TEST_HISTORY_FILE = "off";
 
 async function logFile(t) {
   const directory = await mkdtemp(join(tmpdir(), "sws-runner-log-"));
@@ -325,6 +329,130 @@ test("a suite's processes get its TMPDIR and a render slot inside it, never the 
     PATH: "/bin",
     TMPDIR: "/tmp/sws-abc",
     RENDER_SLOT_DIR: "/tmp/sws-abc/render-slot",
-    MACHINE_CHECK: "/tmp/sws-abc/no-machine-check"
+    MACHINE_CHECK: "/tmp/sws-abc/no-machine-check",
+    TEST_HISTORY_FILE: "off"
   });
+});
+
+test("a suite's log gives the tests that failed and the launches it retried, as the reporter and the launch print them", {timeout: 60_000}, async (t) => {
+  const failing = await logFile(t);
+  const outcome = await execute("failing", {flags: []}, ["tests/fixtures/runner/failing.test.mjs"], failing, {echo: false});
+  assert.equal(outcome.code, 1);
+  assert.deepEqual(outcome.failures, [{
+    file: "tests/fixtures/runner/failing.test.mjs",
+    test: "reads the frame at the change instant",
+    error: "AssertionError [ERR_ASSERTION]: at 300 ms the plain box is 247, not 255"
+  }]);
+  assert.deepEqual(outcome.launchRetries, []);
+
+  const retried = await logFile(t);
+  const second = await execute("retried", {flags: []}, ["tests/fixtures/runner/launch-retry.test.mjs"], retried, {echo: false});
+  assert.equal(second.code, 0, await readFile(retried, "utf8"));
+  assert.deepEqual(second.failures, []);
+  assert.equal(second.launchRetries.length, 1);
+  assert.match(second.launchRetries[0], /^Chrome launch retried: Chrome did not start within 0\.5 s .*; load \d+\.\d on \d+ cores\.$/);
+
+  // The two parsers on the text a run of 2026-11-04 left, with the real reporter's layout.
+  const log = "✔ other (1.2ms)\n\n✖ failing tests:\n\ntest at tests/integration/capture.test.mjs:9:1\n✖ without FFmpeg (38678.8ms)\n  Error [StudioError]: Chrome did not start within 30 s (/Chrome).\n      at launch\n\ntest at tests/integration/css-transition.test.mjs:64:1\n✖ a video draws (4949.7ms)\n  AssertionError [ERR_ASSERTION]: at 300 ms the plain box is 247, not 255\n";
+  assert.deepEqual(failedTests(log).map((failure) => [failure.file, failure.test, failure.error]), [
+    ["tests/integration/capture.test.mjs", "without FFmpeg", "Error [StudioError]: Chrome did not start within 30 s (/Chrome)."],
+    ["tests/integration/css-transition.test.mjs", "a video draws", "AssertionError [ERR_ASSERTION]: at 300 ms the plain box is 247, not 255"]
+  ]);
+  assert.deepEqual(failedTests("✔ all passed\n"), []);
+  assert.deepEqual(launchRetries("a\nChrome launch retried: why one\nb\nChrome launch retried: why two\n"), ["Chrome launch retried: why one", "Chrome launch retried: why two"]);
+});
+
+test("a run's summary says a suite retried a Chrome launch and why, and the history keeps every suite's end, to count the next failure", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sws-history-"));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  const file = join(directory, "nested", "test-history.jsonl");
+  process.env.TEST_HISTORY_FILE = file;
+  t.after(() => { process.env.TEST_HISTORY_FILE = "off"; });
+  const why = "Chrome launch retried: Chrome did not start within 30 s (/Chrome). That process was killed and Chrome starts once more; load 12.4 on 8 cores.";
+  const failure = {file: "tests/integration/css-transition.test.mjs", test: "a video draws", error: "at 300 ms the plain box is 247, not 255"};
+  const outcomes = {
+    unit: {code: 0, seconds: 1.5},
+    integration: {code: 0, seconds: 460, launchRetries: [why]},
+    "web:browser": {code: 1, seconds: 9, failures: [failure]}
+  };
+  const lines = [];
+  const code = await runSuites(Object.keys(outcomes), {
+    suites: {unit: {}, integration: {browser: true}, "web:browser": {browser: true}},
+    files: async () => ["fake.test.mjs"],
+    gateFor: async () => ({ok: true, release: () => {}, waitedMs: 2000}),
+    run: async (name) => outcomes[name],
+    newDirectory: async () => join(tmpdir(), "sws-runner-unused"),
+    log: (line) => lines.push(line)
+  });
+  assert.equal(code, 1);
+  const text = lines.join("\n");
+  assert.match(text, /^integration +passed +460\.0 s, after 2\.0 s waiting for the render slot, retrying a Chrome launch 1×$/m);
+  assert.ok(lines.includes(`integration: ${why}`), text);
+  assert.match(text, /^unit +passed +1\.5 s$/m, "a suite without a retry says nothing of one");
+
+  const entries = (await readFile(file, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(entries.map((entry) => [entry.suite, entry.status, entry.launchRetries, entry.failures]), [
+    ["unit", "passed", 0, []],
+    ["integration", "passed", 1, []],
+    ["web:browser", "failed", 0, [failure]]
+  ]);
+  const head = execFileSync("git", ["rev-parse", "--short", "HEAD"], {encoding: "utf8"}).trim();
+  for (const entry of entries) {
+    assert.equal(entry.commit, head);
+    assert.equal(entry.node, process.version);
+    assert.ok(Number.isFinite(entry.load));
+    assert.ok(!Number.isNaN(Date.parse(entry.at)), entry.at);
+  }
+  assert.match(entries[0].log, /sws-runner-unused\/unit\.log$/);
+  assert.equal(entries[1].waitedMs, 2000);
+
+  // A skipped suite counts too: the run did not test it.
+  await runSuites(["integration"], {
+    suites: {integration: {browser: true}},
+    files: async () => ["fake.test.mjs"],
+    gateFor: async () => ({ok: false, reason: "only 2.1 GiB free"}),
+    run: async () => assert.fail("skipped"),
+    newDirectory: async () => join(tmpdir(), "sws-runner-unused"),
+    log: () => {}
+  });
+  const report = historyReport(await readHistory(file), "history");
+  assert.match(report, /^history: 4 suite run\(s\) from \d{4}-\d\d-\d\d to \d{4}-\d\d-\d\d\.$/m);
+  assert.match(report, /^integration: 2 run\(s\), 1 passed, 0 failed, 1 skipped; a Chrome launch retried in 1$/m);
+  assert.match(report, /^web:browser: 1 run\(s\), 0 passed, 1 failed, 0 skipped$/m);
+  assert.match(report, /^ {2}1× tests\/integration\/css-transition\.test\.mjs: a video draws; last on \d{4}-\d\d-\d\d: at 300 ms the plain box is 247, not 255$/m);
+});
+
+test("the history counts each test's failures across runs, the most frequent first, and survives a line cut short", () => {
+  const failed = (test, error) => ({file: "a.test.mjs", test, error});
+  const report = historyReport([
+    {at: "2026-11-04T10:00:00.000Z", suite: "integration", status: "failed", failures: [failed("rare", "first"), failed("often", "old error")]},
+    {at: "2026-11-05T10:00:00.000Z", suite: "integration", status: "failed", failures: [failed("often", "new error")]}
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n{\"at\": \"2026-11-05T1", "history");
+  assert.deepEqual(report.split("\n"), [
+    "history: 2 suite run(s) from 2026-11-04 to 2026-11-05.",
+    "integration: 2 run(s), 0 passed, 2 failed, 0 skipped",
+    "  2× a.test.mjs: often; last on 2026-11-05: new error",
+    "  1× a.test.mjs: rare; last on 2026-11-04: first"
+  ]);
+  assert.equal(historyReport("", "history"), "history holds no runs yet.");
+});
+
+test("every checkout of a repository, a worktree or the main one, writes one history in the main checkout's .cache", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sws-history-repo-"));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  // A realpath, as git prints one: macOS's temporary folder is a link.
+  const main = join(await realpath(directory), "main");
+  const git = (...args) => execFileSync("git", args, {cwd: main, stdio: "ignore", env: {...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com"}});
+  await mkdir(main);
+  git("init", "-q");
+  git("commit", "-q", "--allow-empty", "-m", "first");
+  const worktree = join(main, ".claude", "worktrees", "task");
+  git("worktree", "add", "-q", "-b", "wip/task", worktree);
+  const expected = join(main, ".cache", "test-history.jsonl");
+  assert.equal(historyFile(main, {}), expected);
+  assert.equal(historyFile(worktree, {}), expected);
+  assert.equal(historyFile(worktree, {TEST_HISTORY_FILE: "/elsewhere/h.jsonl"}), "/elsewhere/h.jsonl");
+  const outside = join(await realpath(directory), "not-a-repo");
+  await mkdir(outside);
+  assert.equal(historyFile(outside, {}), join(outside, ".cache", "test-history.jsonl"));
 });

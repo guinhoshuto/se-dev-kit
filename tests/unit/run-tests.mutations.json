@@ -51,8 +51,8 @@
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "detail: `${seconds.toFixed(1)} s${waited}`",
-      "to": "detail: `${seconds.toFixed(1)} s`",
+      "from": "detail: `${seconds.toFixed(1)} s${waited}${retrying(retries)}`",
+      "to": "detail: `${seconds.toFixed(1)} s${retrying(retries)}`",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^npm test waits"
     },
@@ -181,6 +181,83 @@
       "to": "!entry.startsWith(SUITE_SLOT)",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a repeated file keeps its suite"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text)};",
+      "to": "return {code, seconds, failures: [], launchRetries: launchRetries(text)};",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's log gives the tests that failed"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text)};",
+      "to": "return {code, seconds, failures: failedTests(text), launchRetries: []};",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's log gives the tests that failed"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "  for (const result of results) for (const line of result.retries ?? []) log(`${result.name}: ${line}`);\n",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run's summary says a suite retried"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "${waited}${retrying(retries)}`, retries});",
+      "to": "${waited}`, retries});",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run's summary says a suite retried"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "      await recordSuite({suite: name, status: 'skipped', detail: allowed.reason});\n",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run's summary says a suite retried"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "    await recordSuite({suite: name, status, seconds: Number(seconds.toFixed(1)), waitedMs: allowed.waitedMs ?? 0, log: relative(ROOT, logPath), failures, launchRetries: retries.length});\n",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a run's summary says a suite retried"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": ", MACHINE_CHECK: join(temporary, 'no-machine-check'), TEST_HISTORY_FILE: 'off'};",
+      "to": ", MACHINE_CHECK: join(temporary, 'no-machine-check')};",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's processes get its TMPDIR"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "    return join(dirname(common), '.cache', 'test-history.jsonl');",
+      "to": "    return join(root, '.cache', 'test-history.jsonl');",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^every checkout of a repository"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "  if (environment.TEST_HISTORY_FILE) return environment.TEST_HISTORY_FILE;\n",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^every checkout of a repository"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "[...failures].sort((a, b) => b[1].times - a[1].times)",
+      "to": "[...failures]",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^the history counts each test's failures"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "    } catch {\n      // A line a crash cut short is not worth losing the count over.\n      return [];\n    }",
+      "to": "    } catch (error) {\n      throw error;\n    }",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^the history counts each test's failures"
     }
   ]
 }

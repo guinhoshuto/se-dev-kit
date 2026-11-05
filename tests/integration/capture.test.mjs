@@ -167,7 +167,7 @@ test("capture writes deterministic images, thumbnail, contact sheet, and provena
   assert.equal(await readFile(sentinel, "utf8"), "unrelated user file");
 });
 
-test("video capture with keepFrames writes deterministic frames and produces an ffprobe-validated silent MP4", {timeout: 90_000}, async (t) => {
+test("video capture with keepFrames writes deterministic frames and produces an ffprobe-validated silent MP4", {timeout: 120_000}, async (t) => {
   const [detection, tooling] = await Promise.all([detectBrowser(), detectMediaTooling()]);
   if (!detection.executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");

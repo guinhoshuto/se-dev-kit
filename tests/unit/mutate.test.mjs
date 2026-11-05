@@ -148,7 +148,7 @@ const CHROME_TEST = "import assert from 'node:assert/strict';\nimport {writeFile
 /** A throwaway checkout holding copies of the scripts the mutate CLI loads, so the CLI's ROOT is that checkout. */
 async function cliCheckout(t) {
   const root = await folder(t, "sws-mutate-cli-");
-  for (const path of ["scripts/mutate.mjs", "scripts/run-tests.mjs", "scripts/lib/entry-point.mjs", "scripts/lib/machine.mjs", "dist/shared/render-slot.js"]) {
+  for (const path of ["scripts/mutate.mjs", "scripts/run-tests.mjs", "scripts/lib/entry-point.mjs", "scripts/lib/machine.mjs", "scripts/lib/test-history.mjs", "dist/shared/render-slot.js"]) {
     await mkdir(dirname(join(root, path)), {recursive: true});
     await copyFile(new URL(`../../${path}`, import.meta.url), join(root, path));
   }
