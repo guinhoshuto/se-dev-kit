@@ -14,8 +14,10 @@
  * commit's template: the literal pieces between the placeholders, each as its first characters, length, and SHA-256.
  * The page recognizes the commit in the canvas by those pieces in order, whatever the values between them.
  *
- * Usage: se-editor-plan.mjs --repo <widget repository> --from <commit> [--to <commit>] --out <new folder>
+ * Usage: se-editor-plan.mjs --repo <widget repository> --from <commit> [--to <commit>] [--dir <subfolder>] --out <new folder>
  * --to defaults to HEAD. --out must not exist; it is never replaced. Reads committed files only, never the working tree.
+ * --dir reads the widget from that subfolder of the repository (a customer build), at both commits, which stay commits
+ * of the repository itself.
  */
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -23,7 +25,7 @@ import {mkdirSync, realpathSync, writeFileSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-// The two layouts the Studio detects (src/config/load.ts), each tab with its file at the repository root.
+// The two layouts the Studio detects (src/config/load.ts), each tab with its file at the repository root, or in --dir.
 export const LAYOUTS = [
   {html: 'widget.html', css: 'widget.css', js: 'widget.js', fields: 'widget.json'},
   {html: 'index.html', css: 'style.css', js: 'script.js', fields: 'fields.json'}
@@ -79,12 +81,27 @@ function commit(repo, rev) {
   }
 }
 
-function layoutAt(repo, sha) {
-  const names = new Set(git(repo, ['ls-tree', '--name-only', sha]).toString().split('\n'));
+/** `--dir` as a path in a commit's tree, from its root; Git would read a leading `./` from the working directory. */
+function subfolder(dir) {
+  const parts = dir.split('/').filter((part) => part && part !== '.');
+  if (dir.startsWith('/') || !parts.length || parts.includes('..')) {
+    throw new Error(`--dir ${dir} is not a subfolder of the repository: give its path from the repository root.`);
+  }
+  return parts.join('/');
+}
+
+function layoutAt(repo, sha, dir) {
+  let listing;
+  try {
+    listing = git(repo, ['ls-tree', '--name-only', dir ? `${sha}:${dir}` : sha]);
+  } catch (error) {
+    throw dir ? new Error(`${sha.slice(0, 7)} has no folder ${dir}/.`) : error;
+  }
+  const names = new Set(listing.toString().split('\n'));
   const complete = LAYOUTS.filter((layout) => TABS.every((tab) => names.has(layout[tab])));
   if (complete.length !== 1) {
     throw new Error(`${sha.slice(0, 7)} has ${complete.length ? 'both' : 'neither'} widget.html/widget.css/widget.js/widget.json `
-      + 'and index.html/style.css/script.js/fields.json at the repository root.');
+      + `and index.html/style.css/script.js/fields.json ${dir ? `in ${dir}/` : 'at the repository root'}.`);
   }
   return complete[0];
 }
@@ -107,14 +124,15 @@ function parseFields(file, sha, source) {
 }
 
 /** Writes the `to` files into `out` (a new folder) and returns the plan. */
-export function plan({repo, from, to = 'HEAD', out}) {
+export function plan({repo, from, to = 'HEAD', dir, out}) {
   if (!repo || !from || !out) throw new Error('--repo, --from, and --out are required.');
   const root = resolve(repo);
+  const inside = dir === undefined ? '' : subfolder(dir);
   const old = commit(root, from);
   const next = commit(root, to);
   if (old === next) throw new Error(`--from and --to are the same commit, ${old.slice(0, 7)}.`);
-  const layout = layoutAt(root, next);
-  const previousLayout = layoutAt(root, old);
+  const layout = layoutAt(root, next, inside);
+  const previousLayout = layoutAt(root, old, inside);
   if (TABS.some((tab) => previousLayout[tab] !== layout[tab])) throw new Error('The widget layout changed between the two commits.');
 
   const tabs = {};
@@ -123,9 +141,10 @@ export function plan({repo, from, to = 'HEAD', out}) {
   let fields;
   for (const tab of TABS) {
     const file = layout[tab];
-    previous[tab] = text(root, old, file);
-    sources[tab] = text(root, next, file);
-    if (tab === 'fields') fields = [parseFields(file, old, previous[tab]), parseFields(file, next, sources[tab])];
+    const path = inside ? `${inside}/${file}` : file;
+    previous[tab] = text(root, old, path);
+    sources[tab] = text(root, next, path);
+    if (tab === 'fields') fields = [parseFields(path, old, previous[tab]), parseFields(path, next, sources[tab])];
     tabs[tab] = {file, old: tabHash(tab, previous[tab]), new: tabHash(tab, sources[tab])};
   }
   const keys = [...new Set(fields.flatMap((entries) => Object.keys(entries)))];
@@ -135,7 +154,7 @@ export function plan({repo, from, to = 'HEAD', out}) {
     if (Object.keys(templates).length) tabs[tab].templates = templates;
   }
   if (TABS.every((tab) => tabs[tab].old === tabs[tab].new)) {
-    throw new Error(`No code tab changes between ${old.slice(0, 7)} and ${next.slice(0, 7)}.`);
+    throw new Error(`No code tab changes ${inside ? `in ${inside}/ ` : ''}between ${old.slice(0, 7)} and ${next.slice(0, 7)}.`);
   }
   const labels = changedLabels(...fields);
 
@@ -171,13 +190,14 @@ function isEntryPoint() {
 if (isEntryPoint()) {
   const args = process.argv.slice(2);
   if (!args.length || args.includes('--help')) {
-    console.log('Usage: se-editor-plan.mjs --repo <widget repository> --from <commit> [--to <commit>] --out <new folder>\n'
+    console.log('Usage: se-editor-plan.mjs --repo <widget repository> --from <commit> [--to <commit>] [--dir <subfolder>] --out <new folder>\n'
       + 'Writes the --to commit\'s HTML, CSS, JS, and FIELDS into --out (a new folder) and prints the JSON plan for '
-      + 'seEditor.use() in the StreamElements overlay editor. --to defaults to HEAD.');
+      + 'seEditor.use() in the StreamElements overlay editor. --to defaults to HEAD. --dir reads the widget from that '
+      + 'subfolder of the repository, at both commits.');
     process.exit(args.length ? 0 : 2);
   }
   try {
-    const result = plan({repo: argument(args, '--repo'), from: argument(args, '--from'), to: argument(args, '--to'), out: argument(args, '--out')});
+    const result = plan({repo: argument(args, '--repo'), from: argument(args, '--from'), to: argument(args, '--to'), dir: argument(args, '--dir'), out: argument(args, '--out')});
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     console.error(`se-editor-plan: ${error.message}`);
