@@ -10,6 +10,14 @@
  *
  * or one widget a step at a time: await seEditor.open(name), scan(), apply(), done(). A widget is written only when
  * every code tab holds the old commit's code or the new one's; a tab with any other code stops it with nothing written.
+ *
+ * With no plan, one value in a widget's fields, which the overlay keeps only once someone clicks Save:
+ *
+ *   await seEditor.readField('Label', 'layer')          // the field's value
+ *   await seEditor.setField('Label', 'value', 'layer')  // writes it; the result carries the old value
+ *
+ * These two are the only calls that read an input's value, and only that of a field's own input, found by its label
+ * inside a custom widget's form: one of the editor's inputs is the overlay's link for OBS, with its key.
  * Every call evaluates to a JSON string.
  */
 (() => {
@@ -22,6 +30,14 @@
   const LANGUAGE = {html: 'html', css: 'css', js: 'javascript', fields: 'json'};
   const INPUT_ID = 'se-editor-update-files';
   const LABEL = 'se-editor-update files';
+  // A custom widget's fields, in the editor's own template. `.widget-form` alone would not do: the panel with the
+  // overlay's link for OBS, with its key, has that class too (`.details-content.widget-form`, `#overlay-url`).
+  const FIELD_LABELS = '.widget-form custom-widget-fields-group label';
+  const FIELD_ROW = 'md-input-container, .custom-fields__item';
+  const VALUE_TYPES = ['text', 'number', 'search', 'url', 'email', 'tel'];
+  // How long the editor gets to show a written value as its own: React renders it and AngularJS applies it right away.
+  const SETTLE_MS = 150;
+  const RENAME_MS = 600;
   // Timers stall in a background tab (a setTimeout there held a page-script call for 45 s), so every wait is bounded
   // and nothing waits in a hidden tab.
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -236,6 +252,101 @@
     };
   };
 
+  const layerClicks = new Map();
+  const selectLayer = async (given) => {
+    const rows = [...document.querySelectorAll('.widget-layers-list-item--name')];
+    const names = rows.map((el) => el.textContent.trim());
+    if (given === undefined && names.length !== 1) {
+      return {ok: false, error: names.length ? `Name the layer, one of: ${names.join(', ')}.` : 'No layer is listed: open the Layers section.'};
+    }
+    const name = given === undefined ? names[0] : given;
+    const matching = rows.filter((el) => el.textContent.trim() === name);
+    if (matching.length !== 1) {
+      return {ok: false, error: matching.length ? `${matching.length} layers are named "${name}": rename one or tell them apart first.` : `No layer is named "${name}".`};
+    }
+    const item = matching[0].closest('.widget-layers-list-item');
+    const isSelected = () => {
+      const selected = document.querySelectorAll('.widget-layers-list-item.selected');
+      return selected.length === 1 && selected[0] === item;
+    };
+    // A second click on a layer's name within 500 ms opens its rename input, so a selected layer gets no click, and one
+    // left and come back to in that time waits for it.
+    if (!isSelected()) {
+      const early = (layerClicks.get(name) ?? 0) + RENAME_MS - Date.now();
+      if (early > 0) await sleep(early);
+      layerClicks.set(name, Date.now());
+      matching[0].click();
+      // After the click come the new panel's button, its fields, and last the mark in the layer list, 43 to 69 ms later
+      // (measured on 2026-11-05). Until the mark, the list names the previous layer and the page may hold its fields.
+      await waitFor(isSelected, 3000);
+    }
+    return isSelected() && openEditorButton() ? {ok: true, name}
+      : {ok: false, error: `"${name}" shows no field panel: it may not be a custom widget.`};
+  };
+
+  // A closed group keeps its inputs in the page, and a group left open is saved with the overlay, so no group is opened.
+  const fieldInput = (label, layer) => {
+    if (typeof label !== 'string' || !label.trim()) return {ok: false, error: "Pass the field's label."};
+    const matching = [...document.querySelectorAll(FIELD_LABELS)].filter((el) => el.textContent.trim() === label.trim());
+    if (!matching.length) {
+      return {ok: false, error: `No field of "${layer}" is labelled "${label}": nothing was read or written. A field its FIELDS show only under a condition may be hidden now.`};
+    }
+    if (matching.length > 1) return {ok: false, error: `${matching.length} fields of "${layer}" are labelled "${label}": nothing was read or written.`};
+    const row = matching[0].closest(FIELD_ROW);
+    const inputs = row ? [...row.querySelectorAll('input, textarea')].filter((el) => (el.tagName === 'TEXTAREA' || VALUE_TYPES.includes(el.type))
+      && el.getAttribute('aria-hidden') !== 'true' && !el.readOnly && !el.disabled) : [];
+    if (inputs.length !== 1) {
+      return {ok: false, error: `The field "${label}" of "${layer}" is not one text or number input (a dropdown, a checkbox, a color, an asset): nothing was read or written.`};
+    }
+    return {ok: true, input: inputs[0]};
+  };
+
+  // A React field keeps its own copy of the value behind the element's `value` property and takes an `input` event only
+  // when the element's value differs from that copy, so the value goes in through the prototype's setter. `input` is
+  // what the React and the AngularJS fields read; `focusout` is what makes the field commit it, as leaving it would.
+  const typeInto = (input, text) => {
+    const proto = input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(input, text);
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    input.dispatchEvent(new FocusEvent('focusout', {bubbles: true}));
+  };
+
+  // A number field shows its value grouped by the browser's locale: 1500 as "1,500".
+  const ungrouped = (text) => text.replace(/[.,\s]/g, '');
+  const keeps = (input, shown, written) => shown === written || (input.inputMode === 'numeric' && ungrouped(shown) === ungrouped(written));
+
+  const readField = async (label, layer) => {
+    const stop = hidden();
+    if (stop) return stop;
+    const selected = await selectLayer(layer);
+    if (!selected.ok) return selected;
+    const found = fieldInput(label, selected.name);
+    if (!found.ok) return found;
+    return {ok: true, layer: selected.name, label, value: found.input.value};
+  };
+
+  const setField = async (label, value, layer) => {
+    const stop = hidden();
+    if (stop) return stop;
+    if (typeof value !== 'string' && !Number.isFinite(value)) return {ok: false, error: 'Pass the value as a string or a number.'};
+    const selected = await selectLayer(layer);
+    if (!selected.ok) return selected;
+    const found = fieldInput(label, selected.name);
+    if (!found.ok) return found;
+    const {input} = found;
+    const old = input.value;
+    const written = String(value);
+    typeInto(input, written);
+    await sleep(SETTLE_MS);
+    const shown = input.value;
+    if (keeps(input, shown, written)) return {ok: true, layer: selected.name, label, old, value: shown};
+    typeInto(input, old);
+    await sleep(SETTLE_MS);
+    const restored = keeps(input, input.value, old);
+    return {ok: false, layer: selected.name, label, old, shown, restored,
+      error: `The editor showed "${shown}" for "${written}": ${restored ? 'the old value was put back.' : 'the old value did not come back: do not Save.'}`};
+  };
+
   api.attach = () => out(attach());
   api.files = async () => out(await files());
   api.open = async (name) => out(await open(name));
@@ -243,5 +354,9 @@
   api.apply = async () => out(await apply());
   api.done = async () => out(await done());
   api.run = async (names) => out(await run(names));
-  return out({ok: true, version: api.version, calls: ['attach()', 'await files()', 'await run([names])', 'await open(name)', 'await scan()', 'await apply()', 'await done()']});
+  // A value holding an overlay's link for OBS answers with the key hidden: an answer stays in the session's transcript.
+  const masked = (result) => out(result).replace(/\/overlay\/[0-9a-f]{24}\/[^\s"\\]+/gi, '/overlay/<id>/<key>');
+  api.readField = async (label, layer) => masked(await readField(label, layer));
+  api.setField = async (label, value, layer) => masked(await setField(label, value, layer));
+  return out({ok: true, version: api.version, calls: ['attach()', 'await files()', 'await run([names])', 'await open(name)', 'await scan()', 'await apply()', 'await done()', 'await readField(label, layer)', 'await setField(label, value, layer)']});
 })();

@@ -110,7 +110,7 @@ async function editor(t, widgets, {url = EDITOR, update = true, using = plan} = 
   const call = async (expression) => JSON.parse(await page.evaluate(expression));
   const pasted = await call(READ);
   if (pasted.ok && update) {
-    assert.equal((await call(`seEditor.use(${JSON.stringify(using)})`)).ok, true);
+    if (using) assert.equal((await call(`seEditor.use(${JSON.stringify(using)})`)).ok, true);
     assert.equal((await call(UPDATE)).ok, true);
   }
   return {page, call, pasted, requests, state: () => page.evaluate(() => {
@@ -323,4 +323,191 @@ test("code that fits both commits once its placeholders are filled reads UNVERIF
   assert.deepEqual(result.widgets[0].tabs, {html: "already new", css: "written", js: "already new", fields: "already new"});
   assert.deepEqual({css: result.canvas.css, left: result.left}, {css: count({UNVERIFIABLE: 1}), left: 0});
   assert.equal((await session.call("seEditor.canvas()")).ok, false, "the canvas cannot confirm it");
+});
+
+// A widget's field panel, with each kind of field, for setField and readField. They need no plan.
+const ITEMS = "Items (comma-separated)";
+const FORM = {
+  ...OLD,
+  fields: JSON.stringify({
+    items: {type: "text", label: ITEMS, value: ""},
+    notes: {type: "text", mode: "textarea", label: "Notes", value: "first"},
+    delay: {type: "number", label: "Delay", value: 5, max: 10},
+    bits: {type: "number", label: "Bits", value: 100},
+    speed: {type: "slider", label: "Speed", value: 1},
+    link: {type: "url", label: "Link", value: "https://example.com/"},
+    fixed: {type: "search", label: "Fixed", value: "kept", readonly: true},
+    tint: {type: "colorpicker", label: "Tint", value: "#ff0000"},
+    theme: {type: "dropdown", label: "Theme", value: "dark"},
+    loop: {type: "checkbox", label: "Loop", value: true},
+    secret: {type: "password", label: "Secret", value: "hunter2"},
+    mystery: {type: "text", label: "Mystery items", value: "$10, $20", group: "Mystery slices"},
+    twinA: {type: "text", label: "Twin", value: "a", group: "One"},
+    twinB: {type: "text", label: "Twin", value: "b", group: "Two"}
+  }, null, 2) + "\n"
+};
+const formEditor = (t, widgets) => editor(t, widgets, {using: null});
+const fieldDataOf = async (session) => (await session.state()).widgets.map(({fieldData}) => fieldData);
+
+test("setField writes a field by its label and returns the old value, without Save or opening a group", {timeout: 60_000}, async (t) => {
+  const session = await formEditor(t, [widget("minimal", FORM, {items: "a, b", speed: 3})]);
+  if (!session) return;
+  assert.deepEqual(await session.call(`seEditor.readField(${JSON.stringify(ITEMS)})`), {ok: true, layer: "minimal", label: ITEMS, value: "a, b"});
+  assert.deepEqual(await fieldDataOf(session), [{items: "a, b", speed: 3}], "reading changes nothing");
+
+  assert.deepEqual(await session.call(`seEditor.setField(${JSON.stringify(ITEMS)}, "x, y", "minimal")`), {ok: true, layer: "minimal", label: ITEMS, old: "a, b", value: "x, y"});
+  assert.deepEqual(await session.call("seEditor.setField('Notes', 'second')"), {ok: true, layer: "minimal", label: "Notes", old: "first", value: "second"});
+  assert.deepEqual(await session.call("seEditor.setField('Delay', 7)"), {ok: true, layer: "minimal", label: "Delay", old: "5", value: "7"});
+  // A number field shows its value grouped.
+  assert.deepEqual(await session.call("seEditor.setField('Bits', 1500)"), {ok: true, layer: "minimal", label: "Bits", old: "100", value: "1,500"});
+  assert.deepEqual(await session.call("seEditor.setField('Speed', 9)"), {ok: true, layer: "minimal", label: "Speed", old: "3", value: "9"});
+  assert.deepEqual(await session.call("seEditor.setField('Link', 'https://example.com/new')"), {ok: true, layer: "minimal", label: "Link", old: "https://example.com/", value: "https://example.com/new"});
+  // A closed group keeps its input in the page, and stays closed: a group left open is saved with the overlay.
+  assert.deepEqual(await session.call("seEditor.setField('Mystery items', '$10[$5 FEE], $20')"), {ok: true, layer: "minimal", label: "Mystery items", old: "$10, $20", value: "$10[$5 FEE], $20"});
+  assert.equal(await session.page.locator(".custom-fields__toggle", {hasText: "Mystery slices"}).getAttribute("aria-expanded"), "false");
+
+  const written = {items: "x, y", speed: 9, notes: "second", delay: 7, bits: 1500, link: "https://example.com/new", mystery: "$10[$5 FEE], $20"};
+  assert.deepEqual(await fieldDataOf(session), [written], "each value reached the widget's data");
+  const state = await session.state();
+  assert.deepEqual({saves: state.saves, toggles: state.toggles, selections: state.selections, renames: state.renames, decoyReads: state.decoyReads}, {saves: 0, toggles: 0, selections: 1, renames: 0, decoyReads: 0});
+
+  await session.page.click("#save");
+  await session.page.reload();
+  assert.equal((await session.call(READ)).ok, true);
+  assert.equal((await session.call(UPDATE)).ok, true);
+  assert.equal(JSON.parse(await session.page.evaluate(`seEditor.readField('Mystery items')`)).value, "$10[$5 FEE], $20", "what was saved reads back after the reload");
+});
+
+test("an unknown label changes nothing and says so", {timeout: 60_000}, async (t) => {
+  const session = await formEditor(t, [widget("minimal", FORM, {items: "a, b"})]);
+  if (!session) return;
+  for (const label of ["Nope", "Items", ITEMS.slice(1)]) {
+    for (const call of [`seEditor.readField(${JSON.stringify(label)})`, `seEditor.setField(${JSON.stringify(label)}, 'x')`]) {
+      const result = await session.call(call);
+      assert.equal(result.ok, false);
+      assert.match(result.error, new RegExp(`^No field of "minimal" is labelled "${label.replace(/[()]/g, "\\$&")}": nothing was read or written`));
+    }
+  }
+  assert.deepEqual(await fieldDataOf(session), [{items: "a, b"}]);
+  assert.match((await session.call("seEditor.readField('')")).error, /Pass the field's label/);
+});
+
+test("neither call reads or writes an input outside the widget's fields, the overlay's link above all", {timeout: 60_000}, async (t) => {
+  const session = await formEditor(t, [widget("minimal", FORM, {items: "a, b"})]);
+  if (!session) return;
+  for (const label of ["Overlay url", "Custom widget name", "Outside the form"]) {
+    for (const call of [`seEditor.readField(${JSON.stringify(label)})`, `seEditor.setField(${JSON.stringify(label)}, 'x')`]) {
+      const text = await session.page.evaluate(call);
+      assert.doesNotMatch(text, /FIXTUREKEY|FIXTUREOUTSIDE/);
+      assert.match(JSON.parse(text).error, new RegExp(`^No field of "minimal" is labelled "${label}"`));
+    }
+  }
+  assert.equal((await session.state()).decoyReads, 0, "no decoy's value was read, even to be dropped");
+  assert.equal(await session.page.evaluate(() => document.getElementById("overlay-url").value.endsWith("FIXTUREKEY")), true, "and the link is as it was");
+});
+
+test("a value holding an overlay's link answers with its key hidden, and stays as it is in the field", {timeout: 60_000}, async (t) => {
+  const link = "https://streamelements.com/overlay/0123456789abcdef01234567/FIXTUREKEY2";
+  const masked = "https://streamelements.com/overlay/<id>/<key>";
+  const session = await formEditor(t, [widget("minimal", FORM, {notes: link})]);
+  if (!session) return;
+  const read = await session.page.evaluate("seEditor.readField('Notes')");
+  assert.doesNotMatch(read, /FIXTUREKEY2/);
+  assert.equal(JSON.parse(read).value, masked);
+  assert.equal(await session.page.evaluate(() => document.querySelector("textarea").value), link, "reading leaves it alone");
+  const written = await session.page.evaluate(`seEditor.setField('Notes', ${JSON.stringify(`${link}/more`)})`);
+  assert.doesNotMatch(written, /FIXTUREKEY2/);
+  assert.deepEqual(JSON.parse(written), {ok: true, layer: "minimal", label: "Notes", old: masked, value: masked});
+  assert.deepEqual(await fieldDataOf(session), [{notes: `${link}/more`}], "the field keeps the value it was given");
+});
+
+test("a field that is not one text or number input, or two fields with one label, are refused", {timeout: 60_000}, async (t) => {
+  const session = await formEditor(t, [widget("minimal", FORM, {theme: "dark"})]);
+  if (!session) return;
+  for (const label of ["Tint", "Theme", "Loop", "Secret", "Fixed"]) {
+    for (const call of [`seEditor.readField('${label}')`, `seEditor.setField('${label}', 'x')`]) {
+      const text = await session.page.evaluate(call);
+      assert.doesNotMatch(text, /hunter2|"kept"|"dark"/);
+      assert.match(JSON.parse(text).error, new RegExp(`^The field "${label}" of "minimal" is not one text or number input`));
+    }
+  }
+  assert.match((await session.call("seEditor.setField('Twin', 'x')")).error, /^2 fields of "minimal" are labelled "Twin": nothing was read or written\.$/);
+  assert.match((await session.call("seEditor.readField('Twin')")).error, /^2 fields of "minimal" are labelled "Twin"/);
+  assert.deepEqual(await fieldDataOf(session), [{theme: "dark"}]);
+});
+
+test("a call names its layer, and writes that layer's field, never the one still on the page", {timeout: 60_000}, async (t) => {
+  const session = await formEditor(t, [
+    widget("minimal", FORM, {items: "one"}),
+    widget("halloween", FORM, {items: "two"}),
+    widget("twin", FORM, {}),
+    widget("twin", FORM, {}),
+    {name: "image", plain: true, ...OLD, fieldData: {}}
+  ]);
+  if (!session) return;
+  assert.match((await session.call(`seEditor.setField(${JSON.stringify(ITEMS)}, 'x')`)).error, /^Name the layer, one of: minimal, halloween, twin, twin, image\.$/);
+  assert.match((await session.call("seEditor.readField('Notes', 'nobody')")).error, /^No layer is named "nobody"\.$/);
+  assert.match((await session.call("seEditor.readField('Notes', 'twin')")).error, /^2 layers are named "twin"/);
+  assert.equal((await session.state()).selections, 0, "no layer was clicked yet");
+
+  assert.equal((await session.call(`seEditor.setField(${JSON.stringify(ITEMS)}, 'A', 'minimal')`)).old, "one");
+  // The panel on the page is still minimal's for a moment after halloween is selected.
+  assert.deepEqual(await session.call(`seEditor.setField(${JSON.stringify(ITEMS)}, 'B', 'halloween')`), {ok: true, layer: "halloween", label: ITEMS, old: "two", value: "B"});
+  assert.deepEqual((await fieldDataOf(session)).slice(0, 2), [{items: "A"}, {items: "B"}]);
+  // The list marks a layer only after its fields show: right after a switch, two calls on the layer it still names.
+  for (const call of [1, 2]) {
+    assert.deepEqual(await session.call(`seEditor.readField(${JSON.stringify(ITEMS)}, 'minimal')`), {ok: true, layer: "minimal", label: ITEMS, value: "A"}, `call ${call}`);
+  }
+  assert.deepEqual(await session.call(`seEditor.readField(${JSON.stringify(ITEMS)}, 'halloween')`), {ok: true, layer: "halloween", label: ITEMS, value: "B"});
+  // Two layers marked (a group's selection) are not this layer's panel.
+  await session.page.evaluate(() => document.querySelectorAll(".widget-layers-list-item").forEach((row) => row.classList.add("selected")));
+  assert.equal((await session.call(`seEditor.readField(${JSON.stringify(ITEMS)}, 'minimal')`)).value, "A");
+
+  assert.match((await session.call("seEditor.readField('Notes', 'image')")).error, /^"image" shows no field panel/);
+  assert.match((await session.call("seEditor.readField('Notes', 'image')")).error, /^"image" shows no field panel/, "selected already, it says the same");
+  const state = await session.state();
+  assert.deepEqual({selections: state.selections, renames: state.renames}, {selections: 6, renames: 0});
+});
+
+test("a click the layer list never marks stops the call, with nothing written to the layer on the page", {timeout: 60_000}, async (t) => {
+  const session = await formEditor(t, [widget("minimal", FORM, {items: "one"}), widget("halloween", FORM, {items: "two"})]);
+  if (!session) return;
+  assert.equal((await session.call(`seEditor.readField(${JSON.stringify(ITEMS)}, 'minimal')`)).value, "one");
+  await session.page.evaluate(() => { window.__fixture.unmarked = true; });
+  assert.match((await session.call(`seEditor.setField(${JSON.stringify(ITEMS)}, 'x', 'halloween')`)).error, /^"halloween" shows no field panel/);
+  assert.deepEqual(await fieldDataOf(session), [{items: "one"}, {items: "two"}]);
+});
+
+test("a value the editor does not keep is put back, and says so when it cannot be", {timeout: 60_000}, async (t) => {
+  const session = await formEditor(t, [widget("minimal", FORM, {delay: 5}), widget("over", FORM, {delay: 50})]);
+  if (!session) return;
+  assert.deepEqual(await session.call("seEditor.setField('Delay', 99, 'minimal')"), {
+    ok: false, layer: "minimal", label: "Delay", old: "5", shown: "10", restored: true,
+    error: 'The editor showed "10" for "99": the old value was put back.'
+  });
+  // Already above its max: putting it back clamps it again.
+  const over = await session.call("seEditor.setField('Delay', 99, 'over')");
+  assert.deepEqual({old: over.old, shown: over.shown, restored: over.restored}, {old: "50", shown: "10", restored: false});
+  assert.equal(over.error, 'The editor showed "10" for "99": the old value did not come back: do not Save.');
+  assert.deepEqual((await fieldDataOf(session)).map(({delay}) => delay), [5, 10]);
+  // Only a number field's grouping is forgiven: this one lost the spaces the browser strips from a URL.
+  const url = await session.call("seEditor.setField('Link', ' https://example.com/new ', 'minimal')");
+  assert.deepEqual({ok: url.ok, old: url.old, shown: url.shown, restored: url.restored}, {ok: false, old: "https://example.com/", shown: "https://example.com/new", restored: true});
+  assert.equal((await fieldDataOf(session))[0].link, "https://example.com/");
+  assert.equal((await session.state()).saves, 0);
+});
+
+test("setField refuses a value that is not a string or a number, and neither runs in the background", {timeout: 60_000}, async (t) => {
+  const session = await formEditor(t, [widget("minimal", FORM, {items: "a"})]);
+  if (!session) return;
+  for (const value of ["undefined", "{a: 1}", "NaN", "null"]) {
+    assert.match((await session.call(`seEditor.setField(${JSON.stringify(ITEMS)}, ${value})`)).error, /^Pass the value as a string or a number\.$/);
+  }
+  assert.equal((await session.state()).selections, 0);
+  await session.page.evaluate(() => Object.defineProperty(document, "visibilityState", {get: () => "hidden"}));
+  for (const call of [`seEditor.readField(${JSON.stringify(ITEMS)})`, `seEditor.setField(${JSON.stringify(ITEMS)}, 'x')`]) {
+    assert.match((await session.call(call)).error, /in the background/);
+  }
+  assert.equal((await session.state()).selections, 0);
+  assert.deepEqual(await fieldDataOf(session), [{items: "a"}]);
 });
