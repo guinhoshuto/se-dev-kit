@@ -327,6 +327,27 @@
       "to": "[--to <commit>] --out <new folder>\\n'",
       "test": "tests/unit/se-editor-plan.test.mjs",
       "name": "the CLI passes"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "// references/se-editor-update.md",
+      "to": "// references/se-editor-update.md xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "^the loader's text stays under"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "if (r.ok) input.remove();",
+      "to": "if (r.ok) input.remove(); input.click();",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "^the read-only page script and the loader"
+    },
+    {
+      "file": "skills/se-widget-studio/references/se-editor-update.md",
+      "from": "4. [Load](#load-a-page-script) `se-editor-update.js`",
+      "to": "4. Paste `se-editor-update.js`",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "^the loader's text stays under"
     }
   ]
 }

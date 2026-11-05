@@ -338,12 +338,20 @@ test("the CLI passes --dir to the plan and its usage names it", async () => {
   }
 });
 
-test("the read-only page script never writes, clicks, or reads inputs, so it can run before the owner approves", async () => {
-  const source = await readFile(join(SCRIPTS, "se-editor-read.js"), "utf8");
+test("the read-only page script and the loader never write, click, or read inputs, so they can run before the owner approves", async () => {
+  const sources = await Promise.all(["se-editor-read.js", "se-editor-load.js"].map((name) => readFile(join(SCRIPTS, name), "utf8")));
   for (const pattern of [/\.(?:setValue|executeEdits|pushEditOperations|applyEdits)\s*\(/, /\.value\s*=(?!=)/, /\.click\s*\(/, /dispatchEvent\s*\(/,
     /\.focus\s*\(/, /querySelectorAll\(\s*['"`][^'"`]*\b(?:input|textarea)\b/]) {
-    assert.doesNotMatch(source, pattern);
+    for (const source of sources) assert.doesNotMatch(source, pattern);
   }
   // The writing half is the only one that does.
   assert.match(await readFile(join(SCRIPTS, "se-editor-update.js"), "utf8"), /\.setValue\(/);
+});
+
+test("the loader's text stays under 1,000 characters, and the reference's steps load the page scripts with it", async () => {
+  const loader = await readFile(join(SCRIPTS, "se-editor-load.js"), "utf8");
+  assert.ok(loader.length < 1000, `the loader is ${loader.length} characters`);
+  const reference = await readFile(join(SCRIPTS, "../references/se-editor-update.md"), "utf8");
+  assert.match(reference, /\`se-editor-load\.js\`/);
+  assert.doesNotMatch(reference, /\bpaste \`se-editor-(?:read|update)\.js\`/i);
 });
