@@ -412,6 +412,76 @@
       "to": "",
       "test": "tests/integration/se-editor-update.test.mjs",
       "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "let r = {ok: false, error: 'Upload se-editor-read.js or se-editor-update.js.'};",
+      "to": "let r = {ok: true};",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the loader runs only"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": ".test(location.href)) return out(",
+      "to": ".test(location.href) && false) return out(",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the loader adds nothing"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": ".filter((f) => /^se-editor-(read|update)\\.js$/.test(f.name))",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the loader runs only"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": ".sort((a, b) => (a.name < b.name ? -1 : 1))",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the loader takes both page scripts"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "document.getElementById('se-editor-load')?.remove();",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^pasting the loader again"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "if (r.ok) input.remove();",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the loader defines seEditor"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "if (r.ok) input.remove();",
+      "to": "input.remove();",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the loader runs only"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "if (!r.ok) break;",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a page script's refusal"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "r = JSON.parse((0, eval)(await f.text()));",
+      "to": "r = await f.text().then((t) => JSON.parse((0, eval)(t))).catch(() => ({ok: true}));",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "forbids eval"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-load.js",
+      "from": "r = JSON.parse((0, eval)(await f.text()));",
+      "to": "r = {ok: true};",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^the loader defines seEditor"
     }
   ]
 }

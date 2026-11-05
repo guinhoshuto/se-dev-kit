@@ -1,6 +1,6 @@
 /**
  * The writing half of the page script that moves a sold widget's overlay to a new commit in the real StreamElements
- * overlay editor (references/se-editor-update.md). Paste it after `se-editor-read.js`, in the same tab, and only once
+ * overlay editor (references/se-editor-update.md). Load it with or after `se-editor-read.js`, in the same tab, and only once
  * the owner approved the update: it selects layers, opens the code editor and its HTML, CSS, JS, and Fields tabs,
  * writes code, and clicks Done. It never clicks Save and never opens or writes the Data tab.
  *
@@ -23,7 +23,7 @@
 (() => {
   const api = globalThis.seEditor;
   const out = (result) => JSON.stringify(result);
-  if (!api || api.version !== 1 || !api.core) return out({ok: false, error: 'Paste se-editor-read.js in this tab first.'});
+  if (!api || api.version !== 1 || !api.core) return out({ok: false, error: 'Load se-editor-read.js in this tab first.'});
   const {TABS, plan, short, tabHash, status, canvasState, noPlan} = api.core;
   // Each tab's name in the code editor (the name of its li.md-nav-item), and the Monaco language of its model.
   const NAV = {html: 'html', css: 'css', js: 'js', fields: 'fields'};

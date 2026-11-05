@@ -13,8 +13,11 @@ import {plan as makePlan} from "../../skills/se-widget-studio/scripts/se-editor-
 // The page scripts that update a sold widget's overlay, run on a hand-written stand-in for the StreamElements overlay
 // editor (tests/fixtures/se-editor/editor.html) served at an editor URL, with every other request blocked.
 const SCRIPTS = fileURLToPath(new URL("../../skills/se-widget-studio/scripts/", import.meta.url));
-const READ = readFileSync(join(SCRIPTS, "se-editor-read.js"), "utf8");
-const UPDATE = readFileSync(join(SCRIPTS, "se-editor-update.js"), "utf8");
+const LOAD = readFileSync(join(SCRIPTS, "se-editor-load.js"), "utf8");
+const READ_FILE = join(SCRIPTS, "se-editor-read.js");
+const UPDATE_FILE = join(SCRIPTS, "se-editor-update.js");
+const READ = readFileSync(READ_FILE, "utf8");
+const UPDATE = readFileSync(UPDATE_FILE, "utf8");
 const FIXTURE = readFileSync(fileURLToPath(new URL("../fixtures/se-editor/editor.html", import.meta.url)), "utf8");
 const EDITOR = "https://streamelements.com/overlay/0123456789abcdef01234567/editor";
 
@@ -95,6 +98,18 @@ const widget = (name, code = OLD, fieldData = {speed: 3}) => ({name, ...code, fi
 
 /** The fixture editor at `url` with these widgets, the page scripts pasted, and every request it made. */
 async function editor(t, widgets, {url = EDITOR, update = true, using = plan} = {}) {
+  const session = await fixture(t, widgets, {url});
+  if (!session) return undefined;
+  const pasted = await session.call(READ);
+  if (pasted.ok && update) {
+    if (using) assert.equal((await session.call(`seEditor.use(${JSON.stringify(using)})`)).ok, true);
+    assert.equal((await session.call(UPDATE)).ok, true);
+  }
+  return {...session, pasted};
+}
+
+/** The fixture editor at `url` with these widgets, nothing pasted yet, served with these response headers. */
+async function fixture(t, widgets, {url = EDITOR, headers = {}} = {}) {
   if (!browser) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
     return undefined;
@@ -104,16 +119,11 @@ async function editor(t, widgets, {url = EDITOR, update = true, using = plan} = 
   const page = await context.newPage();
   const requests = [];
   page.on("request", (request) => requests.push(request.url()));
-  await page.route(url, (route) => route.fulfill({status: 200, contentType: "text/html", body: FIXTURE}));
+  await page.route(url, (route) => route.fulfill({status: 200, contentType: "text/html", headers, body: FIXTURE}));
   await page.addInitScript((list) => { window.__FIXTURE_WIDGETS = list; }, widgets);
   await page.goto(url);
   const call = async (expression) => JSON.parse(await page.evaluate(expression));
-  const pasted = await call(READ);
-  if (pasted.ok && update) {
-    if (using) assert.equal((await call(`seEditor.use(${JSON.stringify(using)})`)).ok, true);
-    assert.equal((await call(UPDATE)).ok, true);
-  }
-  return {page, call, pasted, requests, state: () => page.evaluate(() => {
+  return {page, call, requests, state: () => page.evaluate(() => {
     const {widgets: list, ...counts} = window.__fixture;
     return {...counts, widgets: list.map(({name, html, css, js, fields, fieldData}) => ({name, html, css, js, fields, fieldData}))};
   })};
@@ -138,7 +148,7 @@ test("the read-only half refuses any page that is not a StreamElements overlay e
     if (!session) return;
     assert.deepEqual(session.pasted, {ok: false, error: "This page is not a StreamElements overlay editor. Nothing was defined."});
     assert.equal(await session.page.evaluate(() => typeof seEditor), "undefined");
-    assert.match((await session.call(UPDATE)).error, /Paste se-editor-read\.js in this tab first/);
+    assert.match((await session.call(UPDATE)).error, /Load se-editor-read\.js in this tab first/);
   }
 });
 
@@ -510,4 +520,110 @@ test("setField refuses a value that is not a string or a number, and neither run
   }
   assert.equal((await session.state()).selections, 0);
   assert.deepEqual(await fieldDataOf(session), [{items: "a"}]);
+});
+
+const READ_CALLS = ["use(plan)", "layers()", "await canvas()", "labels([texts])"];
+const LOADER_LABEL = "se-editor-load files";
+const NO_SCRIPT = {ok: false, error: "Upload se-editor-read.js or se-editor-update.js."};
+
+/** The fixture editor with the loader pasted, and a function that uploads to its input and answers its load. */
+async function loader(t, widgets, options) {
+  const session = await fixture(t, widgets, options);
+  if (!session) return undefined;
+  assert.ok(LOAD.length < 1000, `the text pasted is ${LOAD.length} characters`);
+  assert.deepEqual(await session.call(LOAD), {ok: true, label: LOADER_LABEL});
+  const load = async (paths) => {
+    await session.page.getByLabel(LOADER_LABEL).setInputFiles(paths);
+    return session.call("seEditorLoad()");
+  };
+  return {...session, load, inputs: () => session.page.getByLabel(LOADER_LABEL).count()};
+}
+
+test("the loader defines seEditor from an uploaded file, with no page script's text in a call, and the update runs on what it loaded", {timeout: 60_000}, async (t) => {
+  const session = await loader(t, [widget("minimal")]);
+  if (!session) return;
+  assert.equal(await session.page.evaluate(() => typeof seEditor), "undefined", "the loader alone defines no page script");
+  assert.equal(await session.inputs(), 1);
+
+  assert.deepEqual(await session.load([READ_FILE]), {ok: true, version: 1, calls: READ_CALLS});
+  assert.equal(await session.inputs(), 0, "the input leaves once the scripts have run");
+  assert.deepEqual(await session.call("seEditor.layers()"), {ok: true, layers: ["minimal"]});
+  assert.equal(await session.page.evaluate(() => typeof seEditor.run), "undefined", "only the read-only half is in the page before the approval");
+
+  assert.equal((await session.call(`seEditor.use(${JSON.stringify(plan)})`)).ok, true);
+  assert.equal((await session.call(LOAD)).ok, true, "pasted again, it takes the writing half");
+  const answer = await session.load([UPDATE_FILE]);
+  assert.equal(answer.ok, true);
+  assert.ok(answer.calls.includes("await run([names])"));
+  assert.equal((await upload(session)).ok, true);
+  assert.equal((await session.call("seEditor.run(['minimal'])")).ok, true);
+  assert.deepEqual(codeOf(await session.state(), "minimal"), normalized(NEW));
+  assert.equal((await session.state()).saves, 0);
+});
+
+test("the loader takes both page scripts in one upload, whichever order they come in, and again after a reload", {timeout: 60_000}, async (t) => {
+  const session = await loader(t, [widget("minimal")]);
+  if (!session) return;
+  assert.equal((await session.load([UPDATE_FILE, READ_FILE])).ok, true);
+  assert.equal(await session.page.evaluate(() => typeof seEditor.layers + typeof seEditor.run), "functionfunction");
+
+  await session.page.reload();
+  assert.equal(await session.page.evaluate(() => typeof seEditor), "undefined", "a reload drops what was loaded");
+  assert.equal((await session.call(LOAD)).ok, true);
+  assert.equal((await session.load([UPDATE_FILE, READ_FILE])).ok, true);
+  assert.deepEqual(await session.call("seEditor.layers()"), {ok: true, layers: ["minimal"]});
+});
+
+test("the loader adds nothing to a page that is not a StreamElements overlay editor, the Studio's among them", {timeout: 60_000}, async (t) => {
+  for (const url of ["http://127.0.0.1:4310/overlay/0123456789abcdef01234567/editor", "https://streamelements.com/dashboard/overlays"]) {
+    const session = await fixture(t, [widget("minimal")], {url});
+    if (!session) return;
+    assert.deepEqual(await session.call(LOAD), {ok: false, error: "Not an overlay editor."});
+    assert.equal(await session.page.locator("#se-editor-load").count(), 0);
+    assert.equal(await session.page.evaluate(() => typeof seEditorLoad), "undefined");
+  }
+});
+
+test("the loader runs only the page scripts, and with none uploaded it says so and keeps its input", {timeout: 60_000}, async (t) => {
+  const session = await loader(t, [widget("minimal")]);
+  if (!session) return;
+  assert.deepEqual(await session.call("seEditorLoad()"), NO_SCRIPT, "nothing uploaded yet");
+  assert.equal(await session.inputs(), 1);
+
+  const other = join(root, "script.js");
+  await writeFile(other, "globalThis.__ran = true; JSON.stringify({ok: true});\n");
+  assert.deepEqual(await session.load([other]), NO_SCRIPT);
+  assert.equal(await session.inputs(), 1);
+  assert.equal(await session.page.evaluate(() => globalThis.__ran), undefined, "a widget's script never runs in the editor");
+
+  assert.equal((await session.load([other, READ_FILE])).ok, true);
+  assert.equal(await session.page.evaluate(() => globalThis.__ran), undefined);
+  assert.equal(await session.page.evaluate(() => typeof seEditor.layers), "function");
+});
+
+test("pasting the loader again leaves one input", {timeout: 60_000}, async (t) => {
+  const session = await loader(t, [widget("minimal")]);
+  if (!session) return;
+  assert.equal((await session.call(LOAD)).ok, true);
+  assert.equal(await session.inputs(), 1);
+  assert.equal((await session.load([READ_FILE])).ok, true);
+  assert.equal(await session.inputs(), 0);
+});
+
+test("a page script's refusal stops the load and comes back as it is", {timeout: 60_000}, async (t) => {
+  // The loader's own check lets this address through; the strict one in se-editor-read.js refuses it.
+  const session = await loader(t, [widget("minimal")], {url: `${EDITOR}/extra`});
+  if (!session) return;
+  assert.deepEqual(await session.load([READ_FILE, UPDATE_FILE]), {ok: false, error: "This page is not a StreamElements overlay editor. Nothing was defined."});
+  assert.equal(await session.page.evaluate(() => typeof seEditor), "undefined");
+  assert.equal(await session.inputs(), 1);
+});
+
+test("under a Content Security Policy that forbids eval, the load throws with nothing defined", {timeout: 60_000}, async (t) => {
+  const session = await loader(t, [widget("minimal")], {headers: {"Content-Security-Policy": "script-src 'unsafe-inline'"}});
+  if (!session) return;
+  await session.page.getByLabel(LOADER_LABEL).setInputFiles([READ_FILE]);
+  await assert.rejects(session.call("seEditorLoad()"), /EvalError|unsafe-eval/);
+  assert.equal(await session.page.evaluate(() => typeof seEditor), "undefined");
+  assert.equal(await session.inputs(), 1);
 });

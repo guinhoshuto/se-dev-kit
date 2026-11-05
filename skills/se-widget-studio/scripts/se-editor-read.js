@@ -4,8 +4,8 @@
  * the owner approves the update and again after the reload that checks the Save. `se-editor-update.js` adds the
  * functions that write.
  *
- * Paste this file into an agent's page-script tool (or the DevTools console) on
- * `https://streamelements.com/overlay/<id>/editor`, then call, in the same or a later call:
+ * Load this file with `se-editor-load.js` on `https://streamelements.com/overlay/<id>/editor` (or paste it into the
+ * DevTools console), then call:
  *
  *   seEditor.use(<the JSON se-editor-plan.mjs printed>)
  *   seEditor.layers()          // the layer names
