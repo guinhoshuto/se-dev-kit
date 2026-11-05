@@ -58,7 +58,7 @@ async function frameClock(page, origin, path) {
   return page.frames().find((frame) => frame.url().endsWith(path)).evaluate(() => window.atStart);
 }
 
-test("a capture's clock starts every document at the fixed time, however late the document first asks it", {timeout: 60_000}, async (t) => {
+test("a capture's clock starts every document at the fixed time, however late the document first asks it", {timeout: 120_000}, async (t) => {
   if (!(await detectBrowser()).executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
     return;

@@ -203,7 +203,7 @@ const settle = (frame: Frame) => frame.evaluate(() => Promise.race([
 const probe = (frame: Frame) => frame.evaluate(() => (window as unknown as {__probe: {loads: number; errors: number}}).__probe);
 const face = (report: FontReport | undefined, family: string) => report?.families.find(entry => entry.family === family);
 
-test('[browser] the preview broker loads runtime and static Google Fonts through the editor bridge, in a real sandboxed iframe', {timeout: 90_000}, async t => {
+test('[browser] the preview broker loads runtime and static Google Fonts through the editor bridge, in a real sandboxed iframe', {timeout: 120_000}, async t => {
   if (!(await detectBrowser()).executablePath) { t.skip('No compatible local Chromium executable is installed; the Studio must not download one implicitly.'); return; }
   const studio = await startStudio();
   const {browser} = await launchStudioBrowser({});
@@ -268,7 +268,7 @@ test('[browser] the preview broker loads runtime and static Google Fonts through
   }
 });
 
-test('[browser] text that arrives after the first load gets its subsets without touching the widget\'s link again', {timeout: 60_000}, async t => {
+test('[browser] text that arrives after the first load gets its subsets without touching the widget\'s link again', {timeout: 120_000}, async t => {
   if (!(await detectBrowser()).executablePath) { t.skip('No compatible local Chromium executable is installed; the Studio must not download one implicitly.'); return; }
   const studio = await startStudio();
   const {browser} = await launchStudioBrowser({});
@@ -302,7 +302,7 @@ test('[browser] text that arrives after the first load gets its subsets without 
   }
 });
 
-test('[browser] an answer that arrives after the preview became ready updates the font report', {timeout: 60_000}, async t => {
+test('[browser] an answer that arrives after the preview became ready updates the font report', {timeout: 120_000}, async t => {
   if (!(await detectBrowser()).executablePath) { t.skip('No compatible local Chromium executable is installed; the Studio must not download one implicitly.'); return; }
   const studio = await startStudio();
   const {browser} = await launchStudioBrowser({});
@@ -322,7 +322,7 @@ test('[browser] an answer that arrives after the preview became ready updates th
   }
 });
 
-test('[browser] a hosted preview loads the vendored jQuery from the engine path before the widget, and onWidgetLoad gets the fixture\'s recents as an array', {timeout: 60_000}, async t => {
+test('[browser] a hosted preview loads the vendored jQuery from the engine path before the widget, and onWidgetLoad gets the fixture\'s recents as an array', {timeout: 120_000}, async t => {
   if (!(await detectBrowser()).executablePath) { t.skip('No compatible local Chromium executable is installed; the Studio must not download one implicitly.'); return; }
   const studio = await startStudio();
   const {browser} = await launchStudioBrowser({});

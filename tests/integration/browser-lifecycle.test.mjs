@@ -33,7 +33,7 @@ const alive = (pid) => {
   }
 };
 
-test("a Chrome frozen at close is killed at the deadline, found by its launch marker", {timeout: 60_000, skip: process.platform === "win32"}, async (t) => {
+test("a Chrome frozen at close is killed at the deadline, found by its launch marker", {timeout: 120_000, skip: process.platform === "win32"}, async (t) => {
   const detection = await detectBrowser();
   if (!detection.executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
@@ -55,7 +55,7 @@ test("a Chrome frozen at close is killed at the deadline, found by its launch ma
   assert.equal(alive(pid), false, "the frozen Chrome is gone");
 });
 
-test("a launched Chrome rasters in software and still gives a page WebGL", {timeout: 60_000}, async (t) => {
+test("a launched Chrome rasters in software and still gives a page WebGL", {timeout: 120_000}, async (t) => {
   const detection = await detectBrowser();
   if (!detection.executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
@@ -80,6 +80,48 @@ test("a launched Chrome rasters in software and still gives a page WebGL", {time
     assert.match(String(context.renderer), /SwiftShader/, `${context.kind} renders in software (${context.renderer})`);
     assert.deepEqual(context.pixel, [255, 0, 0, 255], `${context.kind} draws`);
   }
+});
+
+// A frame at the instant a transition starts read 247, not 255, in `npm test` under load (#33): the compositor had drawn
+// the transition's next tick, past the sampler's pause. What keeps it off the compositor is one Chrome switch, whose
+// effect shows without any race: a compositor keeps drawing a transition while the main thread is blocked (30 or 31
+// screencast frames in 500 ms on 2026-11-05), and the main thread alone cannot (0 or 1).
+test("a launched Chrome runs a transition on the main thread: a blocked page draws none of it", {timeout: 120_000}, async (t) => {
+  const detection = await detectBrowser();
+  if (!detection.executablePath) {
+    t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
+    return;
+  }
+  const {browser} = await launchStudioBrowser({browserPath: detection.executablePath});
+  t.after(() => closeStudioBrowser(browser));
+  const page = await browser.newPage({viewport: {width: 100, height: 100}});
+  await page.setContent(`<!doctype html><style>html, body { margin: 0; background: #000; } #box { width: 100px; height: 100px; background: #fff; transition: opacity 20s linear; }</style><div id="box"></div>`);
+  const session = await page.context().newCDPSession(page);
+  let frames = 0;
+  session.on("Page.screencastFrame", ({sessionId}) => {
+    frames += 1;
+    session.send("Page.screencastFrameAck", {sessionId}).catch(() => {});
+  });
+  await session.send("Page.startScreencast", {format: "png"});
+  await page.evaluate(() => new Promise((done) => {
+    document.getElementById("box").style.opacity = "0";
+    requestAnimationFrame(() => requestAnimationFrame(done));
+  }));
+  // The transition draws on either thread while the main thread is free, so the screencast counts here.
+  const drawing = frames;
+  for (let attempt = 0; attempt < 50 && frames < drawing + 3; attempt += 1) await sleep(100);
+  assert.ok(frames >= drawing + 3, `the screencast got only ${frames - drawing} frame(s) of a running transition`);
+  await sleep(100);
+  const before = frames;
+  await page.evaluate(() => {
+    const end = performance.now() + 500;
+    while (performance.now() < end);
+  });
+  const during = frames - before;
+  t.diagnostic(`${during} frame(s) while the main thread was blocked for 500 ms`);
+  // One may be on its way when the block starts.
+  assert.ok(during <= 2, `Chrome drew ${during} frames of a transition while the main thread was blocked`);
+  await session.send("Page.stopScreencast");
 });
 
 test("a render reports each phase in order, and two renders can share one browser", {timeout: 120_000}, async (t) => {

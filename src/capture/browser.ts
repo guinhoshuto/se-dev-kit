@@ -1,7 +1,7 @@
 import {execFile} from "node:child_process";
 import {access, realpath} from "node:fs/promises";
 import {constants} from "node:fs";
-import {platform} from "node:os";
+import {cpus, loadavg, platform} from "node:os";
 import {promisify} from "node:util";
 import {chromium, errors, type Browser, type BrowserContext, type Page, type Request} from "playwright-core";
 import {StudioError} from "../shared/errors.js";
@@ -90,31 +90,64 @@ const execFileAsync = promisify(execFile);
  * the same pixels. With the GPU, Chrome's raster varies by one level on edges and text from run to
  * run (35 to 124 of tutorial-setup's 945 frame hashes differed on an idle machine); its software
  * raster is reproducible, at about 22% more capture time (SDK-39).
+ *
+ * Without threaded animation, a transition runs only on the main thread, where the frame sampler pauses it. On the
+ * compositor, a real Chrome frame that falls between the class change and the pause starts it, the compositor draws
+ * its next tick, and that value stays on screen until the page next changes it, past the pause and a second
+ * screenshot: under load a frame at the change instant read 16 ms into the fade while the page said `opacity: 1` (#33).
  */
-export const REPRODUCIBLE_RASTER_ARGS: readonly string[] = ["--disable-gpu"];
+export const REPRODUCIBLE_RASTER_ARGS: readonly string[] = ["--disable-gpu", "--disable-threaded-animation"];
+
+/**
+ * How many times a launch that ran out of time starts again (#33). A launch takes about 0.3 s and 20 s at worst in the
+ * kept test logs, so 30 s means an overloaded machine, and a render holding the slot has no other render of this
+ * repository to wait for. One more start saves a passing overload, like the single timeout of a `npm test` on
+ * 2026-11-04; one that outlasts it still fails, like the 7 timeouts in a row of 2026-10-27.
+ */
+export const LAUNCH_RETRIES = 1;
+/** Starts the stderr line of a retried launch; scripts/run-tests.mjs counts it for a suite's summary. */
+export const LAUNCH_RETRY_NOTE = "Chrome launch retried:";
 
 export async function launchStudioBrowser(options: {
   browserPath?: string;
   headed?: boolean;
   launchTimeoutMs?: number;
+  /** Starts after the first one when a launch runs out of time; LAUNCH_RETRIES by default. */
+  launchRetries?: number;
+  /** Takes the line that says a launch started again, and why; stderr by default. */
+  onLaunchRetry?: (line: string) => void;
 } = {}): Promise<{browser: Browser; detection: BrowserDetection}> {
   const detection = await detectBrowser(options.browserPath);
-  if (!detection.executablePath) {
+  const executablePath = detection.executablePath;
+  if (!executablePath) {
     throw new StudioError(
       "BROWSER_NOT_FOUND",
       "No compatible Chromium or Chrome executable was found.",
       "Install a system Chrome/Chromium yourself, then pass --browser-path /absolute/path or set SE_WIDGET_STUDIO_BROWSER. The Studio never downloads browsers automatically."
     );
   }
+  for (let retries = options.launchRetries ?? LAUNCH_RETRIES; ; retries -= 1) {
+    try {
+      return {browser: await launchOnce(executablePath, options), detection};
+    } catch (error) {
+      if (retries <= 0 || !(error instanceof StudioError) || error.code !== "BROWSER_LAUNCH_TIMEOUT") throw error;
+      const line = `${LAUNCH_RETRY_NOTE} ${error.message} That process was killed and Chrome starts once more; load ${loadavg()[0]!.toFixed(1)} on ${cpus().length} cores.`;
+      if (options.onLaunchRetry) options.onLaunchRetry(line);
+      else process.stderr.write(`${line}\n`);
+    }
+  }
+}
+
+async function launchOnce(executablePath: string, options: {headed?: boolean; launchTimeoutMs?: number}): Promise<Browser> {
   launches += 1;
   const marker = `${BROWSER_MARKER}=${process.pid}-${launches}`;
   const timeout = options.launchTimeoutMs ?? LAUNCH_TIMEOUT_MS;
   const launchTimeout = () => new StudioError(
     "BROWSER_LAUNCH_TIMEOUT",
-    `Chrome did not start within ${timeout / 1000} s (${detection.executablePath}).`,
+    `Chrome did not start within ${timeout / 1000} s (${executablePath}).`,
     "The machine may be busy with another render: check for running headless Chrome, wait, and retry. The process this launch started was killed."
   );
-  const launching = chromium.launch({executablePath: detection.executablePath, headless: !options.headed, args: [marker, ...REPRODUCIBLE_RASTER_ARGS], timeout});
+  const launching = chromium.launch({executablePath, headless: !options.headed, args: [marker, ...REPRODUCIBLE_RASTER_ARGS], timeout});
   let deadline: NodeJS.Timeout | undefined;
   try {
     const browser = await Promise.race([
@@ -124,7 +157,7 @@ export async function launchStudioBrowser(options: {
       })
     ]);
     markers.set(browser, marker);
-    return {browser, detection};
+    return browser;
   } catch (error) {
     // A launch that settles after the deadline must not leave its browser running.
     launching.then((late) => late.close()).catch(() => undefined);

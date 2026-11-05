@@ -1,0 +1,60 @@
+{
+  "mutations": [
+    {
+      "file": "src/capture/browser.ts",
+      "from": "export const LAUNCH_RETRIES = 1;",
+      "to": "export const LAUNCH_RETRIES = 0;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch that runs out of time starts Chrome once more"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "export const LAUNCH_RETRIES = 1;",
+      "to": "export const LAUNCH_RETRIES = 2;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch fails with BROWSER_LAUNCH_TIMEOUT only when"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "if (retries <= 0 || !(error instanceof StudioError) || error.code !== \"BROWSER_LAUNCH_TIMEOUT\") throw error;",
+      "to": "if (retries <= 0 || !(error instanceof Error)) throw error;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch that fails for any other reason"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": " That process was killed and Chrome starts once more; load ${loadavg()[0]!.toFixed(1)} on ${cpus().length} cores.`;",
+      "to": "`;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch that runs out of time starts Chrome once more"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "export const LAUNCH_RETRY_NOTE = \"Chrome launch retried:\";",
+      "to": "export const LAUNCH_RETRY_NOTE = \"Chrome launched again:\";",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's log gives the tests that failed"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "      else process.stderr.write(`${line}\\n`);\n",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's log gives the tests that failed"
+    },
+    {
+      "file": "tests/integration/two-copies.test.mjs",
+      "from": "two copies of a widget loaded 700 ms apart draw the same frame only on the system clock\", {timeout: 120_000}",
+      "to": "two copies of a widget loaded 700 ms apart draw the same frame only on the system clock\", {timeout: 60_000}",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a test that starts Chrome in its body leaves room"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "[\"--disable-gpu\", \"--disable-threaded-animation\"]",
+      "to": "[\"--disable-gpu\"]",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^every launched browser gets the switches"
+    }
+  ]
+}

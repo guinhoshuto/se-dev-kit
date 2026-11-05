@@ -472,7 +472,7 @@ test("Google Fonts outcomes: blocked is FONT_UNAVAILABLE, a refused family is a 
 // The editor preview runs with real timers: its frame keeps a font budget of its own and reports a
 // family still loading when it expires as fallback (timeout), and a Google stylesheet its CSP
 // refuses as fallback (stylesheet-blocked), instead of failing the preview.
-test("with real timers, settle reports a CSP-refused stylesheet and an expired font budget as fallback", {timeout: 60_000}, async (t) => {
+test("with real timers, settle reports a CSP-refused stylesheet and an expired font budget as fallback", {timeout: 120_000}, async (t) => {
   const context = await browserContext(t);
   if (!context) return;
   const distRoot = fileURLToPath(new URL("../../dist/", import.meta.url));

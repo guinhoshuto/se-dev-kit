@@ -8,19 +8,23 @@
 // - the run stops at the first suite that fails, and names each suite after it NOT COVERED, with the command
 //   that runs them;
 // - each suite gets a temporary folder of its own (TMPDIR), which must be empty when the suite ends,
-//   and a render slot inside it, so a CLI render a test starts never waits for the machine's slot.
+//   and a render slot inside it, so a CLI render a test starts never waits for the machine's slot;
+// - a suite's summary says when a test had to start Chrome twice, and why (#33);
+// - every finished suite adds a line to the live checkout's .cache/test-history.jsonl, which --history counts.
 //
 //   node scripts/run-tests.mjs <suite>...        suites: unit, integration, web, web:browser
 //   node scripts/run-tests.mjs --repeat <file> <count>
-import {spawn} from 'node:child_process';
+//   node scripts/run-tests.mjs --history
+import {execFileSync, spawn} from 'node:child_process';
 import {createWriteStream} from 'node:fs';
 import {mkdir, mkdtemp, readdir, readFile, rm} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import {dirname, join, relative, resolve} from 'node:path';
+import {loadavg, tmpdir} from 'node:os';
+import {basename, dirname, join, relative, resolve} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {isEntryPoint} from './lib/entry-point.mjs';
 import {browserGate} from './lib/machine.mjs';
+import {appendHistory, failedTests, historyFile, historyReport, launchRetries, readHistory} from './lib/test-history.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LOGS = join(ROOT, '.cache', 'test-logs');
@@ -152,12 +156,12 @@ export async function gate({
  * neither waits for nor holds the machine-wide slot (the runner holds that one for browser suites).
  * MACHINE_CHECK names a file that does not exist, so that render does not ask the machine check
  * either: the runner asked it before a browser suite, the other suites start no Chrome, and a test
- * that runs the check passes its own.
+ * that runs the check passes its own. TEST_HISTORY_FILE keeps a runner a test starts out of the history.
  */
 export function suiteEnvironment(environment, temporary) {
   // NODE_TEST_CONTEXT would make a runner started from inside a test file act as that file's child.
   const {NODE_TEST_CONTEXT: _context, ...rest} = environment;
-  return {...rest, TMPDIR: temporary, RENDER_SLOT_DIR: join(temporary, SUITE_SLOT), MACHINE_CHECK: join(temporary, 'no-machine-check')};
+  return {...rest, TMPDIR: temporary, RENDER_SLOT_DIR: join(temporary, SUITE_SLOT), MACHINE_CHECK: join(temporary, 'no-machine-check'), TEST_HISTORY_FILE: 'off'};
 }
 
 export async function execute(label, suite, files, logPath, {echo = true} = {}) {
@@ -182,8 +186,21 @@ export async function execute(label, suite, files, logPath, {echo = true} = {}) 
   const seconds = (Date.now() - started) / 1000;
   log.write(`# ${label}: exit ${code} after ${seconds.toFixed(1)} s\n`);
   await new Promise(done => log.end(done));
-  return {code, seconds};
+  const text = await readFile(logPath, 'utf8');
+  return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text)};
 }
+
+/** Adds a finished suite to the test history. A history that cannot be written fails no run. */
+async function recordSuite(entry) {
+  try {
+    const commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']}).trim();
+    await appendHistory({at: new Date().toISOString(), checkout: basename(ROOT), commit, node: process.version, load: Number(loadavg()[0].toFixed(1)), ...entry}, historyFile(ROOT));
+  } catch (error) {
+    console.log(`Warning: the test history did not get this suite: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+const retrying = retries => (retries.length ? `, retrying a Chrome launch ${retries.length}×` : '');
 
 async function newRunDirectory() {
   await mkdir(LOGS, {recursive: true});
@@ -206,6 +223,7 @@ async function warnOnUnsupportedNode() {
 
 /** Runs the named suites in order and prints a summary; `suites`, `files`, `gateFor`, `run`, `newDirectory` and `log` are replaceable for tests. */
 export async function runSuites(names, {suites = SUITES, files = suiteFiles, gateFor = gate, run = execute, newDirectory = newRunDirectory, log = console.log} = {}) {
+
   for (const name of names) if (!suites[name]) throw new Error(`Unknown suite ${name}. Suites: ${Object.keys(suites).join(', ')}.`);
   await warnOnUnsupportedNode();
   const directory = await newDirectory();
@@ -220,19 +238,23 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
     if (!allowed.ok) {
       log(`\nSkipped ${name}: ${allowed.reason}`);
       results.push({name, status: 'skipped', detail: allowed.reason, cause: allowed.cause});
+      await recordSuite({suite: name, status: 'skipped', detail: allowed.reason});
       continue;
     }
     // A wait under a second is no wait worth naming.
     const waited = allowed.waitedMs >= 1000 ? `, after ${duration(allowed.waitedMs)} waiting for the render slot` : '';
+    const logPath = join(directory, `${name.replace(':', '-')}.log`);
     let outcome;
     try {
       log(`\n== ${name}: ${list.length} file(s)${suite.browser ? ', one at a time' : ''}${waited}`);
-      outcome = await run(name, suite, list, join(directory, `${name.replace(':', '-')}.log`));
+      outcome = await run(name, suite, list, logPath);
     } finally {
       allowed.release();
     }
-    const {code, seconds} = outcome;
-    results.push({name, status: code === 0 ? 'passed' : 'failed', detail: `${seconds.toFixed(1)} s${waited}`});
+    const {code, seconds, failures = [], launchRetries: retries = []} = outcome;
+    const status = code === 0 ? 'passed' : 'failed';
+    results.push({name, status, detail: `${seconds.toFixed(1)} s${waited}${retrying(retries)}`, retries});
+    await recordSuite({suite: name, status, seconds: Number(seconds.toFixed(1)), waitedMs: allowed.waitedMs ?? 0, log: relative(ROOT, logPath), failures, launchRetries: retries.length});
     if (code !== 0) {
       // The run stops at its first failed suite; the ones after it stay in the summary, so it does not read as one failure.
       for (const later of names.slice(index + 1)) results.push({name: later, status: 'not run', detail: `after ${name} failed`});
@@ -241,6 +263,7 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
   }
   log('');
   for (const result of results) log(`${result.name.padEnd(12)} ${result.status.padEnd(8)} ${result.detail}`);
+  for (const result of results) for (const line of result.retries ?? []) log(`${result.name}: ${line}`);
   const skipped = results.filter(result => result.status === 'skipped');
   // A line per cause, in the order its first suite came.
   for (const cause of new Set(skipped.map(result => result.cause))) log(`NOT COVERED: ${skipped.filter(result => result.cause === cause).map(result => result.name).join(', ')}. This run did not test them${cover(cause)}.`);
@@ -248,6 +271,12 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
   if (unrun.length) log(`NOT COVERED: ${unrun.join(', ')}. This run did not test them: ${results.find(result => result.status === 'failed').name} failed and the run stopped there; run them with node scripts/run-tests.mjs ${unrun.join(' ')}.`);
   log(`Logs: ${relative(ROOT, directory)}/`);
   return results.some(result => result.status === 'failed') ? 1 : 0;
+}
+
+async function printHistory() {
+  const file = historyFile(ROOT);
+  console.log(historyReport(await readHistory(file), file));
+  return 0;
 }
 
 async function repeat(file, countText) {
@@ -270,8 +299,10 @@ async function repeat(file, countText) {
     } finally {
       allowed.release();
     }
-    const {code, seconds} = outcome;
-    console.log(`run ${run}: ${code === 0 ? 'passed' : 'FAILED'} in ${seconds.toFixed(1)} s`);
+    const {code, seconds, failures, launchRetries: retries} = outcome;
+    console.log(`run ${run}: ${code === 0 ? 'passed' : 'FAILED'} in ${seconds.toFixed(1)} s${retrying(retries)}`);
+    for (const line of retries) console.log(line);
+    await recordSuite({suite: path, status: code === 0 ? 'passed' : 'failed', seconds: Number(seconds.toFixed(1)), log: relative(ROOT, join(directory, `run-${run}.log`)), failures, launchRetries: retries.length});
     if (code !== 0) failed.push(run);
   }
   console.log(`${path}: ${count - failed.length}/${count} passed${failed.length ? `; failed runs: ${failed.join(', ')} (run-<n>.log)` : ''}.`);
@@ -281,7 +312,8 @@ async function repeat(file, countText) {
 if (isEntryPoint(import.meta.url)) {
   const args = process.argv.slice(2);
   try {
-    process.exitCode = args[0] === '--repeat' ? (await repeat(args[1], args[2])).code : await runSuites(args.length ? args : Object.keys(SUITES));
+    if (args[0] === '--history') process.exitCode = await printHistory();
+    else process.exitCode = args[0] === '--repeat' ? (await repeat(args[1], args[2])).code : await runSuites(args.length ? args : Object.keys(SUITES));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 2;

@@ -1,0 +1,11 @@
+{
+  "mutations": [
+    {
+      "file": "src/capture/browser.ts",
+      "from": "[\"--disable-gpu\", \"--disable-threaded-animation\"]",
+      "to": "[\"--disable-gpu\"]",
+      "test": "tests/integration/browser-lifecycle.test.mjs",
+      "name": "^a launched Chrome runs a transition on the main thread"
+    }
+  ]
+}

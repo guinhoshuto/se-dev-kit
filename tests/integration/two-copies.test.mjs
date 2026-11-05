@@ -78,7 +78,7 @@ async function compareCopies(page, frameUrl) {
   }));
 }
 
-test("two copies of a widget loaded 700 ms apart draw the same frame only on the system clock", {timeout: 60_000}, async (t) => {
+test("two copies of a widget loaded 700 ms apart draw the same frame only on the system clock", {timeout: 120_000}, async (t) => {
   if (!(await detectBrowser()).executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
     return;

@@ -27,7 +27,7 @@ async function within(promise, label, timeoutMs = 10_000) {
   }
 }
 
-test("the example dispatches onWidgetLoad and a synthetic message through the isolated runtime", {timeout: 35_000}, async (t) => {
+test("the example dispatches onWidgetLoad and a synthetic message through the isolated runtime", {timeout: 120_000}, async (t) => {
   const detection = await detectBrowser();
   if (!detection.executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
@@ -123,7 +123,7 @@ test("the example dispatches onWidgetLoad and a synthetic message through the is
   }
 });
 
-test("timer-based readiness advances in fixed quanta and unmanaged previews keep the fixed Date", {timeout: 45_000}, async (t) => {
+test("timer-based readiness advances in fixed quanta and unmanaged previews keep the fixed Date", {timeout: 120_000}, async (t) => {
   const detection = await detectBrowser();
   if (!detection.executablePath) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
