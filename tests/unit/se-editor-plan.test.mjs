@@ -254,6 +254,57 @@ test("without --dir, a refusal still speaks of the repository root and of the tw
   }
 });
 
+test("a --repo below the repository's top folder is refused, naming --dir, and writes no folder", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-se-editor-plan-"));
+  try {
+    const nested = "builds/ashly";
+    const {repo, from, to} = await widgetRepo(root,
+      {...MAIN("old"), ...under("sub", OLD), ...under(nested, OLD)}, {...MAIN("new"), ...under("sub", NEW), ...under(nested, NEW)});
+    const out = join(root, "upload");
+    for (const folder of ["sub", "builds", nested]) {
+      const message = `--repo ${join(repo, folder)} is the subfolder ${folder}/ of its repository. `
+        + `Give --repo the repository's top folder, and --dir ${folder} for the widget in that subfolder.`;
+      assert.throws(() => plan({repo: join(repo, folder), from, to, out}), {message});
+      // --dir reads from the commit's root, so this pair would plan the right files, and it still names the wrong --repo.
+      assert.throws(() => plan({repo: join(repo, folder), from, to, dir: "sub", out}), {message});
+    }
+    assert.ok(!(await readdir(root)).includes("upload"), "no folder after a refusal");
+
+    // The top folder, however it is spelled, plans what it always did.
+    const top = plan({repo: `${repo}/sub/..`, from, to, out});
+    assert.equal(top.tabs.css.new, sha(MAIN("new")["style.css"]));
+    assert.equal(plan({repo: `${repo}/`, from, to, dir: "sub", out: join(root, "build")}).tabs.css.new, sha(NEW["style.css"]));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("the CLI refuses a --repo below the top folder with exit 1 and no folder, and its usage says so", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-se-editor-plan-"));
+  try {
+    const {repo, from, to} = await widgetRepo(root, {...MAIN("old"), ...under("sub", OLD)}, {...MAIN("new"), ...under("sub", NEW)});
+    const script = join(SCRIPTS, "se-editor-plan.mjs");
+    const out = join(root, "upload");
+    const refuses = (spelled, cwd) => assert.throws(
+      () => execFileSync(process.execPath, [script, "--repo", spelled, "--from", from, "--to", to, "--out", out], {cwd, stdio: "pipe"}),
+      (error) => {
+        assert.equal(error.status, 1);
+        assert.equal(error.stdout.toString(), "", "no plan is printed");
+        assert.match(error.stderr.toString(), /^se-editor-plan: --repo .*\/sub is the subfolder sub\/ of its repository\. .* --dir sub /);
+        return true;
+      });
+    refuses(join(repo, "sub"), root);
+    refuses(".", join(repo, "sub"));
+    assert.ok(!(await readdir(root)).includes("upload"), "no folder after a refusal");
+
+    const printed = JSON.parse(execFileSync(process.execPath, [script, "--repo", ".", "--from", from, "--to", to, "--out", out], {cwd: repo}).toString());
+    assert.equal(printed.tabs.css.new, sha(MAIN("new")["style.css"]), "from its top folder, the repository plans its root");
+    assert.match(execFileSync(process.execPath, [script, "--help"]).toString(), /--repo is the repository's top folder/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("changedLabels lists the labels a FIELDS change adds or rewords, once each", () => {
   const before = {a: {label: "Speed"}, b: {label: "Title"}};
   const after = {a: {label: "Speed"}, b: {label: "Title shown"}, c: {label: "New"}, d: {label: "New"}, e: {type: "hidden"}};
