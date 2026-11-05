@@ -16,8 +16,8 @@
  *
  * Usage: se-editor-plan.mjs --repo <widget repository> --from <commit> [--to <commit>] [--dir <subfolder>] --out <new folder>
  * --to defaults to HEAD. --out must not exist; it is never replaced. Reads committed files only, never the working tree.
- * --dir reads the widget from that subfolder of the repository (a customer build), at both commits, which stay commits
- * of the repository itself.
+ * --repo is the repository's top folder; below it the plan refuses. --dir reads the widget from that subfolder of the
+ * repository (a customer build), at both commits, which stay commits of the repository itself.
  */
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -81,6 +81,18 @@ function commit(repo, rev) {
   }
 }
 
+/**
+ * `ls-tree <commit>` lists the folder Git runs in, while `show <commit>:<file>` reads from the commit's root wherever it
+ * runs: below the top folder, the layout check would pass on the subfolder's files and the plan would read the root's.
+ */
+function refuseSubfolder(repo) {
+  const prefix = git(repo, ['rev-parse', '--show-prefix']).toString().trim();
+  if (prefix) {
+    throw new Error(`--repo ${repo} is the subfolder ${prefix} of its repository. Give --repo the repository's top folder, `
+      + `and --dir ${prefix.slice(0, -1)} for the widget in that subfolder.`);
+  }
+}
+
 /** `--dir` as a path in a commit's tree, from its root; Git would read a leading `./` from the working directory. */
 function subfolder(dir) {
   const parts = dir.split('/').filter((part) => part && part !== '.');
@@ -127,6 +139,7 @@ function parseFields(file, sha, source) {
 export function plan({repo, from, to = 'HEAD', dir, out}) {
   if (!repo || !from || !out) throw new Error('--repo, --from, and --out are required.');
   const root = resolve(repo);
+  refuseSubfolder(root);
   const inside = dir === undefined ? '' : subfolder(dir);
   const old = commit(root, from);
   const next = commit(root, to);
@@ -192,8 +205,8 @@ if (isEntryPoint()) {
   if (!args.length || args.includes('--help')) {
     console.log('Usage: se-editor-plan.mjs --repo <widget repository> --from <commit> [--to <commit>] [--dir <subfolder>] --out <new folder>\n'
       + 'Writes the --to commit\'s HTML, CSS, JS, and FIELDS into --out (a new folder) and prints the JSON plan for '
-      + 'seEditor.use() in the StreamElements overlay editor. --to defaults to HEAD. --dir reads the widget from that '
-      + 'subfolder of the repository, at both commits.');
+      + 'seEditor.use() in the StreamElements overlay editor. --to defaults to HEAD. --repo is the repository\'s top '
+      + 'folder. --dir reads the widget from that subfolder of the repository, at both commits.');
     process.exit(args.length ? 0 : 2);
   }
   try {

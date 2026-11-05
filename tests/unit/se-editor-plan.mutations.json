@@ -204,6 +204,104 @@
     },
     {
       "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "  refuseSubfolder(root);\n",
+      "to": "",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a --repo below the repository's top folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "  refuseSubfolder(root);\n",
+      "to": "",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "the CLI refuses a --repo"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "  if (prefix) {\n",
+      "to": "  if (prefix.split('/').length === 2) {\n",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a --repo below the repository's top folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "  refuseSubfolder(root);\n",
+      "to": "  if (dir === undefined) refuseSubfolder(root);\n",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a --repo below the repository's top folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "['rev-parse', '--show-prefix']",
+      "to": "['rev-parse', '--show-toplevel']",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a --repo below the repository's top folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "['rev-parse', '--show-prefix']",
+      "to": "['rev-parse', '--show-cdup']",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a --repo below the repository's top folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "`and --dir ${prefix.slice(0, -1)} for the widget in that subfolder.`",
+      "to": "'for the widget in that subfolder.'",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a --repo below the repository's top folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "`and --dir ${prefix.slice(0, -1)} for the widget in that subfolder.`",
+      "to": "'for the widget in that subfolder.'",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "the CLI refuses a --repo"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "--dir ${prefix.slice(0, -1)} for",
+      "to": "--dir ${prefix} for",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a --repo below the repository's top folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "  const root = resolve(repo);\n",
+      "to": "  const root = resolve(repo);\n  mkdirSync(resolve(out), {recursive: true});\n",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "a --repo below the repository's top folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "  const root = resolve(repo);\n",
+      "to": "  const root = resolve(repo);\n  mkdirSync(resolve(out), {recursive: true});\n",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "the CLI refuses a --repo"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "    process.exit(1);\n",
+      "to": "    process.exit(0);\n",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "the CLI refuses a --repo"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "console.error(`se-editor-plan: ${error.message}`);",
+      "to": "console.log(`se-editor-plan: ${error.message}`);",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "the CLI refuses a --repo"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
+      "from": "--repo is the repository\\'s top '\n      + 'folder. --dir reads",
+      "to": "--dir reads",
+      "test": "tests/unit/se-editor-plan.test.mjs",
+      "name": "the CLI refuses a --repo"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-plan.mjs",
       "from": "No code tab changes ${inside ? `in ${inside}/ ` : ''}between",
       "to": "No code tab changes between",
       "test": "tests/unit/se-editor-plan.test.mjs",
