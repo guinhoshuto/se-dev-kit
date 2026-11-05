@@ -6,9 +6,9 @@ The overlay behind a sold widget's StreamElements link, the product's overlay th
 |---|---|---|
 | `se-editor-plan.mjs` | Node, on the widget repository | the plan: each code tab's SHA-256 at both commits, the template of each JS or CSS tab with `{{field}}` placeholders, the new FIELDS labels, and the new files for the upload |
 | `se-editor-read.js` | in the editor tab, before the approval and after the reload | reads only: the layer names, each canvas widget's JS and CSS against the plan, the labels in the field panel |
-| `se-editor-update.js` | in the editor tab, after the approval | for each layer: opens its code editor and the HTML, CSS, JS, and Fields tabs, writes, clicks Done |
+| `se-editor-update.js` | in the editor tab, after the approval | for each layer: opens its code editor and the HTML, CSS, JS, and Fields tabs, writes, clicks Done; and [one field's value](#write-one-fields-value), by its label |
 
-Paste a page script by passing the file's text as the call's code, with the calls after it in the same text; what it defines lasts until the tab reloads. Every call evaluates to a JSON string. The scripts read no input's value (one of them is the overlay's link for OBS, with its key), never click Save, and never open the Data tab.
+Paste a page script by passing the file's text as the call's code, with the calls after it in the same text; what it defines lasts until the tab reloads. Every call evaluates to a JSON string. The scripts read no input's value (one of them is the overlay's link for OBS, with its key), but for `readField` and `setField`, which read only a field's own input; they never click Save, and never open the Data tab.
 
 ## Before the approval
 
@@ -50,6 +50,24 @@ Ask once, in one AskUserQuestion box: name the product note the link comes from,
 ## Close the tab
 
 9. Close each editor tab this update opened, one at a time, and list the tabs after each close: closing an editor tab through the extension has timed out and taken its tab group along. No editor tab stays open.
+
+## Write one field's value
+
+For example values in a customer build tested on an overlay, or any other value in a widget's fields, with no plan and no new commit. Use the test overlay, or the overlay the owner named: a product's overlay is touched only when the owner asks for it by name. Open its editor in one tab, in front, and paste `se-editor-read.js`, then `se-editor-update.js`, skipping `seEditor.use()`.
+
+```js
+await seEditor.readField('Mystery items', 'Custom widget 1')
+await seEditor.setField('Mystery items', '$10[$5 FEE], $20', 'Custom widget 1')
+```
+
+- The third argument (the second for `readField`) is the layer's name, and may be left out only on an overlay with one layer. A layer not yet selected gets selected, and the call waits for the layer list to mark it: the list marks a layer last, after its fields show (43 to 69 ms after the click, measured on 2026-11-05), and until then it still names the previous layer.
+- `setField` answers `{ok: true, layer, label, old, value}`, with `value` as the field shows it (`1,500` for 1500). Keep `old`: it is what the owner gets back if the example goes. A value the editor shows differently (a number above the field's `max`) answers `ok: false` with `shown`, and the old value put back; `restored: false` means it did not come back, and then nothing may be saved.
+- The label is the field's whole label, as the panel shows it, or the call says no field has it and changes nothing. So does a field hidden now by a visibility condition in its FIELDS. Two fields with one label are refused.
+- Only a field with one text or number input (text, textarea, number, slider, and any type the editor shows as a plain input) is read or written; a dropdown, a checkbox, a color, a font, or an asset is refused, as are a password, hidden, or read-only input. Set those by hand or in DATA.
+- Each call looks only inside a custom widget's fields (`.widget-form custom-widget-fields-group`), never `.widget-form` alone: the panel with the overlay's link for OBS, with its key, has that class too. A value holding such a link answers as `/overlay/<id>/<key>`, and the field keeps what it holds.
+- A group stays as it was: a closed group keeps its inputs in the page, and a group left open would be saved with the overlay. Settings need not be open either.
+
+The value lives in the open tab until a Save: neither call clicks it. Saving needs the owner's request: say what is about to be saved (each label, old and new), then follow [Save once, then reload the same tab](#save-once-then-reload-the-same-tab), and confirm with `readField` after the reload, pasting both scripts again. Without a Save, closing the tab drops the values. A tab that does not close through the extension still holds them, and a Save there would keep them: tell the owner to close it. Report it as a real StreamElements change, separate from any Studio simulation; the overlay's link and its key stay out of the report.
 
 ## Report
 

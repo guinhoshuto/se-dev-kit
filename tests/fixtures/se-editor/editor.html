@@ -11,6 +11,12 @@
   keeps the overlay for the tab's next load, so a reload shows what was saved. It is not a copy of StreamElements'
   markup or code.
 
+  The field panel follows the template in the editor's public JavaScript (read on 2026-11-05): groups in a
+  custom-widget-fields-group, a closed one keeping its inputs in the page, and each field type's React field, which
+  takes an `input` event only through its value tracker. Around the panel are inputs that are not a widget's fields:
+  the overlay's link for OBS inside a `.widget-form` of its own (labelled here, to prove the label is not enough), the
+  layer's name, and a group outside any form. Reading the value of any of them counts in window.__fixture.decoyReads.
+
   The test sets window.__FIXTURE_WIDGETS = [{name, html, css, js, fields, fieldData}] before the page loads, and reads
   window.__fixture: each widget's applied code, and counts of what was clicked and written.
 -->
@@ -23,9 +29,9 @@
   md-sidenav { display: block; width: 300px; padding: 8px; }
   .widget-layers-list-item { display: block; width: 100%; text-align: left; }
   .widget-form { width: 280px; overflow: hidden; }
-  .widget-form .field { display: block; width: 260px; }
+  .custom-fields__item { display: block; width: 260px; }
   .widget-form label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .closed .body { display: none; }
+  .custom-fields.ng-hide { display: none; }
   .overlay { position: relative; width: 640px; height: 360px; }
   .overlay iframe { width: 300px; height: 160px; border: 0; }
   md-dialog { position: fixed; inset: 40px; background: #222; color: #fff; display: block; }
@@ -38,6 +44,12 @@
   <div class="overlay-editor__toolbar"><button class="md-raised md-primary" id="save">Save</button></div>
   <div id="layers"></div>
   <div id="settings"></div>
+  <div class="details-content widget-form">
+    <md-input-container><label for="overlay-url">Overlay url</label><input id="overlay-url" class="decoy" type="text" readonly value="https://streamelements.com/overlay/0123456789abcdef01234567/FIXTUREKEY"></md-input-container>
+  </div>
+  <custom-widget-fields-group>
+    <div class="custom-fields__item"><label for="outside-form">Outside the form</label><input id="outside-form" class="decoy" type="text" value="FIXTUREOUTSIDE"></div>
+  </custom-widget-fields-group>
 </md-sidenav>
 <div class="overlay" id="canvas"></div>
 <script>
@@ -49,6 +61,9 @@
     selected: -1,
     saves: 0,
     selections: 0,
+    renames: 0,
+    toggles: 0,
+    decoyReads: 0,
     opens: 0,
     dones: 0,
     writes: 0,
@@ -114,11 +129,113 @@
     widget.frame = frame;
   };
 
-  const renderSettings = () => {
+  // Reading a decoy's value counts, whoever reads it, so a script that reads and then drops the value still shows.
+  const countReads = (input) => {
+    const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    Object.defineProperty(input, 'value', {
+      configurable: true,
+      get() {
+        state.decoyReads += 1;
+        return native.get.call(input);
+      },
+      set(next) {
+        native.set.call(input, next);
+      }
+    });
+  };
+  for (const input of document.querySelectorAll('.decoy')) countReads(input);
+
+  // A React field keeps its own copy of the value behind the element's `value` property and takes an `input` event only
+  // when the element's value differs from it; the value reaches the model a moment later, as $applyAsync does it.
+  const controlled = (input, commit) => {
+    const proto = Object.getPrototypeOf(input);
+    const native = Object.getOwnPropertyDescriptor(proto, 'value');
+    let copy = native.get.call(input);
+    const show = (next) => {
+      copy = String(next);
+      native.set.call(input, next);
+    };
+    Object.defineProperty(input, 'value', {configurable: true, get: () => native.get.call(input), set: show});
+    input.addEventListener('input', () => {
+      const now = native.get.call(input);
+      if (now === copy) return;
+      copy = now;
+      setTimeout(() => commit(now, show), 10);
+    });
+  };
+  const tag = (name, attributes = {}, text) => {
+    const el = document.createElement(name);
+    for (const [key, value] of Object.entries(attributes)) el.setAttribute(key, value);
+    if (text !== undefined) el.textContent = text;
+    return el;
+  };
+
+  // One field, as the editor's template maps each type to its field; any other type stays a native input.
+  let lastId = 0;
+  const fieldRow = (widget, key, field) => {
+    const id = `field-${(lastId += 1)}`;
+    const item = tag('div', {class: 'custom-fields__item'});
+    const label = field.label || key;
+    const current = String(widget.fieldData[key] ?? field.value ?? '');
+    const text = (name, attributes) => {
+      const input = tag(name, attributes);
+      input.value = current;
+      controlled(input, (now) => { widget.fieldData[key] = now; });
+      return input;
+    };
+    // A number field takes what is typed, and clamps to its FIELDS max when it is left.
+    const number = (attributes) => {
+      const input = tag('input', {type: 'text', inputmode: 'numeric', ...attributes});
+      input.value = current;
+      const typed = () => Number(input.value.replace(/,/g, ''));
+      controlled(input, () => { widget.fieldData[key] = typed(); });
+      input.addEventListener('focusout', () => {
+        const kept = Math.min(typed(), field.max ?? Infinity);
+        input.value = kept.toLocaleString('en-US');
+        widget.fieldData[key] = kept;
+      });
+      return input;
+    };
+    if (field.type === 'text') {
+      item.append(tag('label', {for: id}, label), field.mode === 'textarea' ? text('textarea', {id}) : text('input', {id, type: 'text'}));
+    } else if (field.type === 'number') {
+      item.append(tag('label', {}, label), number({'aria-label': key}), tag('input', {type: 'number', 'aria-hidden': 'true', tabindex: '-1'}));
+    } else if (field.type === 'slider') {
+      item.append(tag('label', {id}, label), tag('input', {type: 'range', 'aria-labelledby': id}), number({'aria-label': label}), tag('input', {type: 'number', 'aria-hidden': 'true', tabindex: '-1'}));
+    } else if (field.type === 'colorpicker') {
+      item.append(tag('label', {for: id}, label), tag('input', {type: 'color'}), text('input', {id, type: 'text'}), tag('input', {type: 'text', inputmode: 'numeric'}), tag('input', {type: 'number', 'aria-hidden': 'true', tabindex: '-1'}));
+    } else if (field.type === 'checkbox') {
+      item.append(tag('span', {role: 'checkbox'}), tag('input', {type: 'checkbox', 'aria-hidden': 'true'}), tag('label', {for: id}, label));
+    } else if (field.type === 'dropdown') {
+      item.append(tag('label', {}, label), tag('button', {type: 'button', role: 'combobox'}, current), tag('input', {'aria-hidden': 'true', tabindex: '-1', value: current}));
+    } else {
+      const container = tag('md-input-container');
+      const input = tag('input', {id, type: field.type, name: key, ...(field.readonly ? {readonly: ''} : {})});
+      input.value = current;
+      input.addEventListener('input', () => { widget.fieldData[key] = input.value; });
+      container.append(tag('label', {for: id}, label), input);
+      item.append(container);
+    }
+    return item;
+  };
+
+  // After a layer's click: the new panel's button, then its fields, and last the layer list's mark (measured on the real
+  // editor on 2026-11-05). state.unmarked is a click the list never marks.
+  const renderSettings = (fieldsAfter = 0) => {
     const settings = document.getElementById('settings');
     settings.replaceChildren();
     const widget = state.widgets[state.selected];
     if (!widget) return;
+    const name = tag('div', {class: 'settings-fields'});
+    const nameId = `field-${(lastId += 1)}`;
+    const nameInput = tag('input', {id: nameId, class: 'decoy', type: 'text', value: widget.name});
+    countReads(nameInput);
+    name.append(tag('label', {for: nameId}, 'Custom widget name'), nameInput);
+    // state.widgets[n].plain is a layer that is not a custom widget: no Open Editor, and no fields.
+    if (widget.plain) {
+      settings.append(name);
+      return;
+    }
     const container = document.createElement('div');
     container.className = 'custom-event-list-editor-button-container';
     const button = document.createElement('button');
@@ -128,14 +245,43 @@
     container.appendChild(button);
     const form = document.createElement('div');
     form.className = 'widget-form flex-100 form-no-padding';
-    for (const [key, field] of Object.entries(JSON.parse(widget.fields))) {
-      const row = document.createElement('div');
-      row.className = field.group === 'Closed' ? 'field closed' : 'field';
-      row.innerHTML = '<div class="body"><label></label></div>';
-      row.querySelector('label').textContent = field.label || key;
-      form.appendChild(row);
-    }
-    settings.append(container, form);
+    const details = tag('div', {id: 'widget-details', class: 'widget-form form-no-padding'});
+    const inner = tag('div', {class: 'settings'});
+    inner.append(container, form);
+    details.append(inner);
+    settings.append(name, details);
+    // The first group starts open, and a group's state is saved with the overlay.
+    widget.expandedGroups ??= {};
+    const groups = new Map();
+    const fill = () => {
+      if (form.isConnected) for (const [key, field] of Object.entries(JSON.parse(widget.fields))) {
+      const group = field.group ?? 'Fields';
+      if (!groups.has(group)) {
+        widget.expandedGroups[group] ??= groups.size === 0;
+        const element = tag('custom-widget-fields-group');
+        const body = tag('div', {class: 'settings-fields custom-fields'});
+        const toggle = tag('button', {type: 'button', class: 'custom-fields__toggle'}, group);
+        const apply = () => {
+          toggle.setAttribute('aria-expanded', String(widget.expandedGroups[group]));
+          body.classList.toggle('ng-hide', !widget.expandedGroups[group]);
+        };
+        toggle.addEventListener('click', () => {
+          state.toggles += 1;
+          widget.expandedGroups[group] = !widget.expandedGroups[group];
+          apply();
+        });
+        apply();
+        const header = tag('md-subheader');
+        header.append(toggle);
+        element.append(header, body);
+        form.append(element);
+        groups.set(group, body);
+      }
+      groups.get(group).append(fieldRow(widget, key, field));
+      }
+    };
+    if (fieldsAfter) setTimeout(fill, fieldsAfter);
+    else fill();
   };
 
   const tabs = [['html', 'HTML'], ['css', 'CSS'], ['js', 'JS'], ['fields', 'Fields'], ['fieldData', 'Data']];
@@ -193,15 +339,25 @@
 
   const layers = document.getElementById('layers');
   state.widgets.forEach((widget, index) => {
-    const row = document.createElement('div');
-    row.className = 'widget-layers-list-item';
-    row.innerHTML = '<span class="widget-layers-list-item--name"></span>';
-    row.querySelector('span').textContent = widget.name;
-    row.addEventListener('click', () => {
+    const row = tag('li', {class: 'widget-layers-list-item'});
+    const header = tag('div', {class: 'widget-layers-list-item-header'});
+    const name = tag('span', {class: 'widget-layers-list-item--name'}, widget.name);
+    // A second click on the name within 500 ms opens the rename input (seen in the editor's JavaScript on 2026-11-05).
+    let clicked = 0;
+    name.addEventListener('click', () => {
+      if (Date.now() - clicked < 500) state.renames += 1;
+      clicked = Date.now();
+    });
+    header.addEventListener('click', () => {
       state.selections += 1;
       state.selected = index;
-      setTimeout(renderSettings, 30);
+      setTimeout(() => renderSettings(15), 30);
+      setTimeout(() => {
+        if (!state.unmarked) for (const other of layers.children) other.classList.toggle('selected', other === row);
+      }, 60);
     });
+    header.append(name);
+    row.append(header);
     layers.appendChild(row);
     renderFrame(widget);
   });

@@ -153,6 +153,265 @@
       "to": "const keys = [];",
       "test": "tests/integration/se-editor-update.test.mjs",
       "name": "^the canvas tells the commits apart"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const FIELD_LABELS = '.widget-form custom-widget-fields-group label';",
+      "to": "const FIELD_LABELS = '.widget-form label';",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^neither call reads"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const FIELD_LABELS = '.widget-form custom-widget-fields-group label';",
+      "to": "const FIELD_LABELS = 'custom-widget-fields-group label';",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^neither call reads"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "el.textContent.trim() === label.trim());",
+      "to": "el.textContent.includes(label));",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^an unknown label"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (matching.length > 1) return {ok: false, error: `${matching.length} fields",
+      "to": "if (false) return {ok: false, error: `${matching.length} fields",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a field that is not one"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "\n      && el.getAttribute('aria-hidden') !== 'true' && !el.readOnly && !el.disabled)",
+      "to": "\n      && !el.readOnly && !el.disabled)",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a field that is not one"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "&& el.getAttribute('aria-hidden') !== 'true' && !el.readOnly && !el.disabled)",
+      "to": "&& el.getAttribute('aria-hidden') !== 'true' && !el.disabled)",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a field that is not one"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "(el.tagName === 'TEXTAREA' || VALUE_TYPES.includes(el.type))",
+      "to": "(el.tagName === 'TEXTAREA' || true)",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a field that is not one"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "(el.tagName === 'TEXTAREA' || VALUE_TYPES.includes(el.type))",
+      "to": "VALUE_TYPES.includes(el.type)",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "matching[0].closest(FIELD_ROW)",
+      "to": "matching[0].closest('custom-widget-fields-group')",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "Object.getOwnPropertyDescriptor(proto, 'value').set.call(input, text);",
+      "to": "input.value = text;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype",
+      "to": "HTMLInputElement.prototype",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "input.dispatchEvent(new Event('input', {bubbles: true}));",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "input.dispatchEvent(new FocusEvent('focusout', {bubbles: true}));",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a value the editor does not keep"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "return {ok: true, layer: selected.name, label, old, value: shown};",
+      "to": "return {ok: true, layer: selected.name, label, value: shown};",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "typeInto(input, old);",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a value the editor does not keep"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (given === undefined && names.length !== 1) {",
+      "to": "if (false) {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (matching.length !== 1) {\n      return {ok: false, error: matching.length ? `${matching.length} layers",
+      "to": "if (!matching.length) {\n      return {ok: false, error: matching.length ? `${matching.length} layers",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (typeof value !== 'string' && !Number.isFinite(value)) return",
+      "to": "if (false) return",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField refuses a value"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const stop = hidden();\n    if (stop) return stop;\n    const selected = await selectLayer(layer);",
+      "to": "const selected = await selectLayer(layer);",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField refuses a value"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const stop = hidden();\n    if (stop) return stop;\n    if (typeof value",
+      "to": "if (typeof value",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField refuses a value"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (typeof label !== 'string' || !label.trim()) return",
+      "to": "if (false) return",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^an unknown label"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const written = String(value);",
+      "to": "const written = String(value); document.querySelector('#save').click();",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "return {ok: true, layer: selected.name, label, value: found.input.value};",
+      "to": "document.querySelector('#save').click(); return {ok: true, layer: selected.name, label, value: found.input.value};",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "out(result).replace(/\\/overlay\\/[0-9a-f]{24}\\/[^\\s\"\\\\]+/gi, '/overlay/<id>/<key>');",
+      "to": "out(result);",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a value holding an overlay's link"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (!isSelected()) {",
+      "to": "if (true) {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (!isSelected()) {",
+      "to": "if (false) {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "await waitFor(isSelected, 3000);",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "return selected.length === 1 && selected[0] === item;",
+      "to": "return selected.length > 0;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "return selected.length === 1 && selected[0] === item;",
+      "to": "return selected[0] === item;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "return selected.length === 1 && selected[0] === item;",
+      "to": "return selected.length === 1;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "return isSelected() && openEditorButton() ? {ok: true, name}",
+      "to": "return openEditorButton() ? {ok: true, name}",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a click the layer list never marks"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "return isSelected() && openEditorButton() ? {ok: true, name}",
+      "to": "return isSelected() ? {ok: true, name}",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (keeps(input, shown, written)) return",
+      "to": "if (true) return",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a value the editor does not keep"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "shown === written || (input.inputMode === 'numeric' && ungrouped(shown) === ungrouped(written));",
+      "to": "shown === written;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^setField writes a field"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "shown === written || (input.inputMode === 'numeric' && ungrouped(shown) === ungrouped(written));",
+      "to": "ungrouped(shown) === ungrouped(written);",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a value the editor does not keep"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const restored = keeps(input, input.value, old);",
+      "to": "const restored = true;",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a value the editor does not keep"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (early > 0) await sleep(early);",
+      "to": "",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^a call names its layer"
     }
   ]
 }
