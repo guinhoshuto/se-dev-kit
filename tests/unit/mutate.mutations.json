@@ -159,6 +159,24 @@
       "to": "",
       "test": "tests/unit/mutate.test.mjs",
       "name": "^held by a chain of the harness"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "      assertUnchanged(root, start);\n",
+      "to": "",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "const moved = now.head === start.head ? [] :",
+      "to": "const moved = false ? [] :",
+      "test": "tests/unit/mutate.test.mjs"
+    },
+    {
+      "file": "scripts/mutate.mjs",
+      "from": "const added = now.status.filter(line => !start.status.includes(line))",
+      "to": "const added = [].filter(line => !start.status.includes(line))",
+      "test": "tests/unit/mutate.test.mjs"
     }
   ]
 }

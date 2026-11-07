@@ -243,6 +243,28 @@ function gitDiff(root) {
   }
 }
 
+/** HEAD and `git status --porcelain`: what a mutant is judged against. Not the mutated file's own change (checked between mutations). */
+function checkoutState(root) {
+  try {
+    const git = args => execFileSync('git', ['-C', root, ...args], {encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore']});
+    let head = 'none';
+    try {head = git(['rev-parse', '--verify', '-q', 'HEAD']).trim();} catch {}
+    return {head, status: git(['status', '--porcelain', '-z']).split('\0').filter(Boolean)};
+  } catch {
+    throw new UsageError(`${root} is not a git checkout: mutate compares git status and HEAD around each mutation.`);
+  }
+}
+
+/** Throws UsageError listing what differs from the state recorded when the run started. */
+function assertUnchanged(root, start) {
+  const now = checkoutState(root);
+  const gone = start.status.filter(line => !now.status.includes(line)).map(line => `- ${line}`);
+  const added = now.status.filter(line => !start.status.includes(line)).map(line => `+ ${line}`);
+  const moved = now.head === start.head ? [] : [`HEAD ${start.head.slice(0, 12)} -> ${now.head.slice(0, 12)}`];
+  const changes = [...moved, ...gone, ...added];
+  usage(!changes.length, `The checkout changed since the run started, so the next mutant would be judged against something else. No further mutation ran:\n${changes.join('\n')}\nRun the plan again once the checkout is quiet.`);
+}
+
 function linkedWorktree(root) {
   try {
     const [directory, common] = execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']}).trim().split('\n');
@@ -307,6 +329,7 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
     catch (error) {throw new UsageError(`${file}: ${error.message}`);}
   }
   const diff = gitDiff(root);
+  const start = checkoutState(root);
   const chrome = checked.find(mutation => opensChrome(mutation.test));
   // From a src/ mutant's build until the next build, dist/ holds that mutant: a mutation that does not rebuild
   // dist/ must not run against it, or the previous mutant could kill it without its own change being tested.
@@ -332,6 +355,7 @@ export async function mutate(mutations, {root = ROOT, build = buildEngine, allow
       baselines.add(key);
     }
     for (const mutation of checked) {
+      assertUnchanged(root, start);
       const rebuildsDist = mutation.file.startsWith('src/');
       if (distMutant && !rebuildsDist) {await build(root); distMutant = false;}
       const path = resolve(root, mutation.file);

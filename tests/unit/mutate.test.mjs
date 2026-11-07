@@ -4,7 +4,7 @@ import {execFileSync, spawn, spawnSync} from "node:child_process";
 import {createHash} from "node:crypto";
 import {once} from "node:events";
 import {readdirSync, rmSync} from "node:fs";
-import {copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from "node:fs/promises";
+import {appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {dirname, join} from "node:path";
 import test from "node:test";
@@ -100,6 +100,33 @@ test("a caught mutation is killed, an unchecked one survives, a hang counts as c
   assert.deepEqual(await readdir(join(root, ".cache/mutate")), [], "no backup is left behind");
 });
 
+test("a tracked file edited or a commit made while a plan runs stops the next mutation, with what changed", async t => {
+  const {root, read} = await checkout(t);
+  const plan = [
+    {file: "lib/math.mjs", from: "a + b", to: "a - b", test: "tests/math.test.mjs"},
+    {file: "lib/wait.mjs", from: "Promise.resolve(true)", to: "new Promise(() => {})", test: "tests/wait.test.mjs"},
+    {file: "lib/math.mjs", from: "unused = 1", to: "unused = 2", test: "tests/math.test.mjs"}
+  ];
+  const ran = [];
+  const edit = async () => writeFile(join(root, "src/answer.mjs"), FILES["src/answer.mjs"] + "// edited mid-run\n");
+  await assert.rejects(mutate(plan, {root, timeoutMs: 5000, log: line => {ran.push(line); if (ran.length === 1) return edit();}}), error => {
+    assert.ok(error instanceof UsageError);
+    assert.match(error.message, /checkout changed since the run started/);
+    assert.match(error.message, /\+ .*src\/answer\.mjs/, "the message lists the edited file");
+    return true;
+  });
+  assert.equal(ran.length, 1, "the second mutation never ran");
+  assert.equal(await read("lib/math.mjs"), FILES["lib/math.mjs"] + WORK_IN_PROGRESS, "the first mutant was restored");
+  assert.deepEqual(await readdir(join(root, ".cache/mutate")), [], "no backup is left behind");
+  // A commit moves HEAD without adding a status line for the file already dirty.
+  await writeFile(join(root, "src/answer.mjs"), FILES["src/answer.mjs"]);
+  ran.length = 0;
+  const commit = () => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "mid-run", "--allow-empty"], {cwd: root, stdio: "ignore"});
+  commit();
+  await assert.rejects(mutate(plan, {root, timeoutMs: 5000, log: line => {ran.push(line); if (ran.length === 1) commit();}}), /HEAD [0-9a-f]{12} -> [0-9a-f]{12}/);
+  assert.equal(ran.length, 1);
+});
+
 test("a src/ mutation rebuilds dist/ before its test and after the restore, and outside a worktree needs --allow-live-checkout", async t => {
   const {root, build, read} = await checkout(t);
   const mutation = {file: "src/answer.mjs", from: "42", to: "41", test: "tests/answer.test.mjs"};
@@ -188,6 +215,8 @@ test("with the render slot held by another process, the CLI stops a mutation who
 
 test("held by a chain of the harness that cedes, the slot refuses the CLI, whose printed command waits in the queue, goes in between two of the chain's rounds and runs the mutation under that slot", {timeout: 60_000}, async t => {
   const root = await cliCheckout(t);
+  // The stand-in writes `ran` into the checkout while the plan runs; git must not count it as a change.
+  await appendFile(join(root, ".git/info/exclude"), "ran\n");
   const slot = join(await folder(t, "sws-mutate-slot-"), "render-slot");
   // The stand-in notes when it ran, the slot's owner then, and the slot it inherited.
   await writeFile(join(root, "tests/integration/under-slot.test.mjs"), [
@@ -278,6 +307,8 @@ test("a mutation whose test starts Chrome runs holding the render slot, which it
     "});",
     ""
   ].join("\n"));
+  // The test writes seen.txt into the checkout while the plan runs; git must not count it as a change.
+  await appendFile(join(root, ".git/info/exclude"), "seen.txt\n");
   const machine = () => gate({take: () => takeBrowserSlot({dir: slot}), check: async () => ({ok: true}), pauseMs: 0});
   const {code, results} = await mutate([{file: "lib/math.mjs", from: "a + b", to: "a - b", test: "tests/integration/sum.test.mjs"}], {root, machine, timeoutMs: 5000, log: quiet});
   assert.equal(code, 0);
