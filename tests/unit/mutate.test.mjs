@@ -215,6 +215,8 @@ test("with the render slot held by another process, the CLI stops a mutation who
 
 test("held by a chain of the harness that cedes, the slot refuses the CLI, whose printed command waits in the queue, goes in between two of the chain's rounds and runs the mutation under that slot", {timeout: 60_000}, async t => {
   const root = await cliCheckout(t);
+  // The stand-in writes `ran` into the checkout while the plan runs; git must not count it as a change.
+  await appendFile(join(root, ".git/info/exclude"), "ran\n");
   const slot = join(await folder(t, "sws-mutate-slot-"), "render-slot");
   // The stand-in notes when it ran, the slot's owner then, and the slot it inherited.
   await writeFile(join(root, "tests/integration/under-slot.test.mjs"), [
