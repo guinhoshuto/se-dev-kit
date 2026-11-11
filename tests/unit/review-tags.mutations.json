@@ -1,0 +1,32 @@
+{
+  "mutations": [
+    {
+      "file": "src/capture/review.ts",
+      "from": "if (given.has(tag)) tags.set(id, freeTag(tag, taken));",
+      "to": "if (false) tags.set(id, freeTag(tag, taken));",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^review tags skip a tag another recipe already has"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "const taken = new Set(tags.values());",
+      "to": "const taken = new Set<string>();",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^review tags skip a tag another recipe already has"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "    else given.add(tag);\n",
+      "to": "\n",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^review tags skip a tag another recipe already has"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "const base = tag.replace(/\\p{N}+$/u, \"\") || tag;",
+      "to": "const base = tag;",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^review tags skip a tag another recipe already has"
+    }
+  ]
+}

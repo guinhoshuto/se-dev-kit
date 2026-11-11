@@ -30,8 +30,8 @@
     },
     {
       "file": "src/capture/review.ts",
-      "from": "freeTag(section.tag.replace(/\\p{N}+$/u, \"\") || section.tag, taken)",
-      "to": "freeTag(section.tag, taken)",
+      "from": "const base = tag.replace(/\\p{N}+$/u, \"\") || tag;",
+      "to": "const base = tag;",
       "test": "tests/unit/review.test.mjs",
       "name": "^recipes rendered into separate folders"
     },
@@ -44,8 +44,8 @@
     },
     {
       "file": "src/capture/review.ts",
-      "from": "  taken.add(tag);\n  return tag;",
-      "to": "  return tag;",
+      "from": "  taken.add(free);\n  return free;",
+      "to": "  return free;",
       "test": "tests/unit/review.test.mjs",
       "name": "^recipes rendered into separate folders"
     },

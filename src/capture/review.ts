@@ -34,7 +34,10 @@ export interface ReviewEntry {
 
 /**
  * The initials of each recipe id (`listing-tutorial` → `LT`, `listingTutorial` → `LT`), in the widget's recipe
- * order; a repeated tag gets a digit (`C`, `C2`). A tag stays put while the recipes keep their ids and order.
+ * order; a repeated tag gets a digit (`C`, `C2`). A tag another recipe already has (`cover`, `c`, `cover-2`: `C`,
+ * `C2`, and `C2` again) goes to the first one, and the later one gets the tag without its digits and the lowest digit
+ * from 2 that no recipe has (`C3`), as the review page renames it; every other tag stays as the count gives it. A tag
+ * stays put while the recipes keep their ids and order.
  */
 export function reviewTags(recipeIds: readonly string[]): Map<string, string> {
   const tags = new Map<string, string>();
@@ -46,6 +49,12 @@ export function reviewTags(recipeIds: readonly string[]): Map<string, string> {
     const count = (seen.get(initials) ?? 0) + 1;
     seen.set(initials, count);
     tags.set(id, count === 1 ? initials : `${initials}${count}`);
+  }
+  const taken = new Set(tags.values());
+  const given = new Set<string>();
+  for (const [id, tag] of tags) {
+    if (given.has(tag)) tags.set(id, freeTag(tag, taken));
+    else given.add(tag);
   }
   return tags;
 }
@@ -257,20 +266,21 @@ function pageTags(sections: readonly ReviewSection[]): ReviewSection[] {
       );
     }
     const key = JSON.stringify([section.tag, section.recipe]);
-    const tag = given.get(key) ?? freeTag(section.tag.replace(/\p{N}+$/u, "") || section.tag, taken);
+    const tag = given.get(key) ?? freeTag(section.tag, taken);
     given.set(key, tag);
     const items = section.items.map((item) => ({...item, code: `${tag}-${item.code.slice(prefix.length)}`}));
     return {...section, tag, recordedTag: section.tag, items};
   });
 }
 
-/** The lowest `<base><digit>` from 2 that is not taken; it is taken from then on. */
-function freeTag(base: string, taken: Set<string>): string {
+/** The lowest `<tag without its trailing digits><digit>` from 2 that is not taken; it is taken from then on. */
+function freeTag(tag: string, taken: Set<string>): string {
+  const base = tag.replace(/\p{N}+$/u, "") || tag;
   let digit = 2;
   while (taken.has(`${base}${digit}`)) digit += 1;
-  const tag = `${base}${digit}`;
-  taken.add(tag);
-  return tag;
+  const free = `${base}${digit}`;
+  taken.add(free);
+  return free;
 }
 
 function escapeHtml(value: string): string {
