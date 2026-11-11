@@ -8,7 +8,7 @@ import {promisify} from "node:util";
 import test from "node:test";
 
 import {contactSheetHtml} from "../../dist/capture/renderer.js";
-import {reviewItems, reviewTags, writeReviewPage} from "../../dist/capture/review.js";
+import {reviewItems, reviewSummary, reviewTags, writeReviewPage} from "../../dist/capture/review.js";
 
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL("../../dist/cli/index.js", import.meta.url));
@@ -116,7 +116,7 @@ test("the review page shows every file under its code, linked from the page, old
   }
 });
 
-test("two rounds of one recipe keep their codes, and two recipes with one tag are refused", async () => {
+test("two rounds of one recipe keep their codes, and a recipe whose tag another took gets a digit", async () => {
   const root = await mkdtemp(join(tmpdir(), "sws-review-"));
   try {
     const entry = (recipe) => [{id: "a", screenshot: `${recipe}/a.png`, video: null, thumbnail: null}];
@@ -131,9 +131,72 @@ test("two rounds of one recipe keep their codes, and two recipes with one tag ar
     assert.match(html, /<figure id="LT-01\.2"><a href="render-full\/listing-tutorial\/a\.png">/);
     assert.equal(html.match(/<figcaption>LT-01 · a · screenshot<\/figcaption>/g).length, 2, "both rounds caption the same file LT-01");
 
+    const mixed = await writeReviewPage({page: join(root, "mixed.html"), folders: [join(root, "render"), join(root, "other")]});
+    assert.deepEqual(mixed.sections.map((section) => `${section.tag} ${section.recipe}`), ["LT listing-tutorial", "LT2 lamp-toggle"]);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("recipes rendered into separate folders that share a tag get a digit on the page, and their codes follow", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-review-"));
+  try {
+    const entry = (recipe) => [{id: "a", screenshot: `${recipe}/a.png`, video: null, thumbnail: null}];
+    // Rendered apart (or before review codes), both recipes are VC.
+    await recipeFolder(join(root, "cover"), "vitrine-cover", {artifacts: entry("vitrine-cover")});
+    await recipeFolder(join(root, "config"), "vitrine-config", {artifacts: entry("vitrine-config"), contactSheet: {file: "vitrine-config/contact-sheet.png"}});
+
+    const page = join(root, "vitrine.html");
+    const result = await writeReviewPage({page, folders: [join(root, "cover"), join(root, "config")]});
+    assert.deepEqual(result.sections.map(({directory, items, ...section}) => section), [
+      {tag: "VC", recipe: "vitrine-cover"},
+      {tag: "VC2", recordedTag: "VC", recipe: "vitrine-config"}
+    ]);
+    assert.match(reviewSummary(result), /\(VC vitrine-cover, VC2 vitrine-config \(renamed from VC\)\)\.$/);
+    const html = await readFile(page, "utf8");
+    assert.match(html, /<figure id="VC-01"><a href="cover\/vitrine-cover\/a\.png">/);
+    assert.match(html, /<figure id="VC2-01"><a href="config\/vitrine-config\/a\.png">/);
+    assert.match(html, /<figcaption>VC2-02 · contact sheet<\/figcaption>/);
+    assert.match(html, /<section id="VC2">\n<h2>VC2 · vitrine-config<\/h2>\n<p class="where">config\/vitrine-config · [^<]* · renamed from VC; its contact sheet still says VC<\/p>/);
+    assert.match(html, /<a href="#VC2">VC2 · vitrine-config<\/a>/);
+    assert.doesNotMatch(html, /VC-01\.2|<section id="VC\.2">/, "a renamed recipe is not a second round of the first");
+
+    // Two widgets whose tags already carry digits: a rename skips every tag a manifest records, drops the recorded
+    // digits, and a second round of the renamed recipe shares its new tag.
+    const recorded = async (folder, recipe, tag) => {
+      const artifacts = entry(recipe);
+      await recipeFolder(join(root, folder), recipe, {artifacts, review: {tag, items: reviewItems(tag, artifacts)}});
+    };
+    await recorded("widget-a", "vitrine-config", "VC2");
+    await recorded("widget-a", "vitrine-cover", "VC");
+    await recorded("widget-b", "vertical-crop", "VC2");
+    await recorded("widget-b", "video-clip", "VC");
+    await recorded("widget-b-again", "video-clip", "VC");
+    const widgets = await writeReviewPage({page: join(root, "widgets.html"), folders: ["widget-a", "widget-b", "widget-b-again"].map((folder) => join(root, folder))});
+    assert.deepEqual(widgets.sections.map((section) => `${section.tag} ${section.recipe}`), [
+      "VC2 vitrine-config",
+      "VC vitrine-cover",
+      "VC3 vertical-crop",
+      "VC4 video-clip",
+      "VC4 video-clip"
+    ]);
+    const rounds = await readFile(join(root, "widgets.html"), "utf8");
+    assert.match(rounds, /<figure id="VC4-01\.2"><a href="widget-b-again\/video-clip\/a\.png">/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("two recipes with one tag are refused when the later one's codes do not start with that tag", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-review-"));
+  try {
+    const entry = (recipe) => [{id: "a", screenshot: `${recipe}/a.png`, video: null, thumbnail: null}];
+    await recipeFolder(join(root, "render"), "listing-tutorial", {artifacts: entry("listing-tutorial")});
+    const edited = entry("lamp-toggle");
+    await recipeFolder(join(root, "other"), "lamp-toggle", {artifacts: edited, review: {tag: "LT", items: reviewItems("LAMP", edited)}});
     await assert.rejects(
       writeReviewPage({page: join(root, "mixed.html"), folders: [join(root, "render"), join(root, "other")]}),
-      (error) => error.code === "REVIEW_TAG_COLLISION" && /listing-tutorial/.test(error.message) && /lamp-toggle/.test(error.message)
+      (error) => error.code === "REVIEW_TAG_COLLISION" && /listing-tutorial/.test(error.message) && /lamp-toggle/.test(error.message) && /LT-/.test(error.message)
     );
   } finally {
     await rm(root, {recursive: true, force: true});
@@ -157,6 +220,19 @@ test("se-widget-studio review writes the page and needs --force to replace it", 
     assert.equal(again.code, 2);
     assert.equal(JSON.parse(again.stderr).code, "OUTPUT_EXISTS");
     assert.equal((await run(["--force"])).code, 0);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("se-widget-studio review creates the page's folder when it does not exist", {timeout: 60_000}, async () => {
+  const root = await mkdtemp(join(tmpdir(), "sws-review-"));
+  try {
+    await recipeFolder(join(root, "render"), "cover", {artifacts: [{id: "a", screenshot: "cover/a.png", video: null, thumbnail: null}]});
+    const page = join(root, "out", "review", "2026-11-11-task", "review.html");
+    const {stdout} = await execFileAsync(process.execPath, [cliPath, "--json", "review", page, join(root, "render")]);
+    assert.equal(JSON.parse(stdout).page, page);
+    assert.match(await readFile(page, "utf8"), /<figure id="C-01"><a href="\.\.\/\.\.\/\.\.\/render\/cover\/a\.png">/);
   } finally {
     await rm(root, {recursive: true, force: true});
   }

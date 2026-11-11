@@ -1,0 +1,74 @@
+{
+  "mutations": [
+    {
+      "file": "src/capture/review.ts",
+      "from": "return pageTags(sections);",
+      "to": "return sections;",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^recipes rendered into separate folders"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "await mkdir(dirname(page), {recursive: true});",
+      "to": "void mkdir;",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^se-widget-studio review creates the page's folder"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "if (owner.recipe === section.recipe) return section;",
+      "to": "if (owner === section) return section;",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^two rounds of one recipe"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "const taken = new Set(sections.map((section) => section.tag));",
+      "to": "const taken = new Set<string>();",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^recipes rendered into separate folders"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "freeTag(section.tag.replace(/\\p{N}+$/u, \"\") || section.tag, taken)",
+      "to": "freeTag(section.tag, taken)",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^recipes rendered into separate folders"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "const tag = given.get(key) ?? freeTag(",
+      "to": "const tag = freeTag(",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^recipes rendered into separate folders"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "  taken.add(tag);\n  return tag;",
+      "to": "  return tag;",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^recipes rendered into separate folders"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "if (section.items.some((item) => !item.code.startsWith(prefix))) {",
+      "to": "if (false) {",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^two recipes with one tag are refused"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "section.items.some((item) => item.kind === \"contactSheet\") ?",
+      "to": "false ?",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^recipes rendered into separate folders"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "${section.recordedTag === undefined ? \"\" : ` (renamed from ${section.recordedTag})`}",
+      "to": "",
+      "test": "tests/unit/review.test.mjs",
+      "name": "^recipes rendered into separate folders"
+    }
+  ]
+}
