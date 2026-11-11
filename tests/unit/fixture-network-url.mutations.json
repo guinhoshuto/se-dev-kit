@@ -1,0 +1,193 @@
+{
+  "mutations": [
+    {
+      "file": "src/validation/project.ts",
+      "from": "diagnostics.push(...networkUrlDiagnostics(project));",
+      "to": "void networkUrlDiagnostics;",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "an emote URL in a fixture is reported"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "diagnostics.push(...networkUrlDiagnostics(project));",
+      "to": "void networkUrlDiagnostics;",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "the validate command prints the warning"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "status: \"warning\",",
+      "to": "status: \"error\",",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "an emote URL in a fixture is reported"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "status: \"warning\",",
+      "to": "status: \"error\",",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "the validate command prints the warning"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "code: \"FIXTURE_NETWORK_URL\",",
+      "to": "code: \"FIXTURE_URL\",",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "the validate command prints the warning"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "hint: NETWORK_URL_HINT",
+      "to": "hint: \"Runtime network is blocked.\"",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "an emote URL in a fixture is reported"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "leftOut > 0 ?",
+      "to": "leftOut >= 0 ?",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "an emote URL in a fixture is reported"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "...project.fixtures.map((item): [string, unknown] => [`fixture \"${item.id}\"`, item.value]),",
+      "to": "...[],",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "an emote URL in a fixture is reported"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "if (entries.length === 0) return [];",
+      "to": "",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "gets no new diagnostic"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "[\"channel\", project.config.channel ?? {}],",
+      "to": "[\"channel\", {}],",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "every catalog source is checked"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "...project.themes.map((item): [string, unknown] => [`theme \"${item.id}\"`, item.value]),",
+      "to": "...[],",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "every catalog source is checked"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "...project.scenes.map((item): [string, unknown] => [`scene \"${item.id}\"`, item.value]),",
+      "to": "...[],",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "every catalog source is checked"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "...project.scenarios.map((item): [string, unknown] => [`scenario \"${item.id}\"`, item.value]),",
+      "to": "...[],",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "every catalog source is checked"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "...project.recipes.map((item): [string, unknown] => [`recipe \"${item.id}\"`, item.value])",
+      "to": "...[]",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "every catalog source is checked"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "...project.themes.map((item): [string, unknown] => [`theme \"${item.id}\"`, item.value]),\n    ...project.fixtures.map((item): [string, unknown] => [`fixture \"${item.id}\"`, item.value]),\n    ...project.scenes.map((item): [string, unknown] => [`scene \"${item.id}\"`, item.value]),",
+      "to": "...project.scenes.map((item): [string, unknown] => [`scene \"${item.id}\"`, item.value]),\n    ...project.fixtures.map((item): [string, unknown] => [`fixture \"${item.id}\"`, item.value]),\n    ...project.themes.map((item): [string, unknown] => [`theme \"${item.id}\"`, item.value]),",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "every catalog source is checked"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "/^https?:\\/\\/\\S+$/i",
+      "to": "/^https:\\/\\/\\S+$/i",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "Google Fonts hosts do not"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "/^https?:\\/\\/\\S+$/i",
+      "to": "/^https?:\\/\\/\\S+$/",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "Google Fonts hosts do not"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "const url = input.trim();",
+      "to": "const url = input;",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "Google Fonts hosts do not"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": " || isAnsweredByFontRoute(url)) return;",
+      "to": ") return;",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "Google Fonts hosts do not"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "} catch {\n    return false;",
+      "to": "} catch {\n    return true;",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "Google Fonts hosts do not"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "if (depth > 64) return;",
+      "to": "if (depth > 640) return;",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "Google Fonts hosts do not"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "if (depth > 64) return;",
+      "to": "if (depth > 63) return;",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "Google Fonts hosts do not"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "/^https?:\\/\\/\\S+$/i",
+      "to": "/https?:\\/\\/\\S+/i",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "a FIELDS default URL are not reported"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "[\"channel\", project.config.channel ?? {}],",
+      "to": "[\"FIELDS defaults\", project.fieldDefaults],\n    [\"channel\", project.config.channel ?? {}],",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "a FIELDS default URL are not reported"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "if (!found.includes(url)) found.push(url);",
+      "to": "found.push(url);",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "entries past the fifth are counted"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "const LISTED_ENTRIES_MAX = 5;",
+      "to": "const LISTED_ENTRIES_MAX = 6;",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "entries past the fifth are counted"
+    },
+    {
+      "file": "src/validation/network-urls.ts",
+      "from": "entries.length - listed.length",
+      "to": "entries.length - listed.length + 1",
+      "test": "tests/unit/fixture-network-url.test.mjs",
+      "name": "entries past the fifth are counted"
+    }
+  ]
+}
