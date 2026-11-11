@@ -1,4 +1,4 @@
-import {readdir, readFile, stat, writeFile} from "node:fs/promises";
+import {mkdir, readdir, readFile, stat, writeFile} from "node:fs/promises";
 import {basename, dirname, join, relative, resolve, sep} from "node:path";
 import type {JsonObject} from "../types.js";
 import {StudioError} from "../shared/errors.js";
@@ -85,6 +85,11 @@ export interface ReviewSection {
   outputRoot: string;
   generatedAt: string | null;
   items: ReviewItem[];
+  /**
+   * The tag the manifest records, when the page gave the section another one because a different recipe recorded
+   * it first; its contact sheet still captions the recorded codes.
+   */
+  recordedTag?: string;
   /**
    * A job folder's downloaded file for each manifest path (`listing-tutorial/a.png` → `<job>/001-a.png`); a recipe
    * folder has none, and its files sit at their manifest paths under `outputRoot`.
@@ -197,7 +202,8 @@ async function readJobSections(directory: string): Promise<ReviewSection[]> {
 /**
  * One section per recipe folder: a folder that holds manifest.json, or each subfolder that does, by name. A job
  * folder of `studio-client.mjs run` (job.json) gives one section per render manifest it downloaded.
- * Sections of the same recipe may share a tag (two rounds of one recipe); different recipes may not.
+ * Sections of the same recipe may share a tag (two rounds of one recipe); different recipes may not, so the page
+ * renames a later one (`pageTags`).
  */
 export async function reviewSections(folders: readonly string[]): Promise<ReviewSection[]> {
   const sections: ReviewSection[] = [];
@@ -224,19 +230,47 @@ export async function reviewSections(folders: readonly string[]): Promise<Review
     }
     for (const child of found) sections.push(...(await read(child)));
   }
+  return pageTags(sections);
+}
+
+/**
+ * One tag per recipe on the page. A section keeps the tag its manifest records unless a different recipe recorded
+ * it first (`vitrine-cover` and `vitrine-config`, both `VC`, rendered apart); then it gets the recorded tag without
+ * its trailing digits and the lowest digit from 2 that no section records and no section was given (`VC2`), and its
+ * codes follow. Rounds of one recipe share their tag, and tags stay put while the folders hold the same recipes in
+ * the same order.
+ */
+function pageTags(sections: readonly ReviewSection[]): ReviewSection[] {
+  const taken = new Set(sections.map((section) => section.tag));
   const owners = new Map<string, ReviewSection>();
-  for (const section of sections) {
-    const owner = owners.get(section.tag);
-    if (owner && owner.recipe !== section.recipe) {
+  const given = new Map<string, string>();
+  return sections.map((section) => {
+    const owner = owners.get(section.tag) ?? section;
+    owners.set(section.tag, owner);
+    if (owner.recipe === section.recipe) return section;
+    const prefix = `${section.tag}-`;
+    if (section.items.some((item) => !item.code.startsWith(prefix))) {
       throw new StudioError(
         "REVIEW_TAG_COLLISION",
-        `Recipes "${owner.recipe}" (${owner.directory}) and "${section.recipe}" (${section.directory}) both use the tag ${section.tag}, so their codes would collide.`,
-        "Write one review page per widget."
+        `Recipes "${owner.recipe}" (${owner.directory}) and "${section.recipe}" (${section.directory}) both use the tag ${section.tag}, and the codes of "${section.recipe}" do not all start with ${prefix}, so the page cannot give it another tag.`,
+        "Render that recipe again, or write one review page per widget."
       );
     }
-    owners.set(section.tag, owner ?? section);
-  }
-  return sections;
+    const key = JSON.stringify([section.tag, section.recipe]);
+    const tag = given.get(key) ?? freeTag(section.tag.replace(/\p{N}+$/u, "") || section.tag, taken);
+    given.set(key, tag);
+    const items = section.items.map((item) => ({...item, code: `${tag}-${item.code.slice(prefix.length)}`}));
+    return {...section, tag, recordedTag: section.tag, items};
+  });
+}
+
+/** The lowest `<base><digit>` from 2 that is not taken; it is taken from then on. */
+function freeTag(base: string, taken: Set<string>): string {
+  let digit = 2;
+  while (taken.has(`${base}${digit}`)) digit += 1;
+  const tag = `${base}${digit}`;
+  taken.add(tag);
+  return tag;
 }
 
 function escapeHtml(value: string): string {
@@ -263,7 +297,10 @@ export function renderReviewPage(page: string, title: string, sections: readonly
         : `<a href="${path}"><img src="${path}" alt="${caption}" loading="lazy"></a>`;
       return `<figure id="${escapeHtml(anchor(item.code))}">${media}<figcaption>${caption}</figcaption></figure>`;
     });
-    const where = [href(page, section.directory) || ".", section.generatedAt].filter(Boolean).join(" · ");
+    const renamed = section.recordedTag === undefined
+      ? null
+      : `renamed from ${section.recordedTag}${section.items.some((item) => item.kind === "contactSheet") ? `; its contact sheet still says ${section.recordedTag}` : ""}`;
+    const where = [href(page, section.directory) || ".", section.generatedAt, renamed].filter(Boolean).join(" · ");
     return [
       `<section id="${escapeHtml(anchor(section.tag))}">`,
       `<h2>${escapeHtml(section.tag)} · ${escapeHtml(section.recipe)}</h2>`,
@@ -318,7 +355,8 @@ ${body.join("\n")}
 
 export interface ReviewPageResult {
   page: string;
-  sections: {tag: string; recipe: string; directory: string; items: number}[];
+  /** `recordedTag` only for a section the page renamed. */
+  sections: {tag: string; recordedTag?: string; recipe: string; directory: string; items: number}[];
   images: number;
   videos: number;
   /** Files the manifests list that are not on disk; their figures stay, with their codes. */
@@ -346,11 +384,18 @@ export async function writeReviewPage(options: {
       if (!(await exists(path))) missing.push(path);
     }
   }
+  await mkdir(dirname(page), {recursive: true});
   await writeFile(page, renderReviewPage(page, options.title ?? "Review", sections), options.force ? undefined : {flag: "wx"});
   const items = sections.flatMap((section) => section.items);
   return {
     page,
-    sections: sections.map((section) => ({tag: section.tag, recipe: section.recipe, directory: section.directory, items: section.items.length})),
+    sections: sections.map((section) => ({
+      tag: section.tag,
+      ...(section.recordedTag === undefined ? {} : {recordedTag: section.recordedTag}),
+      recipe: section.recipe,
+      directory: section.directory,
+      items: section.items.length
+    })),
     images: items.filter((item) => item.kind !== "video").length,
     videos: items.filter((item) => item.kind === "video").length,
     missing
@@ -361,7 +406,9 @@ export async function writeReviewPage(options: {
 export function reviewSummary(result: ReviewPageResult): string {
   const counts = [`${result.images} image${result.images === 1 ? "" : "s"}`];
   if (result.videos > 0) counts.push(`${result.videos} video${result.videos === 1 ? "" : "s"}`);
-  const sections = result.sections.map((section) => `${section.tag} ${section.recipe}`).join(", ");
+  const sections = result.sections
+    .map((section) => `${section.tag} ${section.recipe}${section.recordedTag === undefined ? "" : ` (renamed from ${section.recordedTag})`}`)
+    .join(", ");
   const line = `${result.page}: ${counts.join(" and ")} in ${result.sections.length} section${result.sections.length === 1 ? "" : "s"} (${sections}).`;
   return result.missing.length > 0
     ? `${line}\nMissing on disk (${result.missing.length}): ${result.missing.map((path) => basename(path)).join(", ")}`
