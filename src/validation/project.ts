@@ -6,6 +6,7 @@ import {loadShippedThemes, type ShippedTheme} from "../config/catalog.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
 import {expandRecipe} from "../capture/matrix.js";
 import {findSensitiveTestData} from "./privacy.js";
+import {networkUrlDiagnostics} from "./network-urls.js";
 import {loadSampleMediaCatalog, type SampleMediaCatalog} from "../config/sample-media.js";
 import {collectSampleMediaReferences, sampleKindsForField} from "../studio-ui/sample-media.js";
 
@@ -199,6 +200,7 @@ export async function validateProject(project: ResolvedProject): Promise<Diagnos
   }
 
   diagnostics.push(...(await sampleMediaDiagnostics(project)));
+  diagnostics.push(...networkUrlDiagnostics(project));
 
   diagnostics.push(
     diagnostic(
