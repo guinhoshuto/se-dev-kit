@@ -58,13 +58,6 @@
     },
     {
       "file": "skills/se-widget-studio/scripts/se-editor-update.js",
-      "from": "const item = box.querySelector(`.md-nav-item[name=",
-      "to": "const item = box.querySelector(`md-nav-item[name=",
-      "test": "tests/integration/se-editor-update.test.mjs",
-      "name": "^run moves every widget"
-    },
-    {
-      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
       "from": "if (!(await waitFor(() => typeof monaco !== 'undefined' && monaco.editor, 10000))) {",
       "to": "if (typeof monaco === 'undefined') {",
       "test": "tests/integration/se-editor-update.test.mjs",
@@ -482,6 +475,62 @@
       "to": "r = {ok: true};",
       "test": "tests/integration/se-editor-update.test.mjs",
       "name": "^the loader defines seEditor"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "document.querySelectorAll('[role=\"dialog\"]')",
+      "to": "document.querySelectorAll('[role=\"alertdialog\"]')",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^react editor: "
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "&& el.getClientRects().length > 0)",
+      "to": "&& true)",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^react editor: open, scan"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": ".find((el) => el.querySelector('.monaco-editor') && ",
+      "to": ".find((el) => true && ",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^react editor: open, scan"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "el.textContent.trim().toLowerCase() === NAV[tab]",
+      "to": "el.textContent.trim() === NAV[tab]",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^react editor: run moves"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "el.textContent.trim() === 'Done'",
+      "to": "el.textContent.trim() === 'Finish'",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^react editor: run moves"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "|| [...document.querySelectorAll('[role=\"dialog\"]')].find((el) => el.querySelector('.monaco-editor') && el.getClientRects().length > 0)",
+      "to": "|| null",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^react editor: "
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "|| [...box.querySelectorAll('[role=\"tab\"]')].find((el) => el.textContent.trim().toLowerCase() === NAV[tab])",
+      "to": "|| null",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^react editor: run moves"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "|| [...box.querySelectorAll('button:not([role=\"tab\"])')].find((el) => el.textContent.trim() === 'Done')",
+      "to": "|| null",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^react editor: run moves"
     }
   ]
 }

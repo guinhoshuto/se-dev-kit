@@ -34,7 +34,8 @@
   .custom-fields.ng-hide { display: none; }
   .overlay { position: relative; width: 640px; height: 360px; }
   .overlay iframe { width: 300px; height: 160px; border: 0; }
-  md-dialog { position: fixed; inset: 40px; background: #222; color: #fff; display: block; }
+  md-dialog, [role="dialog"].bg-popover { position: fixed; inset: 40px; background: #222; color: #fff; display: block; }
+  .help-dialog { position: fixed; right: 0; bottom: 0; width: 80px; height: 24px; background: #444; color: #fff; }
   md-nav-bar ul { margin: 0; padding: 0; }
   md-nav-bar li { list-style: none; display: inline-block; }
 </style>
@@ -288,7 +289,74 @@
   const languages = {html: 'html', css: 'css', js: 'javascript', fields: 'json', fieldData: 'json'};
   const textOf = (widget, tab) => tab === 'fields' ? reformat(widget.fields) : tab === 'fieldData' ? JSON.stringify(widget.fieldData) : widget[tab];
 
+  // The editor after StreamElements' redesign (seen 2026-11-11) is chosen by the URL's ?ui=react: the code editor is a
+  // React dialog (div[role=dialog]) holding a Monaco editor, and its tabs are buttons in a tablist. The real dialog left
+  // the page once Done returned (measured on 2026-11-11); this one stays in it, hidden, with its Monaco inside, so that
+  // a dialog that is closing but still in the page is tested against the code that must not count it as open. The
+  // default is the AngularJS Material editor above.
+  const REACT = new URLSearchParams(location.search).get('ui') === 'react';
+  if (REACT) {
+    // A dialog of the page that is no code editor: it has no Monaco, and it stays open the whole time.
+    const help = document.createElement('div');
+    help.setAttribute('role', 'dialog');
+    help.className = 'help-dialog';
+    help.textContent = 'Help';
+    document.body.appendChild(help);
+  }
+
+  const openReactEditor = (widget) => {
+    state.opens += 1;
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.className = 'bg-popover';
+    dialog.id = `base-ui-${state.opens}`;
+    let closed = false;
+    const live = () => dialog.isConnected && !closed;
+    const tablist = document.createElement('div');
+    tablist.setAttribute('role', 'tablist');
+    tablist.setAttribute('aria-label', 'Code');
+    const open = {html: true};
+    const buttons = [];
+    for (const [name, title] of tabs) {
+      const button = document.createElement('button');
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(name === 'html'));
+      button.textContent = title;
+      button.addEventListener('click', () => {
+        for (const other of buttons) other.setAttribute('aria-selected', String(other === button));
+        if (open[name]) return;
+        open[name] = true;
+        setTimeout(() => {
+          if (live()) createModel(languages[name], textOf(widget, name), name);
+        }, 40);
+      });
+      buttons.push(button);
+      tablist.appendChild(button);
+    }
+    const monacoBox = document.createElement('div');
+    monacoBox.className = 'monaco-editor';
+    const done = document.createElement('button');
+    done.textContent = 'Done';
+    done.addEventListener('click', () => {
+      state.dones += 1;
+      for (const model of models) if (model.tab !== 'fieldData') widget[model.tab] = model.getValue();
+      models = [];
+      closed = true;
+      dialog.style.display = 'none';
+      setTimeout(() => {
+        if (!state.frozen) renderFrame(widget);
+        renderSettings();
+      }, 80);
+    });
+    dialog.append(tablist, monacoBox, done);
+    document.body.appendChild(dialog);
+    whenMonaco(() => {
+      if (live()) createModel('html', widget.html, 'html');
+    });
+  };
+
   const openEditor = (widget) => {
+    if (REACT) return openReactEditor(widget);
     state.opens += 1;
     const dialog = document.createElement('md-dialog');
     dialog.className = 'code-editor-dialog flex-80';

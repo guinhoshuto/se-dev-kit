@@ -97,8 +97,8 @@ after(async () => {
 const widget = (name, code = OLD, fieldData = {speed: 3}) => ({name, ...code, fieldData});
 
 /** The fixture editor at `url` with these widgets, the page scripts pasted, and every request it made. */
-async function editor(t, widgets, {url = EDITOR, update = true, using = plan} = {}) {
-  const session = await fixture(t, widgets, {url});
+async function editor(t, widgets, {url = EDITOR, update = true, using = plan, ui} = {}) {
+  const session = await fixture(t, widgets, {url, ui});
   if (!session) return undefined;
   const pasted = await session.call(READ);
   if (pasted.ok && update) {
@@ -108,8 +108,12 @@ async function editor(t, widgets, {url = EDITOR, update = true, using = plan} = 
   return {...session, pasted};
 }
 
-/** The fixture editor at `url` with these widgets, nothing pasted yet, served with these response headers. */
-async function fixture(t, widgets, {url = EDITOR, headers = {}} = {}) {
+/**
+ * The fixture editor at `url` with these widgets, nothing pasted yet, served with these response headers. `ui` is the
+ * fixture's code editor markup: "react" loads the page at `?ui=react`, the React dialog of StreamElements' 2026-11-11
+ * redesign; without it the page is the AngularJS Material editor.
+ */
+async function fixture(t, widgets, {url = EDITOR, headers = {}, ui} = {}) {
   if (!browser) {
     t.skip("No compatible local Chromium executable is installed; the Studio must not download one implicitly.");
     return undefined;
@@ -119,9 +123,9 @@ async function fixture(t, widgets, {url = EDITOR, headers = {}} = {}) {
   const page = await context.newPage();
   const requests = [];
   page.on("request", (request) => requests.push(request.url()));
-  await page.route(url, (route) => route.fulfill({status: 200, contentType: "text/html", headers, body: FIXTURE}));
+  await page.route((target) => `${target.origin}${target.pathname}` === url, (route) => route.fulfill({status: 200, contentType: "text/html", headers, body: FIXTURE}));
   await page.addInitScript((list) => { window.__FIXTURE_WIDGETS = list; }, widgets);
-  await page.goto(url);
+  await page.goto(ui ? `${url}?ui=${ui}` : url);
   const call = async (expression) => JSON.parse(await page.evaluate(expression));
   return {page, call, requests, state: () => page.evaluate(() => {
     const {widgets: list, ...counts} = window.__fixture;
@@ -334,6 +338,91 @@ test("code that fits both commits once its placeholders are filled reads UNVERIF
   assert.deepEqual({css: result.canvas.css, left: result.left}, {css: count({UNVERIFIABLE: 1}), left: 0});
   assert.equal((await session.call("seEditor.canvas()")).ok, false, "the canvas cannot confirm it");
 });
+
+// The flows that reach the code editor, once on each markup of it: the AngularJS Material dialog and the React dialog
+// StreamElements switched to (seen 2026-11-11). The fixture's React dialog stays in the page, hidden, after Done (the
+// real one left the page), so that the visibility guard of dialog() has something to refuse.
+const SHOWN = {angular: "md-dialog.code-editor-dialog", react: "[role=\"dialog\"].bg-popover:visible"};
+const IN_PAGE = {angular: "md-dialog.code-editor-dialog", react: "[role=\"dialog\"].bg-popover"};
+const UIS = {angular: undefined, react: "react"};
+const NO_EDITOR = {ok: false, error: "No code editor is open."};
+
+for (const [ui, markup] of Object.entries(UIS)) {
+  test(`${ui} editor: open, scan, apply, and done move one widget, and the closed dialog is not an open editor`, {timeout: 60_000}, async (t) => {
+    const session = await editor(t, [widget("minimal"), widget("halloween")], {ui: markup});
+    if (!session) return;
+    assert.equal((await upload(session)).ok, true);
+    assert.deepEqual(await session.call("seEditor.scan()"), NO_EDITOR);
+    assert.deepEqual(await session.call("seEditor.done()"), NO_EDITOR);
+
+    assert.deepEqual(await session.call("seEditor.open('minimal')"), {ok: true});
+    assert.equal(await session.page.locator(SHOWN[ui]).count(), 1);
+    const scanned = await session.call("seEditor.scan()");
+    assert.equal(scanned.ok, true, "every tab holds one of the two commits' code");
+    assert.deepEqual(Object.values(scanned.tabs).map((value) => value.split(" ")[0]), ["OLD", "OLD", "OLD", "OLD"]);
+    const applied = await session.call("seEditor.apply()");
+    assert.deepEqual(applied, {ok: true, tabs: {html: "written", css: "written", js: "written", fields: "written"}});
+    assert.deepEqual(await session.call("seEditor.done()"), {ok: true});
+    assert.equal(await session.page.locator(SHOWN[ui]).count(), 0, "no code editor is on the screen after Done");
+    assert.deepEqual(await session.call("seEditor.scan()"), NO_EDITOR, "a closed dialog is no open editor");
+    assert.deepEqual(await session.call("seEditor.done()"), NO_EDITOR);
+
+    // The next editor opens at once, and what it shows is what Done kept.
+    assert.deepEqual(await session.call("seEditor.open('minimal')"), {ok: true});
+    assert.equal(await session.page.locator(SHOWN[ui]).count(), 1, "one code editor is on the screen again");
+    const again = await session.call("seEditor.scan()");
+    assert.equal(again.ok, true, JSON.stringify(again));
+    assert.deepEqual(Object.values(again.tabs).map((value) => value.split(" ")[0]), ["NEW", "NEW", "NEW", "NEW"]);
+    assert.deepEqual(await session.call("seEditor.done()"), {ok: true});
+
+    const state = await session.state();
+    assert.deepEqual(codeOf(state, "minimal"), normalized(NEW));
+    assert.deepEqual(codeOf(state, "halloween"), normalized(OLD), "the other widget is untouched");
+    assert.deepEqual({saves: state.saves, opens: state.opens, dones: state.dones, writes: state.writes}, {saves: 0, opens: 2, dones: 2, writes: 4});
+    assert.equal(await session.page.locator(IN_PAGE[ui]).count(), ui === "react" ? 2 : 0, "the fixture's React dialog stays in the page, hidden; the AngularJS one leaves");
+  });
+
+  test(`${ui} editor: run moves every widget, never saves, and the canvas shows each one`, {timeout: 60_000}, async (t) => {
+    const session = await editor(t, [widget("minimal"), widget("halloween", OLD, {speed: 9, theme: "dark"})], {ui: markup});
+    if (!session) return;
+    assert.equal((await upload(session)).ok, true);
+    const result = await session.call("seEditor.run(['minimal', 'halloween'])");
+    const written = {html: "written", css: "written", js: "written", fields: "written"};
+    assert.deepEqual(result, {
+      ok: true,
+      widgets: [{name: "minimal", ok: true, tabs: written}, {name: "halloween", ok: true, tabs: written}],
+      canvas: {widgets: 2, js: count({NEW: 2}), css: count({NEW: 2})},
+      left: 0
+    });
+    const state = await session.state();
+    for (const name of ["minimal", "halloween"]) assert.deepEqual(codeOf(state, name), normalized(NEW), `${name} has the new code`);
+    assert.deepEqual(state.widgets.map(({fieldData}) => fieldData), [{speed: 3}, {speed: 9, theme: "dark"}], "DATA is never written");
+    assert.deepEqual({saves: state.saves, opens: state.opens, dones: state.dones, writes: state.writes}, {saves: 0, opens: 2, dones: 2, writes: 8});
+    assert.equal(await session.page.locator(SHOWN[ui]).count(), 0);
+    assert.equal((await session.call("seEditor.canvas()")).ok, true);
+    assert.deepEqual(session.requests.filter((url) => !url.startsWith("blob:")), [markup ? `${EDITOR}?ui=${markup}` : EDITOR]);
+  });
+
+  test(`${ui} editor: a widget with code from neither commit writes nothing and leaves the editor open`, {timeout: 60_000}, async (t) => {
+    const edited = {...OLD, js: "window.addEventListener('onWidgetLoad', () => { mine(); });\n"};
+    const session = await editor(t, [widget("halloween", edited), widget("Paste")], {ui: markup});
+    if (!session) return;
+    assert.equal((await upload(session)).ok, true);
+    assert.deepEqual(await session.call("seEditor.open('halloween')"), {ok: true});
+    const scanned = await session.call("seEditor.scan()");
+    assert.equal(scanned.ok, false);
+    assert.deepEqual(Object.fromEntries(Object.entries(scanned.tabs).map(([tab, value]) => [tab, value.split(" ")[0]])), {html: "OLD", css: "OLD", js: "OTHER", fields: "OLD"});
+    const applied = await session.call("seEditor.apply()");
+    assert.equal(applied.ok, false);
+    assert.match(applied.error, /^Unexpected code in js: nothing was written\.$/);
+    assert.equal((await session.state()).writes, 0);
+    assert.equal(await session.page.locator(SHOWN[ui]).count(), 1, "the editor stays open to look at");
+    assert.match((await session.call("seEditor.open('Paste')")).error, /A code editor is already open/);
+    assert.deepEqual(await session.call("seEditor.done()"), {ok: true});
+    assert.equal(await session.page.locator(SHOWN[ui]).count(), 0);
+    assert.deepEqual(codeOf(await session.state(), "halloween"), normalized(edited), "Done kept the code as it was");
+  });
+}
 
 // A widget's field panel, with each kind of field, for setField and readField. They need no plan.
 const ITEMS = "Items (comma-separated)";
