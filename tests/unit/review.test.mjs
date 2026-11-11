@@ -37,6 +37,21 @@ test("review tags are the recipe id's initials, with a digit for a repeat in the
   });
 });
 
+test("review tags skip a tag another recipe already has, as the review page does, and keep every other tag", () => {
+  // `c` is the second `C`, and `cover-2`'s initials are `C2`: the later one takes the lowest free digit.
+  assert.deepEqual(Object.fromEntries(reviewTags(["cover", "c", "cover-2"])), {cover: "C", c: "C2", "cover-2": "C3"});
+  // `cap` keeps the `C3` the count gives it, so `cover-2` skips it too; a repeat of `cover-2` keeps its new tag.
+  assert.deepEqual(Object.fromEntries(reviewTags(["cover", "c", "cover-2", "cap", "cover-2", "listing-tutorial"])), {
+    cover: "C",
+    c: "C2",
+    "cover-2": "C4",
+    cap: "C3",
+    "listing-tutorial": "LT"
+  });
+  // The first recipe with a tag keeps it, whichever way it got it.
+  assert.deepEqual(Object.fromEntries(reviewTags(["cover-2", "cover", "c"])), {"cover-2": "C2", cover: "C", c: "C3"});
+});
+
 test("review codes number screenshots first, then videos, stills, thumbnails, and the contact sheet", () => {
   const entries = [
     {
