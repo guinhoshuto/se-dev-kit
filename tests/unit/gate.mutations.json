@@ -1,0 +1,148 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/gate.mjs",
+      "from": "    {name: 'npm test', command: 'npm', args: ['test']},\n    {name: 'build', command: 'node', args: [SLOT, 'run', '--repo', root, '--', 'npm', 'run', 'build']},",
+      "to": "    {name: 'build', command: 'node', args: [SLOT, 'run', '--repo', root, '--', 'npm', 'run', 'build']},\n    {name: 'npm test', command: 'npm', args: ['test']},",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "{name: 'build', command: 'node', args: [SLOT, 'run', '--repo', root, '--', 'npm', 'run', 'build']}",
+      "to": "{name: 'build', command: 'npm', args: ['run', 'build']}",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "'run', '--repo', root, '--'",
+      "to": "'run', '--'",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "`${base}...HEAD`",
+      "to": "`${base}..HEAD`",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "/^tests\\/.+\\.mutations\\.json$/",
+      "to": "/^.+\\.mutations\\.json$/",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "'--diff-filter=d', ",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "if (failed) {results.push({step, status: 'not run', shown: ''}); continue;}",
+      "to": "if (false) {results.push({step, status: 'not run', shown: ''}); continue;}",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "FAILED at ${failed.step.name}: ${failed.shown}",
+      "to": "FAILED at ${failed.step.name}.",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "result.below = output.match(/^NOT COVERED: .+$/gm) ?? [];",
+      "to": "result.below = [];",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "code = EXIT.notCovered;",
+      "to": "code = EXIT.passed;",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "if (logs) result.extra.push(`Logs: ${logs[1]}`);",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "if (killed) result.extra.push(killed[0]);",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "if (dirty.length) {",
+      "to": "if (false) {",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "if (now.commit !== commit || now.dirty.length) {",
+      "to": "if (false) {",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "chrome(plan) ? [SLOT, 'run', '--', 'node', ...mutate] : mutate",
+      "to": "mutate",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "opensChrome(mutation.test)",
+      "to": "false",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "entry.isFile() && ",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "log(`${clock()} gate ${commit} · ${step.name} …`);",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "if (dirty.length) log(",
+      "to": "if (false) log(",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "else throw new UsageError(`Unknown argument ${arg}. Run with --help.`);",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "const {commit, dirty} = gitState(root);\n  if (dirty.length) {",
+      "to": "const {commit, dirty} = gitState(root);\n  await mkdir(join(root, '.cache'), {recursive: true});\n  if (dirty.length) {",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "`npm run gate` (`npm run typecheck`",
+      "to": "`npm run typecheck`",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "each step's log in `.cache/gate/<commit>/`",
+      "to": "each step's log in its own file",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "package.json",
+      "from": "\"gate\": \"node scripts/gate.mjs\"",
+      "to": "\"gate\": \"node scripts/run-tests.mjs\"",
+      "test": "tests/unit/gate.test.mjs"
+    }
+  ]
+}

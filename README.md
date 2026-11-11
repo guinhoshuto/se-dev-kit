@@ -89,6 +89,8 @@ npm run build
 npm run verify:bundle
 ```
 
+`npm run gate` runs the four in order, the build in the render-slot queue, then the branch's changed mutation plans, and stops at the first failure.
+
 `verify:bundle` checks that the traced sample media list, import, preview, job, and workflow functions and the npm package contain every file in `sample-media/manifest.json`.
 
 For the production-browser workflow, keep this server running in one terminal:
