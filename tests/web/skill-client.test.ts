@@ -476,15 +476,22 @@ test('fontIssues reads only a manifest or test report, and tolerates what is not
 
 const PNG_3X2 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGM4YVMBQQxwFgBbBAjpVFBn5QAAAABJRU5ErkJggg==', 'base64');
 
-/** A widget with a local Studio config shaped like se-windows: catalog and media under studio/, scenes with /__sws/widget/ media. */
-async function configuredWidget(root: string, scenes = 2) {
+/** The se-matrix-chat fixture of 2026-11-07: the test run passed, the video render failed on this emote URL. */
+const EMOTE_URL_FIXTURE = {schemaVersion: 1, id: 'chat', name: 'Chat', events: [{atMs: 0, listener: 'message', event: {data: {text: 'hello Kappa', emotes: [{type: 'twitch', name: 'Kappa', id: '25', urls: {1: 'https://emotes.invalid/broken.png'}}]}}}]};
+const SAMPLE_FIXTURE = {schemaVersion: 1, id: 'chat', name: 'Chat', events: [{atMs: 0, listener: 'message', event: {data: {text: 'hello', avatar: 'sws-sample:avatars/pixel-1.png'}}}]};
+const NETWORK_URL_WARNING = '[se-widget-studio] Warning FIXTURE_NETWORK_URL: External URLs in test data: fixture "chat" uses https://emotes.invalid/broken.png. Runtime network is blocked: a widget that loads one of these fails the video render with VIDEO_RUNTIME_ERROR, even after the test run passed. Use a sws-sample: reference or a widget file instead.\n';
+
+/** A widget with a local Studio config shaped like se-windows: catalog and media under studio/, scenes with /__sws/widget/ media, and this fixture. */
+async function configuredWidget(root: string, scenes = 2, fixture?: object) {
+  const fixtures = fixture ? ' fixtures: {glob: "studio/fixtures/*.json"},' : '';
   const files: Record<string, string | Buffer> = {
     'index.html': '<main id="stage"></main>', 'style.css': 'body{margin:0}', 'script.js': 'window.ready = true;',
     'fields.json': JSON.stringify({gallery: {type: 'image-input', multiple: true, value: []}}),
-    'se-widget-studio.config.mjs': `export default {schemaVersion: 1, widget: {root: ".", assets: ["studio/media/**/*"], viewport: {width: 640, height: 360}}, themes: {glob: "studio/themes/*.json"}, scenes: {glob: "studio/scenes/*.json"}, recipes: {glob: "studio/recipes/*.json"}, output: {root: "thumb-assets"}};\n`,
+    'se-widget-studio.config.mjs': `export default {schemaVersion: 1, widget: {root: ".", assets: ["studio/media/**/*"], viewport: {width: 640, height: 360}}, themes: {glob: "studio/themes/*.json"},${fixtures} scenes: {glob: "studio/scenes/*.json"}, recipes: {glob: "studio/recipes/*.json"}, output: {root: "thumb-assets"}};\n`,
     'studio/themes/night.json': JSON.stringify({schemaVersion: 1, id: 'night', name: 'Night', fieldData: {accent: '#123456'}}),
     'studio/recipes/stills.json': JSON.stringify({schemaVersion: 1, id: 'stills', name: 'Stills', scenes: ['scene-0'], outputs: {screenshots: true}}),
-    'studio/media/a.png': PNG_3X2, 'studio/media/b.png': PNG_3X2
+    'studio/media/a.png': PNG_3X2, 'studio/media/b.png': PNG_3X2,
+    ...(fixture ? {'studio/fixtures/chat.json': JSON.stringify(fixture)} : {})
   };
   for (let index = 0; index < scenes; index += 1) {
     files[`studio/scenes/scene-${index}.json`] = JSON.stringify({schemaVersion: 1, id: `scene-${index}`, name: `Scene ${index}`, theme: 'night', fieldData: {gallery: ['/__sws/widget/studio/media/a.png', 'studio/media/b.png']}});
@@ -520,6 +527,23 @@ test('catalog flattens a local Studio config with the checkout engine, and refus
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test('catalog --config prints the validate warning about an external URL in the test data on stderr, and still writes the catalog', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-catalog-network-'));
+  try {
+    const out = join(root, 'emote.json');
+    const emote = await exec(process.execPath, [script, 'catalog', '--config', await configuredWidget(join(root, 'emote'), 2, EMOTE_URL_FIXTURE), '--out', out]);
+    assert.ok(emote.stderr.includes(NETWORK_URL_WARNING), emote.stderr);
+    assert.doesNotMatch(emote.stdout, /FIXTURE_NETWORK_URL/, 'stdout stays the JSON answer');
+    assert.equal(JSON.parse(emote.stdout).status, 'written');
+    assert.deepEqual(JSON.parse(await readFile(out, 'utf8')).fixtures.map((item: {id: string}) => item.id), ['chat']);
+    // Test data that names only sws-sample: references prints no such line; a dirty dist/ may still add BUILD_* lines.
+    const sample = await exec(process.execPath, [script, 'catalog', '--config', await configuredWidget(join(root, 'sample'), 2, SAMPLE_FIXTURE), '--out', join(root, 'sample.json')]);
+    assert.doesNotMatch(sample.stderr, /FIXTURE_NETWORK_URL/);
+    assert.equal(sample.stderr.split('\n').filter(line => line && !/^\[se-widget-studio\] Warning BUILD_/.test(line)).length, 0, sample.stderr);
+    assert.equal(JSON.parse(sample.stdout).status, 'written');
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test('import --config uploads the widget files and submits the flattened catalog with widget-relative media', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sws-skill-import-config-'));
   let submitted: any; let finalized: any;
@@ -543,12 +567,15 @@ test('import --config uploads the widget files and submits the flattened catalog
     response.statusCode = 500; response.end(JSON.stringify({error: 'Unexpected test route.'}));
   });
   try {
-    const config = await configuredWidget(join(root, 'widget'), 3);
+    // The fixture's emote URL warns on stderr; --recipes leaves the fixture out of the catalog, not out of the warning.
+    const config = await configuredWidget(join(root, 'widget'), 3, EMOTE_URL_FIXTURE);
     await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
     const address = server.address(); assert.ok(address && typeof address === 'object');
     const origin = `http://127.0.0.1:${address.port}`;
     const access = join(root, 'access.private.json');
-    const {stdout} = await exec(process.execPath, [script, 'import', '--config', config, '--recipes', 'stills', '--origin', origin, '--access-out', access], {env: {...process.env, STUDIO_CREATE_KEY: undefined}});
+    const {stdout, stderr} = await exec(process.execPath, [script, 'import', '--config', config, '--recipes', 'stills', '--origin', origin, '--access-out', access], {env: {...process.env, STUDIO_CREATE_KEY: undefined}});
+    assert.ok(stderr.includes(NETWORK_URL_WARNING), stderr);
+    assert.deepEqual(submitted.fixtures, []);
     assert.deepEqual(JSON.parse(stdout), {status: 'ready', projectId: 'project-test', revisionId: 'revision-ready', accessFile: access, uploadedAssets: 2, editorAvailable: true});
     assert.equal(submitted.name, 'widget');
     assert.equal(submitted.widget.html, '<main id="stage"></main>');

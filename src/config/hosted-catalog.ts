@@ -3,6 +3,7 @@ import {readFile} from "node:fs/promises";
 import {dirname, resolve} from "node:path";
 import type {
   CatalogItem,
+  Diagnostic,
   FieldUpdateMode,
   FixtureDefinition,
   JsonObject,
@@ -20,6 +21,7 @@ import {widgetRouteKey} from "../shared/widget-route.js";
 import {buildAssetMap} from "../server/assets.js";
 import {loadProject} from "./load.js";
 import {loadSampleMediaCatalog} from "./sample-media.js";
+import {networkUrlDiagnostics} from "../validation/network-urls.js";
 
 /** The two production layouts a hosted snapshot reads (lib/importer.ts drops their own link and script tags). */
 const HOSTED_LAYOUTS: ResolvedWidgetFiles[] = [
@@ -211,12 +213,22 @@ export async function hostedCatalog(
   };
 }
 
-/** Loads a `se-widget-studio.config.mjs` as the local CLI does and flattens it; the skill client's `--config`. */
+/**
+ * Loads a `se-widget-studio.config.mjs` as the local CLI does and flattens it; the skill client's `--config`.
+ * `diagnostics` holds the `validate` warnings about the whole project's test data (also with `recipes`).
+ */
 export async function hostedCatalogFromConfig(
   configPath: string,
   options: HostedCatalogOptions = {}
-): Promise<{widgetRoot: string; files: ResolvedWidgetFiles; catalog: HostedCatalog; samples: HostedSampleCopy[]}> {
+): Promise<{
+  widgetRoot: string;
+  files: ResolvedWidgetFiles;
+  catalog: HostedCatalog;
+  samples: HostedSampleCopy[];
+  diagnostics: Diagnostic[];
+}> {
   const absolute = resolve(configPath);
   const project = await loadProject({inputDirectory: dirname(absolute), configPath: absolute});
-  return {widgetRoot: project.widgetRoot, files: project.relativeFiles, ...(await hostedCatalog(project, options))};
+  const diagnostics = networkUrlDiagnostics(project);
+  return {widgetRoot: project.widgetRoot, files: project.relativeFiles, ...(await hostedCatalog(project, options)), diagnostics};
 }

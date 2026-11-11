@@ -1,0 +1,60 @@
+{
+  "mutations": [
+    {
+      "file": "src/config/hosted-catalog.ts",
+      "from": "const diagnostics = networkUrlDiagnostics(project);",
+      "to": "const diagnostics: Diagnostic[] = [];",
+      "test": "tests/unit/hosted-catalog.test.mjs",
+      "name": "the catalog comes with the validate warning"
+    },
+    {
+      "file": "src/config/hosted-catalog.ts",
+      "from": "const diagnostics = networkUrlDiagnostics(project);",
+      "to": "const diagnostics: Diagnostic[] = [];",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "catalog --config prints the validate warning"
+    },
+    {
+      "file": "src/config/hosted-catalog.ts",
+      "from": "const project = await loadProject({inputDirectory: dirname(absolute), configPath: absolute});\n  const diagnostics",
+      "to": "const project = await loadProject({inputDirectory: dirname(absolute), configPath: absolute});\n  if (options.recipes) project.fixtures = [];\n  const diagnostics",
+      "test": "tests/unit/hosted-catalog.test.mjs",
+      "name": "the catalog comes with the validate warning"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "  for (const diagnostic of result.diagnostics ?? []) process.stderr.write(`[se-widget-studio] Warning ${diagnostic.code}: ${diagnostic.detail}${diagnostic.hint ? ` ${diagnostic.hint}` : ''}\\n`);",
+      "to": "",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "catalog --config prints the validate warning"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "  for (const diagnostic of result.diagnostics ?? []) process.stderr.write(`[se-widget-studio] Warning ${diagnostic.code}: ${diagnostic.detail}${diagnostic.hint ? ` ${diagnostic.hint}` : ''}\\n`);",
+      "to": "",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "import --config uploads the widget files"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "for (const diagnostic of result.diagnostics ?? []) process.stderr.write(",
+      "to": "for (const diagnostic of result.diagnostics ?? []) process.stdout.write(",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "catalog --config prints the validate warning"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "Warning ${diagnostic.code}: ${diagnostic.detail}",
+      "to": "Warning: ${diagnostic.detail}",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "catalog --config prints the validate warning"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "${diagnostic.detail}${diagnostic.hint ? ` ${diagnostic.hint}` : ''}",
+      "to": "${diagnostic.detail}",
+      "test": "tests/web/skill-client.test.ts",
+      "name": "catalog --config prints the validate warning"
+    }
+  ]
+}

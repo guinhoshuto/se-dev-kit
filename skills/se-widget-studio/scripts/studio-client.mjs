@@ -162,7 +162,8 @@ function recipeIds(value) {
 /**
  * Reads a se-widget-studio.config.mjs with the engine of the Studio checkout this skill runs from, exactly as
  * the local CLI loads it, and flattens it into an import catalog. The config is trusted local code, as for the
- * CLI; nothing is sent anywhere. Warns when that engine build is dirty or older than its source.
+ * CLI; nothing is sent anywhere. Warns when that engine build is dirty or older than its source, and when the
+ * test data names an external URL (FIXTURE_NETWORK_URL, as validate does), which the render blocks.
  */
 export async function configCatalog(configPath, {recipes, engineDist = ENGINE_DIST} = {}) {
   const entry = resolve(engineDist, 'config/hosted-catalog.js');
@@ -173,6 +174,8 @@ export async function configCatalog(configPath, {recipes, engineDist = ENGINE_DI
   let result;
   try {result = await hostedCatalogFromConfig(resolve(configPath), recipes ? {recipes} : {});}
   catch (error) {fail(`${error instanceof Error ? error.message : String(error)}${error?.hint ? ` ${error.hint}` : ''}`);}
+  // An engine build older than these diagnostics returns none, and the catalog is written without the warning.
+  for (const diagnostic of result.diagnostics ?? []) process.stderr.write(`[se-widget-studio] Warning ${diagnostic.code}: ${diagnostic.detail}${diagnostic.hint ? ` ${diagnostic.hint}` : ''}\n`);
   const over = ['themes', 'fixtures', 'scenes', 'scenarios', 'recipes'].filter(kind => result.catalog[kind].length > CATALOG_LIMIT);
   check(over.length === 0, `A Studio revision holds at most ${CATALOG_LIMIT} of each catalog kind, and this config has ${over.map(kind => `${result.catalog[kind].length} ${kind}`).join(', ')}. Pass --recipes <id,...> to keep only those recipes and the scenes, themes, and fixtures they use.`);
   // An engine build older than sample-copy detection returns no samples and uploads every widget file, as before.

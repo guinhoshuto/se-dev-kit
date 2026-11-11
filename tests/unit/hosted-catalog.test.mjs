@@ -174,3 +174,34 @@ test("the PNG originals that sample-media/ was converted from stand for every co
     assert.ok(!manifest.items.some((item) => item.sha256 === sha256), `${reference}: an original is not the sample's own bytes`);
   }
 });
+
+test("the catalog comes with the validate warning about external URLs in the whole project's test data", async (t) => {
+  // The se-matrix-chat fixture of 2026-11-07: the test run passed, the video render failed on this emote URL.
+  const withFixtures = CONFIG.replace('  scenes: {glob:', '  fixtures: {glob: "studio/fixtures/*.json"},\n  scenes: {glob:');
+  const config = await widget(t, {
+    "se-widget-studio.config.mjs": withFixtures,
+    "studio/fixtures/chat.json": JSON.stringify({
+      schemaVersion: 1, id: "chat", name: "Chat",
+      events: [{atMs: 0, listener: "message", event: {data: {text: "hello Kappa", emotes: [{type: "twitch", name: "Kappa", id: "25", urls: {1: "https://emotes.invalid/broken.png"}}]}}}]
+    })
+  });
+  const warning = {
+    status: "warning",
+    code: "FIXTURE_NETWORK_URL",
+    detail: 'External URLs in test data: fixture "chat" uses https://emotes.invalid/broken.png.',
+    hint: "Runtime network is blocked: a widget that loads one of these fails the video render with VIDEO_RUNTIME_ERROR, even after the test run passed. Use a sws-sample: reference or a widget file instead."
+  };
+  const {catalog, diagnostics} = await hostedCatalogFromConfig(config);
+  assert.deepEqual(ids(catalog.fixtures), ["chat"]);
+  assert.deepEqual(diagnostics, [warning]);
+  // --recipes narrows the catalog, not the warning: the project's test data is the same.
+  const narrowed = await hostedCatalogFromConfig(config, {recipes: ["stills"]});
+  assert.deepEqual(narrowed.catalog.fixtures, []);
+  assert.deepEqual(narrowed.diagnostics, [warning]);
+});
+
+test("a catalog whose media are widget files and sws-sample: references comes with no diagnostic", async (t) => {
+  const {catalog, diagnostics} = await hostedCatalogFromConfig(await widget(t));
+  assert.ok(catalog.scenes.some((scene) => JSON.stringify(scene).includes("sws-sample:gallery/streamer-1-blur.jpg")));
+  assert.deepEqual(diagnostics, []);
+});
