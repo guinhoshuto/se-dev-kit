@@ -25,7 +25,7 @@
   const out = (result) => JSON.stringify(result);
   if (!api || api.version !== 1 || !api.core) return out({ok: false, error: 'Load se-editor-read.js in this tab first.'});
   const {TABS, plan, short, tabHash, status, canvasState, noPlan} = api.core;
-  // Each tab's name in the code editor (the name of its li.md-nav-item), and the Monaco language of its model.
+  // Each tab's name in the code editor (the name of its li.md-nav-item, the text of its React tab button), and the Monaco language of its model.
   const NAV = {html: 'html', css: 'css', js: 'js', fields: 'fields'};
   const LANGUAGE = {html: 'html', css: 'css', js: 'javascript', fields: 'json'};
   const INPUT_ID = 'se-editor-update-files';
@@ -49,9 +49,19 @@
       await sleep(50);
     }
   };
-  // AngularJS Material keeps the click handler on the <button> it renders inside li.md-nav-item and md-button.
+  // AngularJS Material keeps the click handler on the <button> it renders inside li.md-nav-item and md-button; the React tab is the button.
   const press = (el) => (el.matches('button') ? el : el.querySelector('button') || el).click();
-  const dialog = () => document.querySelector('md-dialog.code-editor-dialog');
+  // The code editor is AngularJS Material's md-dialog or, since StreamElements' redesign (seen 2026-11-11), a React dialog holding a Monaco editor.
+  // A React dialog that is closing can still be in the page, so only a dialog with a client rect counts as open.
+  const dialog = () => document.querySelector('md-dialog.code-editor-dialog')
+    || [...document.querySelectorAll('[role="dialog"]')].find((el) => el.querySelector('.monaco-editor') && el.getClientRects().length > 0)
+    || null;
+  const tabButton = (box, tab) => box.querySelector(`.md-nav-item[name="${NAV[tab]}"]`)
+    || [...box.querySelectorAll('[role="tab"]')].find((el) => el.textContent.trim().toLowerCase() === NAV[tab])
+    || null;
+  const doneButton = (box) => box.querySelector('.exit-code-editor')
+    || [...box.querySelectorAll('button:not([role="tab"])')].find((el) => el.textContent.trim() === 'Done')
+    || null;
   const openEditorButton = () => document.querySelector('.custom-event-list-editor-button-container button');
   const hidden = () => (document.visibilityState === 'visible' ? null
     : {ok: false, error: 'The editor tab is in the background, where its timers stall: bring it to the front and call again.'});
@@ -111,7 +121,7 @@
     }
     const found = {};
     for (const tab of TABS) {
-      const item = box.querySelector(`.md-nav-item[name="${NAV[tab]}"]`);
+      const item = tabButton(box, tab);
       if (!item) return {ok: false, error: `The code editor has no ${tab} tab.`};
       press(item);
       const models = await waitFor(() => {
@@ -176,7 +186,7 @@
   const done = async () => {
     const box = dialog();
     if (!box) return {ok: false, error: 'No code editor is open.'};
-    const button = box.querySelector('.exit-code-editor');
+    const button = doneButton(box);
     if (!button) return {ok: false, error: 'The code editor has no Done button.'};
     press(button);
     return (await waitFor(() => !dialog(), 3000)) ? {ok: true} : {ok: false, error: 'The code editor did not close after Done.'};
