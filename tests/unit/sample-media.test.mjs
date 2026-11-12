@@ -179,6 +179,10 @@ test("the reference grammar accepts only whole, normalized sample file reference
 test("the skill documents every published sample reference and never a retired one", async () => {
   const reference = await readFile(join(repositoryRoot, "skills/se-widget-studio/references/catalog-authoring.md"), "utf8");
   for (const item of manifest.items) assert.ok(reference.includes(item.reference), `${item.reference} missing from catalog-authoring.md`);
+  for (const item of manifest.items.filter((entry) => entry.kind === "gallery" || entry.kind === "backdrop")) {
+    const row = reference.split("\n").find((line) => line.startsWith(`| \`${item.reference}\` |`));
+    assert.ok(row?.includes(`| \`${item.color}\` |`), `${item.reference} must pair with its manifest color ${item.color} in catalog-authoring.md`);
+  }
   const skillRoot = join(repositoryRoot, "skills/se-widget-studio");
   const skillFiles = (await readdir(skillRoot, {recursive: true})).filter((file) => /\.(md|mjs)$/.test(file));
   assert.ok(skillFiles.length > 3, "the skill files were not found");

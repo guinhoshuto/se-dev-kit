@@ -40,11 +40,11 @@ A shipped theme (each `.data.json`, each `.json` without one, and a root `data.j
 
 Never generate, download, draw, or upload images or videos just to test a widget. The Studio ships sample photos, backdrops, avatars, and a video clip, and every mode (Studio preview, Studio jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
 
-| Gallery reference (1672x941, landscape) | Shows |
-|---|---|
-| `sws-sample:gallery/streamer-2.jpg` | Webcam shot of a smiling streamer with black bangs, headphones, and a mic in a dim purple-lit room |
-| `sws-sample:gallery/streamer-1-blur.jpg` | Heavily blurred webcam shot of a streamer with dark brown hair and a cream sweater in a mauve room with pink and violet lights |
-| `sws-sample:gallery/streamer-2-blur.jpg` | Heavily blurred `streamer-2`: black hair and top in a dark purple room with a pink and blue light |
+| Gallery reference (1672x941, landscape) | Pair with `color` | Shows |
+|---|---|---|
+| `sws-sample:gallery/streamer-2.jpg` | `#362a40` | Webcam shot of a smiling streamer with black bangs, headphones, and a mic in a dim purple-lit room |
+| `sws-sample:gallery/streamer-1-blur.jpg` | `#7e6567` | Heavily blurred webcam shot of a streamer with dark brown hair and a cream sweater in a mauve room with pink and violet lights |
+| `sws-sample:gallery/streamer-2-blur.jpg` | `#392c43` | Heavily blurred `streamer-2`: black hair and top in a dark purple room with a pink and blue light |
 
 | Backdrop reference (1254x1254, drawn with cover) | Tone | Pair with `color` | Shows |
 |---|---|---|---|
