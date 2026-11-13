@@ -50,6 +50,13 @@ const CLASS_RULE_PROPERTIES = new Set([
 ]);
 
 const CLASS_SELECTOR = /^\.[A-Za-z_-][A-Za-z0-9_-]*$/;
+/**
+ * Google's color-font marker, `body { --google-font-color-notocoloremoji:colrv1; }`, which ends the
+ * Noto Color Emoji stylesheet (recorded 2026-11-13): one custom property per color family, naming the
+ * color technology served (`colrv1`). It sets no style, so it is accepted as is.
+ */
+const COLOR_MARKER_PROPERTY = /^--google-font-color-[a-z0-9]+$/;
+const COLOR_MARKER_VALUE = /^[a-z0-9]+$/;
 const FORBIDDEN_SCHEME = /(?:^|[\s(,'"])(?:data|javascript)\s*:/i;
 const SRC_ENTRY = /^url\(\s*(['"]?)([^'"()\s\\]+)\1\s*\)(?:\s+format\(\s*(['"]?)([A-Za-z0-9-]+)\3\s*\))?$/i;
 
@@ -116,6 +123,20 @@ function readFontFace(nodes: readonly ChildNode[]): GoogleFontFile[] {
   }));
 }
 
+function isColorFontMarker(selector: string, nodes: readonly ChildNode[]): boolean {
+  if (selector.trim() !== "body") return false;
+  const declarations = onlyDeclarations(nodes, "Rule body");
+  return (
+    declarations.length > 0 &&
+    declarations.every(
+      (declaration) =>
+        !declaration.important &&
+        COLOR_MARKER_PROPERTY.test(declaration.prop) &&
+        COLOR_MARKER_VALUE.test(declaration.value.trim())
+    )
+  );
+}
+
 function checkClassRule(selector: string, nodes: readonly ChildNode[]): void {
   if (!CLASS_SELECTOR.test(selector.trim())) reject(`Rule selector ${selector.slice(0, 80)} is not a single class.`);
   for (const declaration of onlyDeclarations(nodes, `Rule ${selector}`)) {
@@ -130,7 +151,8 @@ function checkClassRule(selector: string, nodes: readonly ChildNode[]): void {
 /**
  * Validates a stylesheet returned by fonts.googleapis.com and lists the font files it references.
  * Accepts `@font-face` rules whose `src` points only to fonts.gstatic.com `/s/`, plus class rules
- * without `url()` limited to font and text properties (Material Symbols). Rejects `@import`, every
+ * without `url()` limited to font and text properties (Material Symbols), and Google's color-font
+ * marker on `body` (Noto Color Emoji). Rejects `@import`, every
  * other at-rule, `data:`, `javascript:` and any other `url()`.
  */
 export function validateGoogleCss(input: string | Uint8Array): GoogleCssValidation {
@@ -158,6 +180,7 @@ export function validateGoogleCss(input: string | Uint8Array): GoogleCssValidati
         continue;
       }
       if (node.type === "rule") {
+        if (isColorFontMarker(node.selector, node.nodes)) continue;
         checkClassRule(node.selector, node.nodes);
         classRules += 1;
         continue;

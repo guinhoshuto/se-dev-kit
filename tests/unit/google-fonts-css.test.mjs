@@ -69,6 +69,29 @@ test("Material Symbols class rules without url() are accepted", async () => {
   assert.equal(result.files[0].descriptors["font-family"], "'Material Symbols Outlined'");
 });
 
+test("Noto Color Emoji css2 with Google's body color-font marker is accepted", async () => {
+  // Recorded with GOOGLE_FONTS_UA on 2026-11-13; it ends with `body { --google-font-color-notocoloremoji:colrv1; }`.
+  const css = await fixture("noto-color-emoji-css2.css");
+  assert.match(css, /body \{\s*--google-font-color-notocoloremoji:colrv1;\s*\}/);
+  const result = validateGoogleCss(css);
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.files.length, 11);
+  assert.equal(result.classRules, 0);
+  assert.ok(result.files.every((file) => file.descriptors["font-family"] === "'Noto Color Emoji'"));
+});
+
+test("the body marker allows only --google-font-color-* properties with a plain technology name", () => {
+  assert.equal(validateGoogleCss(`body {\n  --google-font-color-notocoloremoji:colrv1;\n}\n`).ok, true);
+  assert.equal(validateGoogleCss(`body { --google-font-color-a: colrv1; --google-font-color-b: sbix; }`).ok, true);
+  invalid(`body { --google-font-color-notocoloremoji: colrv1; color: red; }`, /not a single class/);
+  invalid(`body { --google-font-color-notocoloremoji: url(https://example.com/a.png); }`, /not a single class/);
+  invalid(`body { --google-font-color-notocoloremoji: colrv1 !important; }`, /not a single class/);
+  invalid(`body { --other-property: colrv1; }`, /not a single class/);
+  invalid(`html { --google-font-color-notocoloremoji: colrv1; }`, /not a single class/);
+  invalid(`body, .a { --google-font-color-notocoloremoji: colrv1; }`, /not a single class/);
+  invalid(`body { }`, /not a single class/);
+});
+
 test("bytes are accepted as UTF-8 and the 1 MB limit applies", async () => {
   const bytes = new TextEncoder().encode(await fixture("archivo-ital-wght-css2.css"));
   assert.equal(validateGoogleCss(bytes).ok, true);
