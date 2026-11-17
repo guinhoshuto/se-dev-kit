@@ -52,15 +52,18 @@ Ask once, in one AskUserQuestion box: name the product note the link comes from,
    - `ok: true` with `left: 0` means every widget in the canvas has the new JS and CSS. A `left` above 0 is a widget still on the old commit: a layer not named, or one the editor did not open. Find it before the Save.
    - The canvas proves only JS and CSS, so read the four tabs back for the first widget written (on 2026-11-11 this proved all four, on the test overlay of se-wheel's Ashley build, before the Save): `await seEditor.open(name)`, `await seEditor.scan()` (all four tabs `NEW`), then `await seEditor.done()`. Do it before the Save.
    - When `run` cannot select or open a layer (no Open Editor button, a name that two layers share), open that layer's code editor by ref (`find`, then a click on the ref, never by coordinates), then `await seEditor.apply()` and `await seEditor.done()`. `await seEditor.scan()` reads the tabs without writing.
+   - On 2026-11-17 `run` answered "shows no Open Editor button" for the only layer of se-auto-inc-bar's test overlay, also with its Settings group open and the button on screen: the click on the `Open Editor` ref opened the code editor once Settings was open (closed, the click did nothing), and `apply()` wrote it.
    - With more than about eight widgets, split the names across several `run` calls, so that no call nears the tool's time limit.
 
 ## Check the labels before the Save
 
 6. When FIELDS changed, run `seEditor.labels()` with a widget selected (after `run`, the last one is). Each label that the plan lists as new or reworded reads `whole`, or `cut` when it is wider than its box or runs past the panel's edge, and `panel.overflow` is false. A label in a closed group reads `closed group, fits` or `closed group, too wide`, an estimate: open that group by its arrow, measure again, and close the group, since open groups are saved with the overlay. Report every `cut` label, every overflow, and any other visual anomaly before the Save; an update with an anomaly has not passed.
 
+   On 2026-11-17 `labels()` answered `not found` for both new labels of se-auto-inc-bar while they showed in the open group (each a bare `span` in the field panel): measure them by their text instead, each leaf element whose `textContent` is the label, with `scrollWidth` against `clientWidth` and its right edge against its parent's, and say in the report that `labels()` missed them.
+
 ## Save once, then reload the same tab
 
-7. Say what is about to be saved, then click Save once (by ref). The Save went through when the overlay's PUT answers 200 in the network log, or when "Saved!" shows.
+7. Say what is about to be saved, then click Save once (by ref). The Save went through when the overlay's PUT answers 200 in the network log, or when "Saved!" shows. Claude in Chrome's network log kept the PUT `pending` for seconds after it ended on 2026-11-17: the page's Resource Timing says it, `performance.getEntriesByType("resource")` filtered on `kappa/v2/overlays/`, mapped to `responseStatus` and times only (a result with the URL comes back `[BLOCKED: Cookie/query string data]`).
 8. Check in the same tab: navigate it to the editor URL again, never with `force`. A navigation the page holds back means it still has unsaved changes: stop and report. After the reload, [load](#load-a-page-script) `se-editor-read.js` again, then `seEditor.use(<plan>)` and `await seEditor.canvas()`: `ok: true`, with every widget `NEW`, confirms the saved JS and CSS. A widget `UNVERIFIABLE` here is confirmed only by the hash check before Done, not by the canvas: say so in the report. HTML and FIELDS were checked by their hash before Done; after a FIELDS change, run `seEditor.labels()` again.
 
 ## Close the tab
