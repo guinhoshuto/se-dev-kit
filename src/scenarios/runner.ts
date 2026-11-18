@@ -1,4 +1,4 @@
-import type {Browser, BrowserContext, Frame, Page} from "playwright-core";
+import type {Browser, BrowserContext, CDPSession, Frame, Page} from "playwright-core";
 import type {
   FieldUpdateMode,
   FixtureDefinition,
@@ -341,6 +341,65 @@ async function frameLoadEvents(page: Page): Promise<{type: string; payload?: unk
   });
 }
 
+/** Real time between the two reads of each document timeline in `assertTimelineFrozen`. */
+const TIMELINE_CHECK_MS = 50;
+/** The CDP session that froze each page's timelines, kept attached for the page's life. */
+const timelineSessions = new WeakMap<Page, CDPSession>();
+
+/**
+ * Stops the document timeline of every frame the page holds, so CSS animations, transitions and Web
+ * Animations move only when `sampleFrameAnimations` sets their time: `page.clock` fakes timers, Date,
+ * performance and requestAnimationFrame, but not the native timeline, on which an animation shorter
+ * than a stall of the machine ended for real between two samples (#42). It sets the Animation domain's
+ * playback rate to 0 without enabling the domain, which would stream every animation over CDP. The
+ * widget frame shares the page's process, so the page's session reaches it; the check covers every
+ * frame in case one did not. The session stays attached for the page's life: detaching it sets the
+ * rate back to 1. A frame document that a `reload` field update creates keeps rate 0 (Chrome 157), so
+ * `updateFields` does not freeze again; tests/integration/animation-timeline.test.mjs checks it.
+ */
+export async function freezeDocumentTimeline(page: Page): Promise<void> {
+  let session = timelineSessions.get(page);
+  if (!session) {
+    session = await page.context().newCDPSession(page);
+    timelineSessions.set(page, session);
+  }
+  await session.send("Animation.setPlaybackRate", {playbackRate: 0});
+  await assertTimelineFrozen(page);
+}
+
+/** Fails with CAPTURE_TIMELINE_RUNNING when the document timeline of a frame of the page moves on real time. */
+export async function assertTimelineFrozen(page: Page, realWaitMs = TIMELINE_CHECK_MS): Promise<void> {
+  const frames = page.frames();
+  const read = () =>
+    Promise.all(
+      frames.map((frame) =>
+        frame.evaluate(() => {
+          const time = document.timeline.currentTime;
+          return typeof time === "number" ? time : null;
+        })
+      )
+    );
+  const before = await read();
+  await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, realWaitMs));
+  const after = await read();
+  const running = frames
+    .map((frame, index) => ({url: frame.url(), moved: (after[index] ?? 0) - (before[index] ?? 0)}))
+    .filter((entry) => entry.moved > 0);
+  if (running.length === 0) return;
+  throw new StudioError(
+    "CAPTURE_TIMELINE_RUNNING",
+    `The document timeline kept running after the capture froze it: ${running
+      .map((entry) => `${entry.url || "about:blank"} moved ${entry.moved.toFixed(1)} ms`)
+      .join("; ")} in ${realWaitMs} ms of real time.`,
+    "The capture sets each frame's timeline playback rate to 0 over CDP (Animation.setPlaybackRate) so only the frame sampler moves animations; a frame no CDP session reaches, or a session detached early, keeps it at 1. Report it with the Chrome version."
+  );
+}
+
+/**
+ * Sets every animation of every frame to its local time at `timelineMs`, from the sample that first saw it.
+ * One sampled at or past its end is finished, not paused there, so its `finished` promise resolves and its
+ * `finish`/`animationend` fire once, as chained code expects; finishing it again past its end changes nothing.
+ */
 export async function sampleFrameAnimations(page: Page, timelineMs: number): Promise<void> {
   await Promise.all(
     page.frames().map((frame) =>
@@ -351,8 +410,15 @@ export async function sampleFrameAnimations(page: Page, timelineMs: number): Pro
         for (const animation of document.getAnimations()) {
           const startedAt = starts.get(animation) ?? sampleTime;
           starts.set(animation, startedAt);
-          animation.pause();
-          animation.currentTime = Math.max(0, sampleTime - startedAt);
+          const local = Math.max(0, sampleTime - startedAt);
+          // Infinity for an infinite animation, which finish() refuses: it is always paused at its time.
+          const end = Number(animation.effect?.getComputedTiming().endTime ?? Infinity);
+          if (animation.playbackRate > 0 && local >= end) {
+            animation.finish();
+          } else {
+            animation.pause();
+            animation.currentTime = local;
+          }
         }
       }, timelineMs)
     )
@@ -432,6 +498,8 @@ export async function openScene(
     docKey
   }), readyTimeoutMs, readySelector, issues);
   await page.clock.setSystemTime(captureTime);
+  // Readiness ran on the live timeline; from here only the sampler moves animations.
+  await freezeDocumentTimeline(page);
   await sampleFrameAnimations(page, 0);
   const getFrame = () => {
     const frame = page.frames().find((candidate) => candidate.url().startsWith(`${server.frameOrigin}/__sws/frame/`));

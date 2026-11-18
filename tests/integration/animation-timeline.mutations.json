@@ -1,0 +1,52 @@
+{
+  "mutations": [
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "await session.send(\"Animation.setPlaybackRate\", {playbackRate: 0});",
+      "to": "await session.send(\"Animation.setPlaybackRate\", {playbackRate: 1});",
+      "test": "tests/integration/animation-timeline.test.mjs",
+      "name": "a 160 ms fade"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": ".filter((entry) => entry.moved > 0);",
+      "to": ".filter((entry) => entry.moved > Infinity);",
+      "test": "tests/integration/animation-timeline.test.mjs",
+      "name": "the timeline check fails"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "  await assertTimelineFrozen(page);\n}",
+      "to": "  await assertTimelineFrozen(page);\n  await session.detach();\n  timelineSessions.delete(page);\n}",
+      "test": "tests/integration/animation-timeline.test.mjs"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "            animation.finish();",
+      "to": "            animation.pause();\n            animation.currentTime = local;",
+      "test": "tests/integration/animation-timeline.test.mjs",
+      "name": "an animation sampled"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "local >= end",
+      "to": "local > end",
+      "test": "tests/integration/animation-timeline.test.mjs",
+      "name": "an animation sampled"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "            animation.finish();",
+      "to": "            animation.pause();\n            animation.finish();",
+      "test": "tests/integration/animation-timeline.test.mjs",
+      "name": "an animation sampled"
+    },
+    {
+      "file": "src/scenarios/runner.ts",
+      "from": "animation.playbackRate > 0 && local",
+      "to": "local",
+      "test": "tests/integration/animation-timeline.test.mjs",
+      "name": "an animation sampled"
+    }
+  ]
+}
