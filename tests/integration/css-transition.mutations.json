@@ -2,7 +2,7 @@
   "mutations": [
     {
       "file": "src/scenarios/runner.ts",
-      "from": "animation.currentTime = Math.max(0, sampleTime - startedAt);",
+      "from": "animation.currentTime = local;",
       "to": "animation.currentTime = 0;",
       "test": "tests/integration/css-transition.test.mjs"
     },
