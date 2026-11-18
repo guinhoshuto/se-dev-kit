@@ -1,14 +1,15 @@
 import {readFile} from "node:fs/promises";
 import {relative, sep} from "node:path";
 import vm from "node:vm";
-import type {Diagnostic, ResolvedProject} from "../types.js";
+import type {Diagnostic, JsonObject, JsonValue, NormalizedField, ResolvedProject} from "../types.js";
 import {loadShippedThemes, type ShippedTheme} from "../config/catalog.js";
 import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.js";
 import {expandRecipe} from "../capture/matrix.js";
 import {findSensitiveTestData} from "./privacy.js";
 import {networkUrlDiagnostics} from "./network-urls.js";
 import {loadSampleMediaCatalog, type SampleMediaCatalog} from "../config/sample-media.js";
-import {collectSampleMediaReferences, sampleKindsForField} from "../studio-ui/sample-media.js";
+import {collectSampleMediaReferences, isMultipleMediaField, sampleKindsForField} from "../studio-ui/sample-media.js";
+import {parseColor} from "../tutorial/color.js";
 
 const RECOGNIZED_FIELD_TYPES = new Set([
   "text",
@@ -245,9 +246,150 @@ function lineLabelDiagnostics(project: ResolvedProject): Diagnostic[] {
     );
 }
 
+/** What each value a shipped theme sets against a rule is, after "that is", and how to fix it, in report order. */
+const THEME_VALUE_RULES = {
+  THEME_VALUE_NOT_NUMBER: {
+    problem: "not a number",
+    hint: "Give each slider and number field a JSON number, without quotes."
+  },
+  THEME_VALUE_OUT_OF_RANGE: {
+    problem: "outside its field's min and max",
+    hint: "Keep each value within the min and max its field sets in FIELDS."
+  },
+  THEME_VALUE_OFF_STEP: {
+    problem: "off its slider's step",
+    hint: "Give each slider a value its handle can reach: its min plus a whole number of steps."
+  },
+  THEME_VALUE_NOT_OPTION: {
+    problem: "not among its dropdown's options",
+    hint: "Use one of the keys of the field's options in FIELDS."
+  },
+  THEME_VALUE_NOT_COLOR: {
+    problem: "not a color the colorpicker takes",
+    hint: "Write each color as #rgb, #rgba, #rrggbb, #rrggbbaa, rgb(r, g, b), or rgba(r, g, b, a); a color name fails."
+  },
+  THEME_VALUE_NOT_BOOLEAN: {
+    problem: "neither true nor false",
+    hint: "Give each checkbox true or false, without quotes."
+  },
+  THEME_VALUE_NO_FONT: {
+    problem: "not a font name",
+    hint: "Give each font field the font family's name."
+  },
+  THEME_VALUE_NOT_STRING: {
+    problem: "not a string",
+    hint: "Give each text and media field a JSON string (an empty one leaves a media field empty), and a multiple media field a list of them."
+  },
+  THEME_VALUE_UNCHECKED: {
+    problem: "unchecked, as validate has no rule for its field type",
+    hint: "Report the field type to SE Widget Studio, so that validate learns which values a theme may give it."
+  }
+} as const;
+
+type ThemeValueCode = keyof typeof THEME_VALUE_RULES;
+
+/**
+ * The rule a shipped theme's value breaks for its field, with the field's limit as a note, or nothing. Each
+ * field type has a rule, and a type without one is refused, so that a new field type gets its rule here.
+ */
+function themeValueProblem(field: NormalizedField, value: JsonValue): {code: ThemeValueCode; note?: string} | undefined {
+  switch (field.type) {
+    case "slider":
+    case "number": {
+      if (typeof value !== "number" || !Number.isFinite(value)) return {code: "THEME_VALUE_NOT_NUMBER"};
+      if (field.min !== undefined && value < field.min) return {code: "THEME_VALUE_OUT_OF_RANGE", note: `min ${field.min}`};
+      if (field.max !== undefined && value > field.max) return {code: "THEME_VALUE_OUT_OF_RANGE", note: `max ${field.max}`};
+      if (field.type === "slider" && field.step !== undefined && field.step > 0) {
+        const steps = (value - (field.min ?? 0)) / field.step;
+        if (Math.abs(steps - Math.round(steps)) > 1e-6) {
+          return {code: "THEME_VALUE_OFF_STEP", note: `step ${field.step} from ${field.min ?? 0}`};
+        }
+      }
+      return undefined;
+    }
+    case "dropdown":
+      return field.options.some((option) => option.value === value) ? undefined : {code: "THEME_VALUE_NOT_OPTION"};
+    case "color":
+    case "colorpicker":
+      return typeof value === "string" && parseColor(value) ? undefined : {code: "THEME_VALUE_NOT_COLOR"};
+    case "checkbox":
+      return typeof value === "boolean" ? undefined : {code: "THEME_VALUE_NOT_BOOLEAN"};
+    case "font":
+    case "googlefont":
+      return typeof value === "string" && value.trim() !== "" ? undefined : {code: "THEME_VALUE_NO_FONT"};
+    case "image-input":
+    case "video-input":
+    case "sound-input":
+      if (isMultipleMediaField(field)) {
+        return Array.isArray(value) && value.every((item) => typeof item === "string")
+          ? undefined
+          : {code: "THEME_VALUE_NOT_STRING", note: "multiple: a list of strings"};
+      }
+      return typeof value === "string" ? undefined : {code: "THEME_VALUE_NOT_STRING"};
+    case "text":
+      return typeof value === "string" ? undefined : {code: "THEME_VALUE_NOT_STRING"};
+    case "hidden":
+      // No panel shows a hidden field: it holds whatever the widget keeps there.
+      return undefined;
+    default:
+      return {code: "THEME_VALUE_UNCHECKED", note: `type ${field.type}`};
+  }
+}
+
+/** A value as a theme file writes it, cut to a readable length. */
+function shownValue(value: JsonValue): string {
+  const json = JSON.stringify(value);
+  return json.length > 40 ? `${json.slice(0, 37)}...` : json;
+}
+
+/** One diagnostic per rule that some of this theme's values break, each naming every key that breaks it. */
+function themeValueDiagnostics(label: string, fieldData: JsonObject, fields: Map<string, NormalizedField>): Diagnostic[] {
+  const broken = new Map<ThemeValueCode, string[]>();
+  for (const [key, value] of Object.entries(fieldData)) {
+    const field = fields.get(key);
+    const problem = field && themeValueProblem(field, value);
+    if (!problem) continue;
+    const items = broken.get(problem.code) ?? [];
+    items.push(`${key} = ${shownValue(value)}${problem.note ? ` (${problem.note})` : ""}`);
+    broken.set(problem.code, items);
+  }
+  return (Object.keys(THEME_VALUE_RULES) as ThemeValueCode[]).flatMap((code) => {
+    const items = broken.get(code);
+    if (!items) return [];
+    const {problem, hint} = THEME_VALUE_RULES[code];
+    return [
+      diagnostic(
+        "error",
+        code,
+        `Shipped theme ${label} sets ${items.length} value${items.length === 1 ? " that is" : "s that are"} ${problem}: ${items.join(", ")}.`,
+        hint
+      )
+    ];
+  });
+}
+
+const NON_ASCII = /[^\x00-\x7f]/gu;
+
+/** A character above 0x7F in a file a buyer copies can turn into another one in a text editor on the way to the DATA tab. */
+function nonAsciiDiagnostic(label: string, text: string): Diagnostic | undefined {
+  const outside = text.match(NON_ASCII);
+  if (!outside) return undefined;
+  const first = outside[0]!;
+  const line = text.slice(0, text.search(NON_ASCII)).split("\n").length;
+  // JSON escapes UTF-16 units: a character past U+FFFF, such as an emoji, takes two.
+  const escape = Array.from({length: first.length}, (_, index) => `\\u${first.charCodeAt(index).toString(16).padStart(4, "0")}`).join("");
+  return diagnostic(
+    "error",
+    "THEME_NOT_ASCII",
+    `Shipped theme ${label} has ${outside.length} character${outside.length === 1 ? "" : "s"} outside ASCII, the first on line ${line}: ${first}.`,
+    `Write each one as a JSON escape (this one as ${escape}), so that no text editor can change it on the way to the DATA tab.`
+  );
+}
+
 /**
  * A theme that ships is pasted into the DATA tab as it is, so it sets every FIELDS key but buttons: a key
  * added to FIELDS needs a value chosen for each look. `themes.keepDefault` lists the keys that may stay out.
+ * It sets no other key, gives each key a value its field takes, and is plain ASCII.
  */
 async function shippedThemeDiagnostics(project: ResolvedProject): Promise<Diagnostic[]> {
   let themes: ShippedTheme[];
@@ -259,9 +401,12 @@ async function shippedThemeDiagnostics(project: ResolvedProject): Promise<Diagno
   if (themes.length === 0) return [];
   const keepDefault = new Set(project.config.themes?.keepDefault ?? []);
   const keys = project.fields.filter((field) => field.type !== "button" && !keepDefault.has(field.id)).map((field) => field.id);
+  const settable = new Map(project.fields.filter((field) => field.type !== "button").map((field) => [field.id, field]));
   const diagnostics: Diagnostic[] = [];
   for (const theme of themes) {
     const label = relative(project.widgetRoot, theme.filePath).split(sep).join("/");
+    const ascii = nonAsciiDiagnostic(label, await readFile(theme.filePath, "utf8"));
+    if (ascii) diagnostics.push(ascii);
     const fieldData = theme.fieldData;
     if (!fieldData) {
       diagnostics.push(diagnostic("error", "SHIPPED_THEME_INVALID", `Shipped theme ${label} is not a JSON object.`));
@@ -278,13 +423,25 @@ async function shippedThemeDiagnostics(project: ResolvedProject): Promise<Diagno
         )
       );
     }
+    const extra = Object.keys(fieldData).filter((key) => !settable.has(key));
+    if (extra.length > 0) {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "THEME_FIELDS_EXTRA",
+          `Shipped theme ${label} sets ${extra.length} key${extra.length === 1 ? "" : "s"} that no FIELDS value has: ${extra.join(", ")}.`,
+          "Remove each one, or rename it to the FIELDS key that replaced it; a button field takes no value."
+        )
+      );
+    }
+    diagnostics.push(...themeValueDiagnostics(label, fieldData, settable));
   }
   if (diagnostics.length === 0) {
     diagnostics.push(
       diagnostic(
         "ok",
         "SHIPPED_THEMES",
-        `${themes.length} shipped theme${themes.length === 1 ? " sets" : "s set"} every FIELDS key${keepDefault.size > 0 ? " outside themes.keepDefault" : ""}.`
+        `${themes.length} shipped theme${themes.length === 1 ? " sets" : "s set"} every FIELDS key${keepDefault.size > 0 ? " outside themes.keepDefault" : ""} and no other, each to a value its field takes, in plain ASCII.`
       )
     );
   }

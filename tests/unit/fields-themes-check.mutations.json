@@ -215,6 +215,180 @@
       "from": "within 24 characters",
       "to": "within 25 characters",
       "test": "tests/unit/init.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "    if (extra.length > 0) {",
+      "to": "    if (extra.length > 1) {",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "project.fields.filter((field) => field.type !== \"button\").map((field) => [field.id, field])",
+      "to": "project.fields.map((field) => [field.id, field])",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "          \"error\",\n          \"THEME_FIELDS_EXTRA\",",
+      "to": "          \"warning\",\n          \"THEME_FIELDS_EXTRA\",",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "return {code: \"THEME_VALUE_NOT_NUMBER\"};",
+      "to": "return undefined;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "value < field.min)",
+      "to": "value <= field.min)",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "value > field.max)",
+      "to": "value >= field.max)",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "if (field.min !== undefined && value < field.min) return",
+      "to": "if (false) return",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "> 1e-6) {",
+      "to": "> 0) {",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "> 1e-6) {",
+      "to": "> 1) {",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "(value - (field.min ?? 0)) / field.step",
+      "to": "value / field.step",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "field.type === \"slider\" && field.step !== undefined",
+      "to": "field.step !== undefined",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "option.value === value",
+      "to": "option.label === value",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "typeof value === \"string\" && parseColor(value) ? undefined",
+      "to": "typeof value === \"string\" && /^#[0-9a-f]{6}$/i.test(value) ? undefined",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "{code: \"THEME_VALUE_NOT_COLOR\"}",
+      "to": "undefined",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "return typeof value === \"boolean\" ? undefined : {code: \"THEME_VALUE_NOT_BOOLEAN\"};",
+      "to": "return undefined;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "value.trim() !== \"\"",
+      "to": "value !== \"\"",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "value.every((item) => typeof item === \"string\")",
+      "to": "value.length >= 0",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "if (isMultipleMediaField(field)) {",
+      "to": "if (field.definition.multiple === \"multiple\") {",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "case \"text\":\n      return typeof value === \"string\" ? undefined : {code: \"THEME_VALUE_NOT_STRING\"};",
+      "to": "case \"text\":\n      return undefined;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "case \"hidden\":",
+      "to": "case \"hidden-field\":",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "return {code: \"THEME_VALUE_UNCHECKED\", note: `type ${field.type}`};",
+      "to": "return undefined;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "    diagnostics.push(...themeValueDiagnostics(label, fieldData, settable));\n",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "        \"error\",\n        code,",
+      "to": "        \"warning\",\n        code,",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "const NON_ASCII = /[^\\x00-\\x7f]/gu;",
+      "to": "const NON_ASCII = /[^\\x00-\\xff]/gu;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "const NON_ASCII = /[^\\x00-\\x7f]/gu;",
+      "to": "const NON_ASCII = /[^\\x00-\\x7f]/g;",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "Array.from({length: first.length}",
+      "to": "Array.from({length: 1}",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "text.search(NON_ASCII)",
+      "to": "text.length",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "    if (ascii) diagnostics.push(ascii);\n",
+      "to": "",
+      "test": "tests/unit/fields-themes-check.test.mjs"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "    \"error\",\n    \"THEME_NOT_ASCII\",",
+      "to": "    \"warning\",\n    \"THEME_NOT_ASCII\",",
+      "test": "tests/unit/fields-themes-check.test.mjs"
     }
   ]
 }
