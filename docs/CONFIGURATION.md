@@ -34,7 +34,7 @@ A theme may be a plain object of partial field values, or a wrapped versioned ob
 }
 ```
 
-Plain theme objects derive their id and name from the filename. Theme keys outside the current FIELDS schema produce a warning but are preserved.
+Plain theme objects derive their id and name from the filename. Theme keys outside the current FIELDS schema produce a warning but are preserved; in a shipped theme they are an error (see below).
 
 ### Shipped themes
 
@@ -45,6 +45,22 @@ themes: {glob: "themes/*.json", keepDefault: ["welcomeText", "maxMessages"]}
 ```
 
 That holds when applying a theme replaces the whole DATA tab. When buyers instead copy a theme's values into the field panel by hand, a key a theme leaves out keeps the value the previous look set, so a look key that any theme changes (a gradient switch, say) belongs in every shipped theme, never in `keepDefault`.
+
+A shipped theme also sets no other key, gives each key a value its field takes, and is plain ASCII. `validate` reports each break as an error with its own code, one diagnostic per theme and code, naming every key that breaks it:
+
+| Code | A shipped theme that |
+| --- | --- |
+| `THEME_FIELDS_EXTRA` | sets a key that FIELDS does not have (such as a removed field's old name) or that is a button |
+| `THEME_VALUE_NOT_NUMBER` | gives a `slider` or `number` field anything but a number |
+| `THEME_VALUE_OUT_OF_RANGE` | gives a `slider` or `number` field a value below its `min` or above its `max` |
+| `THEME_VALUE_OFF_STEP` | gives a `slider` a value its handle cannot reach: not its `min` plus a whole number of `step`s |
+| `THEME_VALUE_NOT_OPTION` | gives a `dropdown` a value that is not one of its `options` keys (a label fails) |
+| `THEME_VALUE_NOT_COLOR` | gives a `colorpicker` anything but `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)`, or `rgba(r, g, b, a)` |
+| `THEME_VALUE_NOT_BOOLEAN` | gives a `checkbox` anything but `true` or `false` |
+| `THEME_VALUE_NO_FONT` | gives a `googleFont` field an empty name or no string |
+| `THEME_VALUE_NOT_STRING` | gives a `text`, `image-input`, `video-input`, or `sound-input` field anything but a string, or a `multiple` media field anything but a list of strings |
+| `THEME_VALUE_UNCHECKED` | sets a field of a type `validate` has no rule for, so that a new field type gets its rule; a `hidden` field takes any value |
+| `THEME_NOT_ASCII` | has a character above 0x7F, which a buyer's text editor can change on the way to the DATA tab; write it as a JSON escape (an emoji takes two, `\ud83c\udf81`) |
 
 A Studio-only theme, such as a look made for marketing media, belongs outside `themes/` (for example in `studio/themes/`, added to the glob) and may stay partial.
 
