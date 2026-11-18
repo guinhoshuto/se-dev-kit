@@ -1,0 +1,58 @@
+{
+  "mutations": [
+    {
+      "file": "AGENTS.md",
+      "from": "Launch it from the worktree through `lancar_job.py`, never a Bash with `run_in_background`, which Claude Code reaps under critical memory pressure, unreported:",
+      "to": "Run it in the background, for example:",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "`PATH=/opt/homebrew/opt/node@24/bin:$PATH python3 ~/obsidian/AI/scripts/lancar_job.py",
+      "to": "`python3 ~/obsidian/AI/scripts/lancar_job.py",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "--tarefa gate-<task> --label",
+      "to": "--task gate-<task> --label",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "--label \"se-dev-kit gate <task>\"",
+      "to": "--title \"se-dev-kit gate <task>\"",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "--log .cache/gate/launch-$(date +%Y%m%d-%H%M%S).log",
+      "to": "--log .cache/gate/launch.log",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "--log .cache/gate/launch-",
+      "to": "--log .cache/gate/<commit>/launch-",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": " --cwd \"$PWD\" -- npm run gate`",
+      "to": " -- npm run gate`",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "`run_in_background: true` (`until <that grep>; do sleep 60; done`)",
+      "to": "`run_in_background: true`",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "The end line's `rc=` is the gate's exit code.",
+      "to": "",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    }
+  ]
+}
