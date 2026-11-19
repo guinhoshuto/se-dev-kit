@@ -324,6 +324,21 @@ test("the gate takes the slot before the machine check and gives it back at once
   assert.equal(await exists(dir), false);
 });
 
+test("the gate's own check holds this checkout's real disk to SE_WIDGET_STUDIO_MIN_FREE_BYTES: a floor above its free space refuses as a low disk does", async (t) => {
+  gateOn(t);
+  const saved = process.env.SE_WIDGET_STUDIO_MIN_FREE_BYTES;
+  process.env.SE_WIDGET_STUDIO_MIN_FREE_BYTES = String(1024 ** 5);
+  t.after(() => { if (saved === undefined) delete process.env.SE_WIDGET_STUDIO_MIN_FREE_BYTES; else process.env.SE_WIDGET_STUDIO_MIN_FREE_BYTES = saved; });
+  let released = 0;
+  const refused = await gate({take: async () => ({ok: true, release: () => { released += 1; }}), pauseMs: 0, wait: false});
+  const root = fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/, "");
+  assert.equal(refused.ok, false);
+  assert.equal(refused.cause, "disk", refused.reason);
+  assert.match(refused.reason, new RegExp(`^only \\d+\\.\\d GiB free on the volume of ${literal(root)}; browser suites need 1048576\\.0 GiB$`));
+  assert.equal(refused.wait, undefined, "waiting does not free the disk");
+  assert.equal(released, 1, "the slot went back");
+});
+
 test("a suite's processes get its TMPDIR and a render slot inside it, never the machine's", () => {
   assert.deepEqual(suiteEnvironment({PATH: "/bin", NODE_TEST_CONTEXT: "child-v8", RENDER_SLOT_DIR: "/Users/me/.cache/render-slot"}, "/tmp/sws-abc"), {
     PATH: "/bin",

@@ -23,7 +23,7 @@ import {basename, dirname, join, relative, resolve} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {isEntryPoint} from './lib/entry-point.mjs';
-import {browserGate} from './lib/machine.mjs';
+import {browserGate, diskFloor} from './lib/machine.mjs';
 import {appendHistory, failedTests, historyFile, historyReport, launchRetries, readHistory} from './lib/test-history.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -121,7 +121,7 @@ const cover = cause => COVER[cause] ?? '; run npm run test:browser, which waits 
  */
 export async function gate({
   take = takeBrowserSlot,
-  check = () => browserGate({root: ROOT, paths: [ROOT, tmpdir()], ownRoots: [process.pid]}),
+  check = () => browserGate({root: ROOT, paths: [ROOT, tmpdir()], ownRoots: [process.pid], minFreeBytes: diskFloor()}),
   pauseMs = 1000,
   wait = true,
   waitLimitMs = SLOT_WAIT_MS,

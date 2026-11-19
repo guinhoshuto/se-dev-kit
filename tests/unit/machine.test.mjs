@@ -10,7 +10,7 @@ import test from "node:test";
 import {fileURLToPath} from "node:url";
 
 import {BROWSER_MARKER as ENGINE_MARKER} from "../../dist/capture/browser.js";
-import {BROWSER_MARKER, HEAVY_PATTERNS, WRAPPERS, browserGate, checkoutOrphans, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseUsage, parseVerdict, readUsage, splitStalled} from "../../scripts/lib/machine.mjs";
+import {BROWSER_MARKER, HEAVY_PATTERNS, MIN_FREE_BYTES, WRAPPERS, browserGate, checkoutOrphans, diskFloor, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseUsage, parseVerdict, readUsage, splitStalled} from "../../scripts/lib/machine.mjs";
 import {killStale} from "../../scripts/kill-stale.mjs";
 import {cedingChain, productStep, RENDER_SLOT, slotCheck, steps} from "./ceding-chain.mjs";
 
@@ -219,6 +219,19 @@ test("the browser gate refuses below 3 GiB free, for orphans and for another ses
   const busy = await gate({processes: [...quiet, processes()[1]], free: async () => 10 * 1024 ** 3});
   assert.match(busy.reason, /another session is rendering: PID 11 /);
   assert.equal(busy.wait, true);
+});
+
+test("the runner's disk floor is 3 GiB, or the whole number of bytes SE_WIDGET_STUDIO_MIN_FREE_BYTES names, and nothing else", () => {
+  const floor = (value) => diskFloor(value === undefined ? {} : {SE_WIDGET_STUDIO_MIN_FREE_BYTES: value});
+  assert.equal(MIN_FREE_BYTES, 3 * 1024 ** 3);
+  assert.equal(floor(undefined), MIN_FREE_BYTES);
+  assert.equal(floor(""), MIN_FREE_BYTES, "an empty value is no value");
+  assert.equal(floor("0"), 0, "a test stands in for a free disk");
+  assert.equal(floor("5368709120"), 5 * 1024 ** 3);
+  assert.equal(floor(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER, "and for a disk with less free space than any");
+  for (const value of ["3GiB", "-1", "1.5", "1e12", " 1", "0x10", String(Number.MAX_SAFE_INTEGER + 1)]) {
+    assert.throws(() => floor(value), {message: `SE_WIDGET_STUDIO_MIN_FREE_BYTES must be a whole number of bytes, not ${JSON.stringify(value)}.`}, value);
+  }
 });
 
 const HEADLESS = `${CHROME} --headless=new --dump-dom file:///work/page.html`;
