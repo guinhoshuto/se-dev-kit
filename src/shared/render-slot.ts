@@ -41,7 +41,11 @@
 // ps) and a check that is missing, fails or takes over 60 seconds, so a broken check never keeps a render
 // from running. A run under a slot it inherits (RENDER_SLOT_HELD) does not ask: its parent took the slot.
 // RENDER_SLOT_CHECK=off skips the check; another value is the program asked in its place, with the same
-// arguments (the tests).
+// arguments (the tests). The check never gets the job's PYTHONPATH, PYTHONHOME or PYTHONUSERBASE: a fake
+// one set before `run` once read a 2 GiB disk with 8 GiB free and kept a job giving the slot back for 4 h
+// (HAR-437, 2026-11-05). Giving the slot back for the same reason for 30 min (RENDER_SLOT_BUSY_WARN_MS)
+// warns once, in the output and by a macOS notification (RENDER_SLOT_NOTIFY: a program given the title
+// and the text, or off).
 //
 // `node render-slot.ts hold --rotulo <label> --max <minutes>` (HAR-109, 2026-10-09) holds the slot for a
 // heavy task that is not one shell command: an E2E driven step by step through an MCP (Chrome, the SE
@@ -240,6 +244,13 @@ export type SlotOptions = {
   batonMs?: number;
   /** false (`vez`): at its turn, with the slot free, it leaves the queue without taking the slot. */
   take?: boolean;
+  /**
+   * `hold --ceder --na-hora` (HAR-336): while it holds the slot, a live product ticket in the queue makes it let go at
+   * once, instead of at the end of the round of mutation it covers. Never with `run`: that step is cut short by nobody.
+   */
+  atOnce?: boolean;
+  /** How often a hold that cedes at once looks at the queue while it holds. Default: AT_ONCE_CHECK_MS. */
+  atOnceCheckMs?: number;
 };
 
 export const HELD_ENV = 'RENDER_SLOT_HELD';
@@ -252,6 +263,11 @@ export const CEDE_ENV = 'RENDER_SLOT_CEDE';
 export const CEDE_GAP_MS = 5_000;
 /** How long the baton of `vez` keeps one that cedes off the free slot (HAR-301): from `vez` to its `run`, with room. */
 export const BATON_MS = 30_000;
+/**
+ * How often `hold --ceder --na-hora` looks for a product ticket while it holds (HAR-336, 2026-11-18): the e2e, the
+ * render and the step of seconds of a product wait at most this long behind a hold of mutation, not its whole round.
+ */
+export const AT_ONCE_CHECK_MS = 1_000;
 /** The baton, in the queue directory: a name an older copy's readQueue never reads. */
 const BATON_FILE = 'baton.json';
 /** The "fila" of every ticket this copy writes: a product ticket with it goes ahead of the ones that cede. */
@@ -263,6 +279,30 @@ const POLL_MS = 2000;
 const WAIT_LIMIT_MS = 4 * 60 * 60 * 1000;
 /** How long `run` leaves the slot to the next in the queue when the machine is busy outside it (HAR-32). */
 const BUSY_BACKOFF_MS = 20_000;
+/** The job's Python variables the machine check never gets (HAR-437): they would make it read another machine. */
+const CHECK_ENV_DROPPED = ['PYTHONPATH', 'PYTHONHOME', 'PYTHONUSERBASE'] as const;
+/**
+ * How long `run` gives the slot back for the same reason before it warns, once, outside its own output (HAR-437):
+ * the log line alone reached nobody while the session slept. RENDER_SLOT_BUSY_WARN_MS changes it (tests).
+ */
+const BUSY_WARN_MS = 30 * 60 * 1000;
+const busyWarnMs = () => {
+  const own = Number(process.env.RENDER_SLOT_BUSY_WARN_MS);
+  return Number.isFinite(own) && own >= 0 && process.env.RENDER_SLOT_BUSY_WARN_MS !== '' ? own : BUSY_WARN_MS;
+};
+
+/**
+ * The warning that reaches whoever is not reading the job's output: a macOS notification, or RENDER_SLOT_NOTIFY (a
+ * program, given the title and the text; `off` for none). Best effort: a missing notifier never stops `run`.
+ */
+const notifyBusy = (title: string, text: string) => {
+  const own = process.env.RENDER_SLOT_NOTIFY ?? '';
+  if (own === 'off') return;
+  const [program, args] = own === ''
+    ? ['osascript', ['-e', `display notification ${JSON.stringify(text)} with title ${JSON.stringify(title)}`]]
+    : [own, [title, text]];
+  try { spawnSync(program, args, {stdio: 'ignore', timeout: 10_000}); } catch { /* best effort */ }
+};
 /** A machine check that takes longer than this tells nothing, and `run` goes on without it. */
 const CHECK_TIMEOUT_MS = 60_000;
 /** A ticket not touched for this long stops counting: its waiter is stuck, or its pid was reused. */
@@ -1185,6 +1225,10 @@ const checkMachine = async (dir: string, timeoutMs: number): Promise<{busy: stri
   // Under the slot RENDER_SLOT_HELD names, the check looks only at the disk and at renders outside the
   // slot; without it, the slot of this process counts as its family's, and memory and the game count too.
   delete env[HELD_ENV];
+  // HAR-437 (2026-11-05): a PYTHONPATH=<fake> set for the job before `run` reached the check, which read a 2 GiB disk
+  // on a machine with 8 GiB free and kept the job giving the slot back for 4 h. The check reads this machine, never
+  // the job's Python.
+  for (const name of CHECK_ENV_DROPPED) delete env[name];
   const answer = await new Promise<{status: number | null; out: string; failure: string | null}>((resolve) => {
     let out = '';
     const check = spawn(program, [...first, '--json', '--fora-da-trava', '--familia', String(process.pid)], {env, stdio: ['ignore', 'pipe', 'ignore']});
@@ -1269,6 +1313,9 @@ const takeSlotToRun = async (options: SlotOptions & RunOptions): Promise<SlotHan
   const waitLimitMs = slotOptions.waitLimitMs ?? WAIT_LIMIT_MS;
   let gaveBack = 0;
   let said = '';
+  let saidSince = 0;
+  let saidTimes = 0;
+  let warned = false;
   let diskSaid = '';
   for (;;) {
     let slot: SlotHandle;
@@ -1297,8 +1344,20 @@ const takeSlotToRun = async (options: SlotOptions & RunOptions): Promise<SlotHan
     if (slotOptions.wait === false || waited >= waitLimitMs) {
       throw new RenderSlotError(slotOptions.wait === false ? 'RENDER_SLOT_BUSY' : 'RENDER_SLOT_TIMEOUT', `The machine is busy outside the render slot (${busy}): gave the slot back ${gaveBack}× since ${new Date(since).toISOString()}.`, 'Run again once it is free; python3 ~/obsidian/AI/scripts/maquina_livre.py says what keeps it busy.');
     }
-    if (busy !== said) log(`The machine is busy outside the render slot: ${busy}. Gave the slot back; asking again in ${backoffMs / 1000} s, in the place it first came (${new Date(since).toISOString()}).`);
+    if (busy !== said) {
+      log(`The machine is busy outside the render slot: ${busy}. Gave the slot back; asking again in ${backoffMs / 1000} s, in the place it first came (${new Date(since).toISOString()}).`);
+      saidSince = Date.now();
+      saidTimes = 0;
+    }
     said = busy;
+    saidTimes += 1;
+    if (!warned && Date.now() - saidSince >= busyWarnMs()) {
+      // Once per run: the same reason for this long is worth a look (a wrong reading keeps the queue behind it too).
+      warned = true;
+      const minutes = Math.round((Date.now() - saidSince) / 60_000);
+      log(`Warning: gave the slot back ${saidTimes}× in ${minutes} min for the same reason (${busy}). If the machine is not that busy, the check may be reading the wrong one: python3 ~/obsidian/AI/scripts/maquina_livre.py, run by hand, says what it sees.`);
+      notifyBusy('render-slot: the machine stays busy', `Gave the slot back ${saidTimes}× in ${minutes} min: ${busy}`.slice(0, 200));
+    }
     await sleep(Math.min(backoffMs, waitLimitMs - waited));
   }
 };
@@ -1415,10 +1474,24 @@ export const holdSlot = async (label: string, maxMinutes: number, options: Parti
     for (const signal of SIGNALS) for (const listener of process.listeners(signal)) if (listener !== onSignal) process.off(signal, listener);
     try {
       console.log(`Holding the render slot as "${HOLD_PREFIX}${label}" (pid ${process.pid}) for at most ${maxMinutes} minutes, until \`render-slot release --rotulo ${label}\`. Heavy commands of this task: ${HELD_ENV}=${process.pid} <command>.`);
+      let product: QueueTicket | undefined;
       const why = await new Promise<string>((resolve) => {
         const timer = setTimeout(() => resolve('deadline'), maxMinutes * 60_000);
-        stop = (signal) => { clearTimeout(timer); resolve(signal); };
+        // HAR-336 (2026-11-18): a hold of mutation that cedes at once lets a product that comes while it holds go
+        // first, now; the round it covers goes on without the slot, and the next round waits behind the product.
+        const watch = options.cede === true && options.atOnce === true
+          ? setInterval(() => {
+            product = renderSlotQueue(options.dir ?? slotDir()).find((ticket) => !ticket.cede && ticket.fila === FILA);
+            if (product !== undefined) stop?.('ceded');
+          }, options.atOnceCheckMs ?? AT_ONCE_CHECK_MS)
+          : null;
+        stop = (signal) => { clearTimeout(timer); if (watch !== null) clearInterval(watch); resolve(signal); };
       });
+      if (why === 'ceded' && product !== undefined) {
+        recordSlotEvent(options.dir ?? slotDir(), {evento: 'cede', pid: process.pid, rotulo: `${HOLD_PREFIX}${label}`, cede: true, a: {pid: product.pid, rotulo: product.command}});
+        console.log(`Released the render slot at once: pid ${product.pid} (${product.repo}: ${product.command}), a product job, came while this hold that cedes held it (HAR-336).`);
+        return 0;
+      }
       console.log(why === 'deadline' ? `Released the render slot: --max ${maxMinutes} minutes passed.` : `Released the render slot (${why}).`);
       return 0;
     } finally {
@@ -1791,7 +1864,7 @@ if (isMain()) {
     process.exitCode = await runCommand(command.slice(2), {repo: command[0]});
   } else if (verb === 'hold') {
     const max = optionValue(args, '--max');
-    process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max), {cede: args.includes('--ceder')});
+    process.exitCode = await holdSlot(optionValue(args, '--rotulo') ?? '', max === undefined ? NaN : Number(max), {cede: args.includes('--ceder'), atOnce: args.includes('--ceder') && args.includes('--na-hora')});
   } else if (verb === 'vez' && args.includes('--historico')) {
     const hours = Number(optionValue(args, '--horas') ?? 24);
     if (hours > 0) {
@@ -1818,7 +1891,7 @@ if (isMain()) {
   } else if (verb === 'status' && separator === '--json' && command.length === 0) {
     console.log(JSON.stringify(slotStatusJson()));
   } else {
-    console.error('Usage: node render-slot.ts run [--repo <dir>] -- <command> [args] | hold --rotulo <label> --max <minutes> [--ceder] | vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir] | vez --historico [--horas <n>] [--json] | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
+    console.error('Usage: node render-slot.ts run [--repo <dir>] -- <command> [args] | hold --rotulo <label> --max <minutes> [--ceder [--na-hora]] | vez --rotulo <label> [--since <ms>] [--max <minutes>] [--conferir] | vez --historico [--horas <n>] [--json] | release --rotulo <label> | status [--json] | move --pid <pid> --up|--down');
     process.exitCode = EXIT_USAGE;
   }
 }
