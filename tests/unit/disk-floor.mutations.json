@@ -1,0 +1,39 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "ownRoots: [process.pid], minFreeBytes: diskFloor()})",
+      "to": "ownRoots: [process.pid]})",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^the gate's own check holds this checkout's real disk"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "return Number(value);",
+      "to": "return MIN_FREE_BYTES;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the runner's disk floor"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "if (value === undefined || value === '') return MIN_FREE_BYTES;",
+      "to": "if (value === undefined) return MIN_FREE_BYTES;",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the runner's disk floor"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "!/^\\d+$/.test(value) || ",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the runner's disk floor"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": " || !Number.isSafeInteger(Number(value))",
+      "to": "",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the runner's disk floor"
+    }
+  ]
+}

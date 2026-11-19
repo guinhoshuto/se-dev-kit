@@ -17,6 +17,19 @@ export const BROWSER_MARKER = '--se-widget-studio';
 /** Free space a browser suite needs before it starts: the machine rule is "no render below 3 GB free". */
 export const MIN_FREE_BYTES = 3 * 1024 ** 3;
 
+/**
+ * The floor the runner's gate holds the real disk to: MIN_FREE_BYTES, unless SE_WIDGET_STUDIO_MIN_FREE_BYTES names
+ * another, as a whole number of bytes. It stands in for the disk in a test, as RENDER_SLOT_DIR does for the slot and
+ * MACHINE_CHECK for the machine check: a unit test that runs the mutate CLI through that gate sets 0, so its result does
+ * not follow the machine's free disk (#44: at 0.4 GiB free, the real floor stopped such a test and the gate with it).
+ */
+export function diskFloor(env = process.env) {
+  const value = env.SE_WIDGET_STUDIO_MIN_FREE_BYTES;
+  if (value === undefined || value === '') return MIN_FREE_BYTES;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error(`SE_WIDGET_STUDIO_MIN_FREE_BYTES must be a whole number of bytes, not ${JSON.stringify(value)}.`);
+  return Number(value);
+}
+
 // A render or an automated browser from any session: the same patterns, string for string, as the
 // machine check every repo shares (PESADO in ~/obsidian/AI/scripts/maquina_livre.py; a unit test fails
 // while they differ), so this fallback sees what the check sees.
