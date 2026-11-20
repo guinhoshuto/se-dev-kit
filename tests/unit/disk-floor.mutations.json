@@ -2,10 +2,45 @@
   "mutations": [
     {
       "file": "scripts/run-tests.mjs",
-      "from": "ownRoots: [process.pid], minFreeBytes: diskFloor()})",
+      "from": "ownRoots: [process.pid], minFreeBytes})",
       "to": "ownRoots: [process.pid]})",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^the gate's own check holds this checkout's real disk"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "result = await check(minFreeBytes);",
+      "to": "result = await check();",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^the gate's own check holds this checkout's real disk"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "return {ok: false, cause: 'floor', reason: error instanceof Error ? error.message : String(error)};",
+      "to": "minFreeBytes = 3 * 1024 ** 3;",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a test's disk floor set outside a test"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "floor: `: unset",
+      "to": "lowFloor: `: unset",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a test's disk floor set outside a test"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "if (!env.NODE_TEST_CONTEXT) throw",
+      "to": "if (false) throw",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the runner's disk floor"
+    },
+    {
+      "file": "scripts/lib/machine.mjs",
+      "from": "if (!env.NODE_TEST_CONTEXT) throw",
+      "to": "if (env.NODE_TEST_CONTEXT === undefined) throw",
+      "test": "tests/unit/machine.test.mjs",
+      "name": "^the runner's disk floor"
     },
     {
       "file": "scripts/lib/machine.mjs",

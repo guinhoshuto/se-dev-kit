@@ -23,7 +23,7 @@ import {basename, dirname, join, relative, resolve} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {isEntryPoint} from './lib/entry-point.mjs';
-import {browserGate, diskFloor} from './lib/machine.mjs';
+import {TEST_FLOOR, browserGate, diskFloor} from './lib/machine.mjs';
 import {appendHistory, failedTests, historyFile, historyReport, launchRetries, readHistory} from './lib/test-history.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -101,14 +101,16 @@ export async function takeBrowserSlot(options = {}) {
 export const duration = ms => (ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60_000)} min`);
 
 /**
- * The step that covers a browser suite the gate skipped, by its refusal's `cause`: a low disk and an orphan of this
- * checkout end only by hand; any other refusal is a wait that ran out, and npm run test:browser waits its turn in the
- * queue again. npm run wait-free first adds nothing: test:browser waits in the queue itself, up to 4 hours against the
- * 30 minutes of wait-free, and a chain of the harness that cedes (hold --ceder) lets it in between two of its rounds (#16).
+ * The step that covers a browser suite the gate skipped, by its refusal's `cause`: a low disk, an orphan of this
+ * checkout and a test's disk floor set outside a test end only by hand; any other refusal is a wait that ran out, and
+ * npm run test:browser waits its turn in the queue again. npm run wait-free first adds nothing: test:browser waits in the
+ * queue itself, up to 4 hours against the 30 minutes of wait-free, and a chain of the harness that cedes (hold --ceder)
+ * lets it in between two of its rounds (#16).
  */
 const COVER = {
   disk: ': the disk is low; free some space, then run npm run test:browser',
-  orphan: ': this checkout left an orphan; run npm run kill-stale, then npm run test:browser'
+  orphan: ': this checkout left an orphan; run npm run kill-stale, then npm run test:browser',
+  floor: `: unset ${TEST_FLOOR}, which only a test may set, then run npm run test:browser`
 };
 const cover = cause => COVER[cause] ?? '; run npm run test:browser, which waits its turn in the render slot queue';
 
@@ -117,11 +119,13 @@ const cover = cause => COVER[cause] ?? '; run npm run test:browser, which waits 
  * that waiting can end (`wait` in it: the machine check says to wait, another session renders) gives the
  * slot back and asks again after `backoffMs`, in the place it first came, until `waitLimitMs` from then;
  * any other (low disk, an orphan) ends at once, and so does every refusal with `wait` false. `waitedMs`
- * says how long it waited. `take`, `check` and `log` are replaceable for tests.
+ * says how long it waited. Before the slot, `floor` gives the floor `check` holds the disk to; when it throws (a test's
+ * floor set outside a test), the gate refuses at once. `take`, `floor`, `check` and `log` are replaceable for tests.
  */
 export async function gate({
   take = takeBrowserSlot,
-  check = () => browserGate({root: ROOT, paths: [ROOT, tmpdir()], ownRoots: [process.pid], minFreeBytes: diskFloor()}),
+  floor = diskFloor,
+  check = minFreeBytes => browserGate({root: ROOT, paths: [ROOT, tmpdir()], ownRoots: [process.pid], minFreeBytes}),
   pauseMs = 1000,
   wait = true,
   waitLimitMs = SLOT_WAIT_MS,
@@ -129,6 +133,9 @@ export async function gate({
   log = message => console.log(message)
 } = {}) {
   if (process.env.SE_WIDGET_STUDIO_TEST_GATE === 'off') return {ok: true, release: () => {}, waitedMs: 0};
+  // No wait mends a floor set where it may not be, so it refuses before the slot is taken (#47).
+  let minFreeBytes;
+  try {minFreeBytes = floor();} catch (error) {return {ok: false, cause: 'floor', reason: error instanceof Error ? error.message : String(error)};}
   const since = Date.now();
   let said = '';
   for (let gaveBack = 0; ; gaveBack += 1) {
@@ -138,7 +145,7 @@ export async function gate({
     // A Chrome the previous suite's exit just killed can still be listed for a moment.
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (attempt) await sleep(pauseMs);
-      result = await check();
+      result = await check(minFreeBytes);
       if (result.ok) return {...result, release: slot.release, waitedMs: Date.now() - since};
     }
     slot.release();

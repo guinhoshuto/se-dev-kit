@@ -10,7 +10,7 @@ import test from "node:test";
 import {fileURLToPath} from "node:url";
 
 import {BROWSER_MARKER as ENGINE_MARKER} from "../../dist/capture/browser.js";
-import {BROWSER_MARKER, HEAVY_PATTERNS, MIN_FREE_BYTES, WRAPPERS, browserGate, checkoutOrphans, diskFloor, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseUsage, parseVerdict, readUsage, splitStalled} from "../../scripts/lib/machine.mjs";
+import {BROWSER_MARKER, HEAVY_PATTERNS, MIN_FREE_BYTES, TEST_FLOOR, WRAPPERS, browserGate, checkoutOrphans, diskFloor, isHeavy, listProcesses, machineVerdict, otherSessionsWork, parseProcessList, parseUsage, parseVerdict, readUsage, splitStalled} from "../../scripts/lib/machine.mjs";
 import {killStale} from "../../scripts/kill-stale.mjs";
 import {cedingChain, productStep, RENDER_SLOT, slotCheck, steps} from "./ceding-chain.mjs";
 
@@ -221,8 +221,11 @@ test("the browser gate refuses below 3 GiB free, for orphans and for another ses
   assert.equal(busy.wait, true);
 });
 
-test("the runner's disk floor is 3 GiB, or the whole number of bytes SE_WIDGET_STUDIO_MIN_FREE_BYTES names, and nothing else", () => {
-  const floor = (value) => diskFloor(value === undefined ? {} : {SE_WIDGET_STUDIO_MIN_FREE_BYTES: value});
+test("the runner's disk floor is 3 GiB, or inside a test the whole number of bytes SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES names, and nothing else", () => {
+  // What node --test gives a test file and what it starts.
+  const inTest = {NODE_TEST_CONTEXT: "child-v8"};
+  const floor = (value) => diskFloor(value === undefined ? inTest : {...inTest, [TEST_FLOOR]: value});
+  assert.equal(TEST_FLOOR, "SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES");
   assert.equal(MIN_FREE_BYTES, 3 * 1024 ** 3);
   assert.equal(floor(undefined), MIN_FREE_BYTES);
   assert.equal(floor(""), MIN_FREE_BYTES, "an empty value is no value");
@@ -230,8 +233,20 @@ test("the runner's disk floor is 3 GiB, or the whole number of bytes SE_WIDGET_S
   assert.equal(floor("5368709120"), 5 * 1024 ** 3);
   assert.equal(floor(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER, "and for a disk with less free space than any");
   for (const value of ["3GiB", "-1", "1.5", "1e12", " 1", "0x10", String(Number.MAX_SAFE_INTEGER + 1)]) {
-    assert.throws(() => floor(value), {message: `SE_WIDGET_STUDIO_MIN_FREE_BYTES must be a whole number of bytes, not ${JSON.stringify(value)}.`}, value);
+    assert.throws(() => floor(value), {message: `SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES must be a whole number of bytes, not ${JSON.stringify(value)}.`}, value);
   }
+});
+
+test("the runner's disk floor outside a test stays 3 GiB: the test's stand-in throws there, saying why, and the name it had before #47 lowers nothing", () => {
+  const outside = "SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES is set outside a test: only a test (node --test) may stand in for the free disk, and a run outside one keeps the 3 GiB floor of the browser suites";
+  // 2026-11-19: since #44, SE_WIDGET_STUDIO_MIN_FREE_BYTES=0 on any npm test or npm run gate took the floor to 0 (#47).
+  for (const value of ["0", "1024", String(4 * 1024 ** 3), "junk"]) {
+    assert.throws(() => diskFloor({[TEST_FLOOR]: value}), {message: outside}, value);
+    assert.throws(() => diskFloor({NODE_TEST_CONTEXT: "", [TEST_FLOOR]: value}), {message: outside}, `${value}, with an empty NODE_TEST_CONTEXT`);
+  }
+  assert.equal(diskFloor({[TEST_FLOOR]: ""}), MIN_FREE_BYTES, "an empty value is no value, inside a test or not");
+  assert.equal(diskFloor({SE_WIDGET_STUDIO_MIN_FREE_BYTES: "0"}), MIN_FREE_BYTES);
+  assert.equal(diskFloor({NODE_TEST_CONTEXT: "child-v8", SE_WIDGET_STUDIO_MIN_FREE_BYTES: "0"}), MIN_FREE_BYTES, "not even inside a test");
 });
 
 const HEADLESS = `${CHROME} --headless=new --dump-dom file:///work/page.html`;
