@@ -121,6 +121,8 @@ const cover = cause => COVER[cause] ?? '; run npm run test:browser, which waits 
  * any other (low disk, an orphan) ends at once, and so does every refusal with `wait` false. `waitedMs`
  * says how long it waited. Before the slot, `floor` gives the floor `check` holds the disk to; when it throws (a test's
  * floor set outside a test), the gate refuses at once. `take`, `floor`, `check` and `log` are replaceable for tests.
+ * No environment variable opens it: SE_WIDGET_STUDIO_TEST_GATE=off once did, for any npm test or npm run mutate a
+ * session started, and no test needed it (#51); a test replaces `take` and `check` instead.
  */
 export async function gate({
   take = takeBrowserSlot,
@@ -132,7 +134,6 @@ export async function gate({
   backoffMs = BUSY_BACKOFF_MS,
   log = message => console.log(message)
 } = {}) {
-  if (process.env.SE_WIDGET_STUDIO_TEST_GATE === 'off') return {ok: true, release: () => {}, waitedMs: 0};
   // No wait mends a floor set where it may not be, so it refuses before the slot is taken (#47).
   let minFreeBytes;
   try {minFreeBytes = floor();} catch (error) {return {ok: false, cause: 'floor', reason: error instanceof Error ? error.message : String(error)};}

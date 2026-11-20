@@ -201,7 +201,7 @@ test("with the render slot held by another process, the CLI stops a mutation who
   await mkdir(slot);
   await writeFile(join(slot, "owner.json"), JSON.stringify({pid: holder.pid, repo: "background-creator", command: "npm run stills", startedAt: new Date().toISOString()}));
   const env = {...process.env, RENDER_SLOT_DIR: slot, MACHINE_CHECK: join(root, "free-machine.py"), SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES: "0"};
-  for (const name of ["RENDER_SLOT_HELD", "SE_WIDGET_STUDIO_TEST_GATE"]) delete env[name];
+  delete env.RENDER_SLOT_HELD;
   const cli = spawn(process.execPath, ["scripts/mutate.mjs", "lib/value.mjs", "--from", "1", "--to", "2", "--test", "tests/integration/opens-chrome.test.mjs"], {cwd: root, env, stdio: ["ignore", "pipe", "pipe"]});
   let output = "";
   cli.stdout.on("data", chunk => {output += chunk;});
@@ -235,7 +235,7 @@ test("held by a chain of the harness that cedes, the slot refuses the CLI, whose
   ].join("\n"));
   // The queued run asks no machine check (RENDER_SLOT_CHECK=off); the mutate it runs asks the free one, on a free disk.
   const env = {...process.env, RENDER_SLOT_DIR: slot, RENDER_SLOT_CHECK: "off", MACHINE_CHECK: join(root, "free-machine.py"), SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES: "0"};
-  for (const name of ["RENDER_SLOT_HELD", "RENDER_SLOT_CEDE", "SE_WIDGET_STUDIO_TEST_GATE"]) delete env[name];
+  for (const name of ["RENDER_SLOT_HELD", "RENDER_SLOT_CEDE"]) delete env[name];
   const script = "dist/shared/render-slot.js";
   const first = chainRound(t, {script, label: "chain.1", env, cwd: root});
   await first.holding;
@@ -290,9 +290,6 @@ test("a refusal that waiting can end prints the command that runs mutate again i
 });
 
 test("a mutation whose test starts Chrome runs holding the render slot, which its test inherits, and gives the slot back", {timeout: 60_000}, async t => {
-  const saved = process.env.SE_WIDGET_STUDIO_TEST_GATE;
-  delete process.env.SE_WIDGET_STUDIO_TEST_GATE;
-  t.after(() => {if (saved !== undefined) process.env.SE_WIDGET_STUDIO_TEST_GATE = saved;});
   const {root, read} = await checkout(t);
   const slot = join(await folder(t, "sws-mutate-slot-"), "render-slot");
   // Each run notes who owns the slot as it starts, and which owner it inherited.

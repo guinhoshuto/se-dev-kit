@@ -1,0 +1,18 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "  // No wait mends a floor set where it may not be",
+      "to": "  if (process.env.SE_WIDGET_STUDIO_TEST_GATE === 'off') return {ok: true, release: () => {}, waitedMs: 0};\n  // No wait mends a floor set where it may not be",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^SE_WIDGET_STUDIO_TEST_GATE=off, set outside a test"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "result = await check(minFreeBytes);",
+      "to": "result = process.env.SE_WIDGET_STUDIO_TEST_GATE === 'off' ? {ok: true} : await check(minFreeBytes);",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^SE_WIDGET_STUDIO_TEST_GATE=off, set outside a test"
+    }
+  ]
+}
