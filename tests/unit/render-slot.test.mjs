@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {execFile, spawn} from "node:child_process";
+import {createHash} from "node:crypto";
 import {once} from "node:events";
 import {mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile} from "node:fs/promises";
 import {homedir, tmpdir} from "node:os";
@@ -210,9 +211,89 @@ test("a local capture through this repo's copy leaves its grant and release in `
   assert.match(text.stdout, new RegExp(`solta +pid ${cli.pid} \\(se-dev-kit: se-widget-studio capture .*, held \\d+ s`));
 });
 
-test("src/shared/render-slot.ts is the vault source, byte for byte", async (t) => {
+// HAR-122 (issue #45): the copy was checked against the live vault source alone, so every change of the source failed
+// `unit` until someone synced the copy (on 2026-11-18 three sessions saw it 430 of 431 for hours). The sync records the
+// sha256 of what it copied, and a copy that still matches that record is NOT COVERED, not failed: only a hand edit fails.
+const SYNC_COMMAND = "python3 ~/obsidian/AI/scripts/render_slot_copias.py --write --repo se-dev-kit";
+const RECORD_LINE = /^([0-9a-f]{64})  render-slot\.ts\n$/;
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+/** What the copy test does with the copy, the vault source (Buffers) and the last sync's record (its text, or null). */
+function copyVerdict({copy, source, record}) {
+  const match = record === null ? null : RECORD_LINE.exec(record);
+  if (copy.equals(source)) {
+    if (match && match[1] === sha256(copy)) return {pass: true};
+    const state = record === null ? "missing" : match ? "the sha256 of another file" : "malformed";
+    return {pass: true, diagnostic: `src/shared/render-slot.ts.sha256 is ${state}, so the next change of ~/obsidian/AI/scripts/render-slot.ts will fail as a hand edit of the copy instead of printing NOT COVERED: run ${SYNC_COMMAND}`};
+  }
+  if (record === null) return {fail: `src/shared/render-slot.ts differs from ~/obsidian/AI/scripts/render-slot.ts: edit the source, then run ${SYNC_COMMAND}`};
+  if (!match) return {fail: `src/shared/render-slot.ts.sha256 is malformed: expected exactly one line "<64 lowercase hex>  render-slot.ts" and a newline, as shasum -a 256 writes it; never edit it by hand, run ${SYNC_COMMAND}`};
+  if (match[1] === sha256(copy)) return {skip: `NOT COVERED: ~/obsidian/AI/scripts/render-slot.ts changed after the last sync, which src/shared/render-slot.ts still matches; run ${SYNC_COMMAND}`};
+  return {fail: `src/shared/render-slot.ts matches neither ~/obsidian/AI/scripts/render-slot.ts nor the sha256 of the last sync recorded in src/shared/render-slot.ts.sha256: never edit the copy; edit the source, then run ${SYNC_COMMAND}`};
+}
+
+test("src/shared/render-slot.ts is the vault source byte for byte, or the copy its last sync recorded", async (t) => {
   const source = join(homedir(), "obsidian", "AI", "scripts", "render-slot.ts");
   if (!(await exists(source))) return t.skip("no vault on this machine");
   const copy = await readFile(fileURLToPath(new URL("../../src/shared/render-slot.ts", import.meta.url)));
-  assert.ok(copy.equals(await readFile(source)), "src/shared/render-slot.ts differs from ~/obsidian/AI/scripts/render-slot.ts: edit the source, then run python3 ~/obsidian/AI/scripts/render_slot_copias.py --write");
+  const record = await readFile(fileURLToPath(new URL("../../src/shared/render-slot.ts.sha256", import.meta.url)), "utf8").catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  const verdict = copyVerdict({copy, source: await readFile(source), record});
+  if (verdict.skip) return t.skip(verdict.skip);
+  if (verdict.diagnostic) t.diagnostic(verdict.diagnostic);
+  assert.ok(verdict.pass, verdict.fail);
+});
+
+// The command spelled out again, so that a wrong command in the verdicts fails here.
+const COMMAND = "python3 ~/obsidian/AI/scripts/render_slot_copias.py --write --repo se-dev-kit";
+const COPY = Buffer.from("export const copy = 1;\n");
+const MOVED = Buffer.from("export const copy = 1;\nexport const moved = 2;\n");
+const recordOf = (bytes) => `${sha256(bytes)}  render-slot.ts\n`;
+const MALFORMED = [
+  recordOf(COPY).toUpperCase().replace("RENDER-SLOT.TS", "render-slot.ts"),
+  recordOf(COPY).replace("  ", " "),
+  recordOf(COPY).trimEnd(),
+  recordOf(COPY).replace("render-slot.ts", "other.ts"),
+  recordOf(COPY) + recordOf(MOVED),
+  ""
+];
+
+test("copy verdict: a copy equal to the source and its record passes with no diagnostic", () => {
+  assert.deepEqual(copyVerdict({copy: COPY, source: Buffer.from(COPY), record: recordOf(COPY)}), {pass: true});
+});
+
+test("copy verdict: a copy equal to the source with a missing, malformed or stale record passes with a diagnostic", () => {
+  for (const [record, state] of [[null, "missing"], ...MALFORMED.map((text) => [text, "malformed"]), [recordOf(MOVED), "the sha256 of another file"]]) {
+    const verdict = copyVerdict({copy: COPY, source: Buffer.from(COPY), record});
+    assert.equal(verdict.pass, true, JSON.stringify(record));
+    assert.equal(verdict.diagnostic, `src/shared/render-slot.ts.sha256 is ${state}, so the next change of ~/obsidian/AI/scripts/render-slot.ts will fail as a hand edit of the copy instead of printing NOT COVERED: run ${COMMAND}`, JSON.stringify(record));
+  }
+});
+
+test("copy verdict: a source that moved after the last sync is NOT COVERED, not failed", () => {
+  const verdict = copyVerdict({copy: COPY, source: MOVED, record: recordOf(COPY)});
+  assert.deepEqual(Object.keys(verdict), ["skip"]);
+  assert.equal(verdict.skip, `NOT COVERED: ~/obsidian/AI/scripts/render-slot.ts changed after the last sync, which src/shared/render-slot.ts still matches; run ${COMMAND}`);
+});
+
+test("copy verdict: a copy that matches neither the source nor its record fails as a hand edit", () => {
+  for (const source of [MOVED, Buffer.from("export const copy = 0;\n")]) {
+    const verdict = copyVerdict({copy: COPY, source, record: recordOf(source)});
+    assert.deepEqual(Object.keys(verdict), ["fail"]);
+    assert.equal(verdict.fail, `src/shared/render-slot.ts matches neither ~/obsidian/AI/scripts/render-slot.ts nor the sha256 of the last sync recorded in src/shared/render-slot.ts.sha256: never edit the copy; edit the source, then run ${COMMAND}`);
+  }
+});
+
+test("copy verdict: a malformed record fails once the copy differs from the source", () => {
+  for (const record of MALFORMED) {
+    const verdict = copyVerdict({copy: COPY, source: MOVED, record});
+    assert.deepEqual(Object.keys(verdict), ["fail"], JSON.stringify(record));
+    assert.equal(verdict.fail, `src/shared/render-slot.ts.sha256 is malformed: expected exactly one line "<64 lowercase hex>  render-slot.ts" and a newline, as shasum -a 256 writes it; never edit it by hand, run ${COMMAND}`, JSON.stringify(record));
+  }
+});
+
+test("copy verdict: no record and a copy that differs from the source fails byte for byte", () => {
+  assert.deepEqual(copyVerdict({copy: COPY, source: MOVED, record: null}), {fail: `src/shared/render-slot.ts differs from ~/obsidian/AI/scripts/render-slot.ts: edit the source, then run ${COMMAND}`});
 });
