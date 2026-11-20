@@ -1,0 +1,74 @@
+{
+  "mutations": [
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "if (match[1] === sha256(copy)) return {skip:",
+      "to": "if (false) return {skip:",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: a source that moved"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "return {fail: `src/shared/render-slot.ts matches neither",
+      "to": "return {skip: `NOT COVERED: src/shared/render-slot.ts matches neither",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: a copy that matches neither"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "{64})  render-slot\\.ts\\n$/;",
+      "to": "{64}) +render-slot\\.ts\\n?$/;",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: a malformed record fails"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "^([0-9a-f]{64})",
+      "to": "^([0-9a-fA-F]{64})",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: a malformed record fails"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "render-slot\\.ts\\n$/;",
+      "to": "render-slot\\.ts\\n/;",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: a malformed record fails"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "if (match && match[1] === sha256(copy)) return {pass: true};",
+      "to": "return {pass: true};",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: a copy equal to the source with a missing"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "if (match && match[1] === sha256(copy)) return {pass",
+      "to": "if (match) return {pass",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: a copy equal to the source with a missing"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "if (match && match[1] === sha256(copy)) return {pass: true};",
+      "to": "if (false) return {pass: true};",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: a copy equal to the source and its record"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "if (record === null) return {fail:",
+      "to": "if (false) return {fail:",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: no record"
+    },
+    {
+      "file": "tests/unit/render-slot.test.mjs",
+      "from": "--write --repo se-dev-kit\";\nconst RECORD_LINE",
+      "to": "--write\";\nconst RECORD_LINE",
+      "test": "tests/unit/render-slot.test.mjs",
+      "name": "^copy verdict: "
+    }
+  ]
+}
