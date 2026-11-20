@@ -2,8 +2,8 @@
 /**
  * The whole gate of a session on one issue (AGENTS.md, "A session on one issue", step 2), on the branch's last commit:
  * typecheck, npm test, the build in the render-slot queue, verify:bundle, then each mutation plan the branch adds or
- * changes against main. Each step is a child of its own, with its output in .cache/gate/<commit>/<step>.log; the run
- * stops at the first step that fails.
+ * changes against origin/main as of the last fetch (the local main without that ref). Each step is a child of its own,
+ * with its output in .cache/gate/<commit>/<step>.log; the run stops at the first step that fails.
  *
  *   npm run gate [-- --dry-run | --help]
  *
@@ -13,7 +13,8 @@
  * `maquina_livre.py --esperar` before the build stood still while that queue moved (86 min before each build, #38).
  *
  * Exit codes: 0 every step passed; 1 a step failed (or the tree changed during the gate); 2 usage, or a refusal before
- * any step (outside a git checkout, a dirty tree); 3 every step passed but npm test left suites NOT COVERED.
+ * any step (outside a git checkout, a dirty tree, no main, a base with no merge base with HEAD); 3 every step passed but
+ * npm test left suites NOT COVERED.
  */
 import {execFileSync, spawn} from 'node:child_process';
 import {createWriteStream, existsSync, readFileSync} from 'node:fs';
@@ -36,10 +37,12 @@ Runs the issue gate on the branch's last commit, one step after the other, and s
   2. npm test       npm test (its browser suites take the render slot themselves)
   3. build          node ${SLOT} run --repo <root> -- npm run build (in the render-slot queue)
   4. verify:bundle  npm run verify:bundle
-  5. one step per tests/**/*.mutations.json the branch adds or changes against main (git diff main...HEAD):
+  5. one step per tests/**/*.mutations.json the branch adds or changes against the base (git diff <base sha>...HEAD):
                     node scripts/mutate.mjs --plan <plan>, in the render-slot queue when a test of it starts Chrome
+The base is refs/remotes/origin/main as of the last fetch, else refs/heads/main. The gate does not fetch: git fetch first.
 No step waits for the machine check; each step's log goes to .cache/gate/<commit>/, with summary.txt.
-A dirty tree is refused: the gate runs on the branch's last commit, so commit first.
+A dirty tree is refused: the gate runs on the branch's last commit, so commit first. So are no main and a base
+with no merge base with HEAD.
 --dry-run prints the commit, the steps and the plans, and runs and writes nothing.
 Exit codes: 0 all passed, 1 a step failed, 2 usage or refusal, 3 all passed but npm test left suites NOT COVERED.`;
 
@@ -65,13 +68,33 @@ export function gitState(root = ROOT) {
 }
 
 /**
- * The mutation plans the branch adds or changes against `base`, from the merge base (three dots), so `base` moving
- * ahead does not count; deleted plans are left out. Paths relative to the root, sorted.
+ * Where the gate looks for main, in its order, each by its whole ref name: `git rev-parse origin/main` takes a local
+ * branch called origin/main first, and `main` a tag called main, with only a warning on the stderr that `git()` drops.
  */
-export function changedPlans({root = ROOT, base = 'main'} = {}) {
+const BASES = [{ref: 'refs/remotes/origin/main', name: 'origin/main'}, {ref: 'refs/heads/main', name: 'main'}];
+
+/**
+ * The base the branch is diffed against, resolved once: the remote-tracking origin/main as of the last fetch (the gate
+ * does not fetch), else the local main; with its sha and short sha. Neither is refused.
+ */
+export function gateBase({root = ROOT} = {}) {
+  for (const {ref, name} of BASES) {
+    let sha;
+    try {sha = git(root, ['rev-parse', '--verify', '--quiet', ref]).trim();} catch {continue;}
+    return {name, sha, short: git(root, ['rev-parse', '--short', sha]).trim()};
+  }
+  throw new UsageError(`There is no main in ${root} (neither refs/remotes/origin/main nor refs/heads/main): the gate diffs the branch against origin/main, or against the local main without it; git fetch first.`);
+}
+
+/**
+ * The mutation plans the branch adds or changes against `base`, from the merge base (three dots), so the base moving
+ * ahead does not count; deleted plans are left out. Paths relative to the root, sorted. A base with no merge base with
+ * HEAD is refused, never swapped for another.
+ */
+export function changedPlans({root = ROOT, base = gateBase({root})} = {}) {
   let names;
-  try {names = git(root, ['diff', '--name-only', '--diff-filter=d', `${base}...HEAD`]);}
-  catch (error) {throw new UsageError(`Cannot diff against ${base}: ${String(error?.stderr || error?.message || error).trim()}`);}
+  try {names = git(root, ['diff', '--name-only', '--diff-filter=d', `${base.sha}...HEAD`]);}
+  catch (error) {throw new UsageError(`Cannot diff against ${base.name} (${base.short}): ${String(error?.stderr || error?.message || error).trim()}. The branch needs a commit in common with ${base.name}: git fetch, or in a shallow clone git fetch --unshallow.`);}
   return names.split('\n').filter(path => /^tests\/.+\.mutations\.json$/.test(path)).sort();
 }
 
@@ -144,14 +167,22 @@ async function clearEarlierRun(directory) {
  * The gate: refuses a dirty tree, then runs each step in turn through `run`, stopping at the first that fails or after
  * which HEAD or the tree changed. Returns the exit code; prints progress, the summary and the last line through `log`.
  */
-export async function runGate({root = ROOT, base = 'main', run = runStep, log = console.log, error = console.error, stopped = () => stopSignal, awake = () => {}} = {}) {
+export async function runGate({root = ROOT, run = runStep, log = console.log, error = console.error, stopped = () => stopSignal, awake = () => {}} = {}) {
   const {commit, dirty} = gitState(root);
   if (dirty.length) {
     error(`gate ${commit} refused: the tree is not clean, and the gate runs on the branch's last commit, so commit first.\n${dirty.map(line => `  ${line}`).join('\n')}`);
     return EXIT.usage;
   }
+  let base; let plans;
+  try {
+    base = gateBase({root});
+    plans = changedPlans({root, base});
+  } catch (caught) {
+    if (!(caught instanceof UsageError)) throw caught;
+    error(`gate ${commit} refused: ${caught.message}`);
+    return EXIT.usage;
+  }
   awake();
-  const plans = changedPlans({root, base});
   const steps = gateSteps({root, plans});
   const directory = join(root, '.cache', 'gate', commit);
   await mkdir(directory, {recursive: true});
@@ -190,7 +221,7 @@ export async function runGate({root = ROOT, base = 'main', run = runStep, log = 
     summary.push([result.step.name.padEnd(width), result.status.padEnd(8), (result.took ?? '').padEnd(8), result.shown, ...(result.extra ?? [])].join(' ').trimEnd());
     for (const line of result.below ?? []) summary.push(`  ${line}`);
   }
-  if (!plans.length) summary.push(`${'mutation plans'.padEnd(width)} none     no tests/**/*.mutations.json added or changed against ${base}`);
+  if (!plans.length) summary.push(`${'mutation plans'.padEnd(width)} none     no tests/**/*.mutations.json added or changed against ${base.name} (${base.short})`);
   const uncovered = notCoveredSuites(results.find(result => result.step.name === 'npm test')?.below ?? []);
   let last; let code;
   if (failed) {last = `gate ${commit} FAILED at ${failed.step.name}: ${failed.shown}`; code = EXIT.failed;}
@@ -204,15 +235,17 @@ export async function runGate({root = ROOT, base = 'main', run = runStep, log = 
 }
 
 /** What the gate would do, without running or writing anything. */
-export function dryRun({root = ROOT, base = 'main', log = console.log} = {}) {
+export function dryRun({root = ROOT, log = console.log} = {}) {
   const {commit, dirty} = gitState(root);
+  const base = gateBase({root});
   const plans = changedPlans({root, base});
   const steps = gateSteps({root, plans});
   const width = Math.max(...steps.map(step => step.name.length));
   log(`gate ${commit} (dry run: nothing runs, nothing is written)`);
   log(`Logs would go to ${relative(root, join(root, '.cache', 'gate', commit))}/`);
+  log(`Base: ${base.name} (${base.short})`);
   steps.forEach((step, index) => log(`  ${index + 1}. ${step.name.padEnd(width)}  ${[step.command, ...step.args].join(' ')}`));
-  log(plans.length ? `Mutation plans added or changed against ${base}: ${plans.join(', ')}` : `Mutation plans: none added or changed against ${base}.`);
+  log(plans.length ? `Mutation plans added or changed against ${base.name}: ${plans.join(', ')}` : `Mutation plans: none added or changed against ${base.name}.`);
   if (dirty.length) log(`The tree is not clean, so the real run would refuse (exit 2): commit first.\n${dirty.map(line => `  ${line}`).join('\n')}`);
   return EXIT.passed;
 }

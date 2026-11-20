@@ -5,7 +5,7 @@ import {mkdir, mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {dirname, join, resolve} from "node:path";
 import test from "node:test";
-import {EXIT, UsageError, changedPlans, dryRun, gitState, parseArgs, runGate} from "../../scripts/gate.mjs";
+import {EXIT, UsageError, changedPlans, dryRun, gateBase, gitState, parseArgs, runGate} from "../../scripts/gate.mjs";
 
 // npm run gate is the gate of a session on one issue (AGENTS.md step 2). Sessions wrote their own zsh chains, which
 // waited on `maquina_livre.py --esperar` before npm run build while the render-slot queue moved (86 min before each
@@ -111,7 +111,7 @@ test("a NOT COVERED left by npm test is copied under its line, the other steps s
   assert.equal(last, `gate ${commit} passed, but npm test left NOT COVERED: integration, web:browser. Run npm run test:browser again, or name them in the question.`);
 });
 
-test("the plans against main are the tests/ plans the branch adds or changes since the merge base, without deleted ones", async t => {
+test("without origin/main, the plans against main are the tests/ plans the branch adds or changes since the merge base, without deleted ones", async t => {
   const root = await folder(t);
   git(root, "init", "-q", "-b", "main");
   // Each plan has text of its own: git would read a deleted plan and an added one with the same text as a rename.
@@ -130,6 +130,98 @@ test("the plans against main are the tests/ plans the branch adds or changes sin
   git(root, "commit", "-q", "-m", "ahead");
   git(root, "checkout", "-q", "wip/x");
   assert.deepEqual(changedPlans({root}), ["tests/unit/a.mutations.json", "tests/unit/b.mutations.json"]);
+});
+
+// #49: the base was the short name main, the local main every worktree shares with the live checkout. With that main
+// behind origin/main, the gate also ran the plans of commits already on origin (etsy-thumb-generator#18: two plans of
+// 2 and 9 min for a one-line docs commit). The base is now origin/main by its whole ref name, else the local main.
+const ORIGIN_MAIN = "refs/remotes/origin/main";
+const LOCAL_MAIN = "refs/heads/main";
+const commitAll = (root, message) => {git(root, "add", "-A"); git(root, "commit", "-q", "-m", message);};
+const dry = root => {const lines = []; const code = dryRun({root, log: line => lines.push(line)}); return {code, text: lines.join("\n")};};
+const BASE_STEPS = ["typecheck", "npm test", "build", "verify:bundle"];
+
+/**
+ * A checkout whose origin/main (a remote-tracking ref written by hand, with no remote) is one commit ahead of the local
+ * main with a plan of its own (o), and whose branch wip/y, born from origin/main, adds one plan (y).
+ */
+async function behind(t) {
+  const root = await folder(t);
+  git(root, "init", "-q", "-b", "main");
+  await put(root, {".gitignore": ".cache/\n", "x.mjs": "a\n"});
+  commitAll(root, "base");
+  git(root, "checkout", "-q", "-b", "wip/y");
+  await put(root, {"tests/unit/o.mutations.json": plan("tests/unit/o.test.mjs")});
+  commitAll(root, "on origin/main, not on the local main");
+  git(root, "update-ref", ORIGIN_MAIN, "HEAD");
+  await put(root, {"tests/unit/y.mutations.json": plan("tests/unit/y.test.mjs")});
+  commitAll(root, "the branch's plan");
+  return root;
+}
+
+test("with the local main behind origin/main, the gate runs only the plans the branch changes against origin/main", async t => {
+  const root = await behind(t);
+  const short = git(root, "rev-parse", "--short", ORIGIN_MAIN);
+  assert.deepEqual(gateBase({root}), {name: "origin/main", sha: git(root, "rev-parse", ORIGIN_MAIN), short});
+  assert.deepEqual(changedPlans({root}), ["tests/unit/y.mutations.json"]);
+  const runner = fake();
+  assert.equal((await gate(root, runner)).code, EXIT.passed);
+  assert.deepEqual(runner.seen.map(step => step.name), [...BASE_STEPS, "mutate tests/unit/y.mutations.json"], "a plan already on origin/main ran");
+  const {code, text} = dry(root);
+  assert.equal(code, EXIT.passed);
+  assert.ok(text.includes(`Base: origin/main (${short})`), text);
+  assert.ok(text.includes("Mutation plans added or changed against origin/main: tests/unit/y.mutations.json"), text);
+  // On origin/main itself the branch changes no plan, and the summary names the base it compared with.
+  git(root, "checkout", "-q", "--detach", ORIGIN_MAIN);
+  const none = await gate(root, fake());
+  assert.equal(none.code, EXIT.passed);
+  assert.ok(none.lines.some(line => /^mutation plans +none +no tests\/\*\*\/\*\.mutations\.json added or changed against origin\/main \(\w+\)$/.test(line) && line.endsWith(`(${short})`)), none.lines.join("\n"));
+});
+
+test("a local branch called origin/main and a tag called main are not taken as the base", async t => {
+  // Beside the remote ref, a local branch origin/main (at the local main, behind): `git rev-parse origin/main` takes the branch.
+  const both = await behind(t);
+  git(both, "branch", "origin/main", LOCAL_MAIN);
+  assert.notEqual(git(both, "rev-parse", "refs/heads/origin/main"), git(both, "rev-parse", ORIGIN_MAIN));
+  assert.equal(gateBase({root: both}).sha, git(both, "rev-parse", ORIGIN_MAIN));
+  assert.deepEqual(changedPlans({root: both}), ["tests/unit/y.mutations.json"]);
+  assert.ok(dry(both).text.includes(`Base: origin/main (${git(both, "rev-parse", "--short", ORIGIN_MAIN)})`));
+  // Without the remote ref, a local branch called origin/main (at the branch's tip) does not pass for it.
+  const {root: alone} = await checkout(t);
+  git(alone, "branch", "origin/main", "HEAD");
+  assert.deepEqual(gateBase({root: alone}), {name: "main", sha: git(alone, "rev-parse", LOCAL_MAIN), short: git(alone, "rev-parse", "--short", LOCAL_MAIN)});
+  assert.deepEqual(changedPlans({root: alone}), ["tests/unit/a.mutations.json", "tests/unit/b.mutations.json"]);
+  // A tag called main (at the branch's tip): `git rev-parse main` takes the tag before the branch.
+  const {root: tagged} = await checkout(t);
+  git(tagged, "tag", "main", "HEAD");
+  assert.deepEqual(gateBase({root: tagged}), {name: "main", sha: git(tagged, "rev-parse", LOCAL_MAIN), short: git(tagged, "rev-parse", "--short", LOCAL_MAIN)});
+  const runner = fake();
+  assert.equal((await gate(tagged, runner)).code, EXIT.passed);
+  assert.deepEqual(runner.seen.map(step => step.name), STEPS);
+});
+
+test("an origin/main with no merge base with HEAD is refused with exit 2, runs nothing, and never falls back to main", async t => {
+  const {root, commit} = await checkout(t);
+  git(root, "update-ref", ORIGIN_MAIN, git(root, "commit-tree", "-m", "an unrelated history", "HEAD^{tree}"));
+  const runner = fake();
+  const {code, errors} = await gate(root, runner);
+  assert.equal(code, EXIT.usage);
+  assert.deepEqual(runner.seen, []);
+  assert.match(errors.join("\n"), new RegExp(`^gate ${commit} refused: Cannot diff against origin/main \\(\\w+\\): .*no merge base.*git fetch`));
+  assert.throws(() => changedPlans({root}), UsageError);
+  assert.throws(() => dryRun({root, log: () => {}}), UsageError);
+  assert.equal(existsSync(join(root, ".cache")), false, "a refused run wrote its log folder");
+});
+
+test("with neither origin/main nor main the gate is refused with exit 2 and runs nothing", async t => {
+  const {root, commit} = await checkout(t);
+  git(root, "branch", "-m", "main", "trunk");
+  const runner = fake();
+  const {code, errors} = await gate(root, runner);
+  assert.equal(code, EXIT.usage);
+  assert.deepEqual(runner.seen, []);
+  assert.match(errors.join("\n"), new RegExp(`^gate ${commit} refused: There is no main .*neither refs/remotes/origin/main nor refs/heads/main.*git fetch first\\.$`));
+  assert.throws(() => gateBase({root}), UsageError);
 });
 
 test("a dirty tree is refused before any step, with its entries", async t => {
@@ -189,7 +281,9 @@ test("AGENTS.md step 2 of a session on one issue names npm run gate, and package
   const section = agents.split(/^## A session on one issue$/m)[1].split(/^## |^<!--/m)[0];
   const step = section.split("\n").find(line => line.startsWith("2. "));
   assert.ok(step?.includes("`npm run gate`"), "step 2 does not name npm run gate");
-  assert.ok(step.includes("`.cache/gate/<commit>/`"), "step 2 does not say where the logs go");
+  assert.ok(step.includes("each step's log in `.cache/gate/<commit>/`"), "step 2 does not say where the logs go");
+  assert.ok(step.includes("against `origin/main` as of the last fetch, or the local `main` without that ref"), "step 2 does not say the plans' base");
+  assert.ok(step.includes("The gate does not fetch: `git fetch` first."), "step 2 does not say to fetch first");
   const {scripts} = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
   assert.equal(scripts.gate, "node scripts/gate.mjs");
 });
