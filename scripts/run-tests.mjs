@@ -9,7 +9,9 @@
 //   that runs them;
 // - each suite gets a temporary folder of its own (TMPDIR), which must be empty when the suite ends,
 //   and a render slot inside it, so a CLI render a test starts never waits for the machine's slot;
-// - a suite's summary says when a test had to start Chrome twice, and why (#33);
+// - a suite's summary says when a test had to start Chrome twice, and why (#33); when that second launch ran out of
+//   time too, the runner asks the machine check again and, if it says to wait, gives the slot back, waits as for the
+//   suite's start, and runs that file again, at most LAUNCH_RERUNS times, the summary naming the wait (#46);
 // - every finished suite adds a line to the live checkout's .cache/test-history.jsonl, which --history counts.
 //
 //   node scripts/run-tests.mjs <suite>...        suites: unit, integration, web, web:browser
@@ -24,7 +26,7 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {isEntryPoint} from './lib/entry-point.mjs';
 import {TEST_FLOOR, browserGate, diskFloor} from './lib/machine.mjs';
-import {appendHistory, failedTests, historyFile, historyReport, launchRetries, readHistory} from './lib/test-history.mjs';
+import {appendHistory, failedTests, historyFile, historyReport, launchRetries, launchTimeoutFiles, readHistory} from './lib/test-history.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LOGS = join(ROOT, '.cache', 'test-logs');
@@ -123,6 +125,9 @@ const cover = cause => COVER[cause] ?? '; run npm run test:browser, which waits 
  * floor set outside a test), the gate refuses at once. `take`, `floor`, `check` and `log` are replaceable for tests.
  * No environment variable opens it: SE_WIDGET_STUDIO_TEST_GATE=off once did, for any npm test or npm run mutate a
  * session started, and no test needed it (#51); a test replaces `take` and `check` instead.
+ * `afterLaunchTimeout` asks after a suite's Chrome launch ran out of its time twice: it lets the suite in again only after
+ * a wait, so a machine the check finds free at once refuses (`cause: 'free'`), and an allowed answer says in `busy` what
+ * it waited out.
  */
 export async function gate({
   take = takeBrowserSlot,
@@ -132,7 +137,8 @@ export async function gate({
   wait = true,
   waitLimitMs = SLOT_WAIT_MS,
   backoffMs = BUSY_BACKOFF_MS,
-  log = message => console.log(message)
+  log = message => console.log(message),
+  afterLaunchTimeout = false
 } = {}) {
   // No wait mends a floor set where it may not be, so it refuses before the slot is taken (#47).
   let minFreeBytes;
@@ -147,7 +153,11 @@ export async function gate({
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (attempt) await sleep(pauseMs);
       result = await check(minFreeBytes);
-      if (result.ok) return {...result, release: slot.release, waitedMs: Date.now() - since};
+      if (result.ok && afterLaunchTimeout && !said) {
+        slot.release();
+        return {ok: false, cause: 'free', reason: 'the machine check says the machine is free, so waiting would not mend the launch'};
+      }
+      if (result.ok) return {...result, release: slot.release, waitedMs: Date.now() - since, ...(said ? {busy: said} : {})};
     }
     slot.release();
     const waited = Date.now() - since;
@@ -195,8 +205,24 @@ export async function execute(label, suite, files, logPath, {echo = true} = {}) 
   log.write(`# ${label}: exit ${code} after ${seconds.toFixed(1)} s\n`);
   await new Promise(done => log.end(done));
   const text = await readFile(logPath, 'utf8');
-  return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text)};
+  return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text), launchTimeouts: launchTimeoutFiles(text), left};
 }
+
+/**
+ * How many times a browser suite runs again the files whose Chrome launch ran out of its time twice while the machine
+ * check said to wait. A count, not a budget: each of those waits already has gate's own SLOT_WAIT_MS, and a file whose
+ * launch still times out after two waits for a free machine is not timed out by the load alone.
+ */
+export const LAUNCH_RERUNS = 2;
+// What a Chrome that launch killed can leave in a suite's temporary folder: the profile Playwright made for it (2026-11-20).
+const LAUNCH_PROFILE = /^playwright_chromiumdev_profile-/;
+
+/**
+ * The files to run again after the machine waited: every failing test of the outcome ended in a launch that timed out
+ * after its retry, and it left nothing in its temporary folder but the profiles of the Chromes those launches killed.
+ */
+export const timedOutFiles = ({code, launchRetries: retries = [], launchTimeouts = [], left = []}) =>
+  (code !== 0 && retries.length && left.every(entry => LAUNCH_PROFILE.test(entry)) ? launchTimeouts : []);
 
 /** Adds a finished suite to the test history. A history that cannot be written fails no run. */
 async function recordSuite(entry) {
@@ -259,10 +285,34 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
     } finally {
       allowed.release();
     }
-    const {code, seconds, failures = [], launchRetries: retries = []} = outcome;
+    let seconds = outcome.seconds;
+    const retries = [...(outcome.launchRetries ?? [])];
+    // A launch that timed out twice while the load rose: the machine check is asked again, and its wait runs the file again (#46).
+    const waits = [];
+    const notes = [];
+    for (let again = timedOutFiles(outcome); suite.browser && again.length; again = timedOutFiles(outcome)) {
+      const files = again.join(', ');
+      if (waits.length >= LAUNCH_RERUNS) { notes.push(`Chrome's launch timed out twice in ${files} again; not run again after ${LAUNCH_RERUNS} waits for the machine`); break; }
+      const allowedAgain = await gateFor({afterLaunchTimeout: true});
+      for (const warning of allowedAgain.warnings ?? []) log(`\nWarning: ${warning}`);
+      if (!allowedAgain.ok) { notes.push(`Chrome's launch timed out twice in ${files}; not run again: ${allowedAgain.reason}`); break; }
+      const againLog = join(directory, `${name.replace(':', '-')}-again-${waits.length + 1}.log`);
+      try {
+        log(`\n== ${name}: Chrome's launch timed out twice in ${files}; the machine check said to wait (${allowedAgain.busy}), and after ${duration(allowedAgain.waitedMs)} it runs again`);
+        outcome = await run(name, suite, again, againLog);
+      } finally {
+        allowedAgain.release();
+      }
+      seconds += outcome.seconds;
+      retries.push(...(outcome.launchRetries ?? []));
+      waits.push({files: again, waitedMs: allowedAgain.waitedMs, why: allowedAgain.busy, log: relative(ROOT, againLog), status: outcome.code === 0 ? 'passed' : 'failed'});
+      notes.push(`Chrome's launch timed out twice in ${files}; the machine check said to wait (${allowedAgain.busy}), so it waited ${duration(allowedAgain.waitedMs)} and ran ${again.length === 1 ? 'it' : 'them'} again: ${waits.at(-1).status}`);
+    }
+    const {code, failures = []} = outcome;
     const status = code === 0 ? 'passed' : 'failed';
-    results.push({name, status, detail: `${seconds.toFixed(1)} s${waited}${retrying(retries)}`, retries});
-    await recordSuite({suite: name, status, seconds: Number(seconds.toFixed(1)), waitedMs: allowed.waitedMs ?? 0, log: relative(ROOT, logPath), failures, launchRetries: retries.length});
+    const rerun = waits.length ? `, running a file again after a Chrome launch timed out ${waits.length}×` : '';
+    results.push({name, status, detail: `${seconds.toFixed(1)} s${waited}${retrying(retries)}${rerun}`, retries, notes});
+    await recordSuite({suite: name, status, seconds: Number(seconds.toFixed(1)), waitedMs: allowed.waitedMs ?? 0, log: relative(ROOT, logPath), failures, launchRetries: retries.length, ...(waits.length ? {launchWaits: waits} : {})});
     if (code !== 0) {
       // The run stops at its first failed suite; the ones after it stay in the summary, so it does not read as one failure.
       for (const later of names.slice(index + 1)) results.push({name: later, status: 'not run', detail: `after ${name} failed`});
@@ -272,6 +322,7 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
   log('');
   for (const result of results) log(`${result.name.padEnd(12)} ${result.status.padEnd(8)} ${result.detail}`);
   for (const result of results) for (const line of result.retries ?? []) log(`${result.name}: ${line}`);
+  for (const result of results) for (const line of result.notes ?? []) log(`${result.name}: ${line.replace(/\.$/, '')}.`);
   const skipped = results.filter(result => result.status === 'skipped');
   // A line per cause, in the order its first suite came.
   for (const cause of new Set(skipped.map(result => result.cause))) log(`NOT COVERED: ${skipped.filter(result => result.cause === cause).map(result => result.name).join(', ')}. This run did not test them${cover(cause)}.`);

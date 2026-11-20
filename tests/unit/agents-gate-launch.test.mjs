@@ -35,6 +35,19 @@ test("AGENTS.md step 2 waits for the end line lancar_job.py prints, in one backg
   assert.ok(step.includes("The end line's `rc=` is the gate's exit code."), "step 2 does not say what the end line carries");
 });
 
+// On 2026-11-18 a gate failed at a Chrome launch that timed out twice as the load rose, and step 2 said «No step waits for
+// the machine check», so the session put a hand-written machine wait in front of npm run gate, the chain #38 removed. The
+// runner waits for that check before each browser suite, and since #46 again after such a launch.
+test("AGENTS.md says the gate's runner waits for the machine check, so nothing goes in front of npm run gate", () => {
+  assert.doesNotMatch(step, /No step waits for the machine check/);
+  assert.ok(step.includes("Nothing goes in front of `npm run gate`: its runner already waits for the machine check before each browser suite, and again after a Chrome launch that runs out of its 30 s twice"), "step 2 does not say the runner waits for the machine check");
+  const tests = agents.split("\n").find((line) => line.startsWith("- `npm test` runs"));
+  assert.ok(tests?.includes("When that second launch runs out too, the runner asks the machine check again: told to wait, it gives the render slot back, waits as it does before a browser suite, and runs that test file again, at most twice, its summary and the history naming the wait; told the machine is free, the suite fails."), "the npm test paragraph does not say what a launch that times out twice does");
+  const gate = readFileSync(resolve(import.meta.dirname, "../../scripts/gate.mjs"), "utf8");
+  assert.doesNotMatch(gate, /No step (waits for|runs or polls) the machine check/, "scripts/gate.mjs still says nothing waits for the machine check");
+  assert.match(gate, /^Nothing goes in front of the gate: npm test waits for the machine check before each browser suite/m, "the gate's help does not say npm test waits for the machine check");
+});
+
 test("the launch in AGENTS.md step 2 is one lancar_job.py accepts, and it prints the end line's check", async (t) => {
   if (!existsSync(LAUNCHER)) return t.skip("no vault on this machine");
   assert.ok(readFileSync(LAUNCHER, "utf8").includes('print(f"o fim: grep -qE '), "lancar_job.py no longer prints the end line's check that step 2 quotes");

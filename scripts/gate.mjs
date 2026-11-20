@@ -7,9 +7,11 @@
  *
  *   npm run gate [-- --dry-run | --help]
  *
- * No step runs or polls the machine check (maquina_livre.py) before it starts, and no step has a timeout: the browser
- * suites of npm test, the build and a plan that starts Chrome wait in the render-slot queue, which moves in the order
- * the waiters came and lets them in between two steps of a chain that cedes. A hand-written chain that waited on
+ * The gate runs no machine check (maquina_livre.py) of its own before a step, and no step has a timeout: npm test's
+ * runner waits for that check before each browser suite, and again after a Chrome launch that ran out of its time
+ * twice (#46), so nothing goes in front of the gate. The browser suites of npm test, the build and a plan that starts
+ * Chrome wait in the render-slot queue, which moves in the order the waiters came and lets them in between two steps
+ * of a chain that cedes. A hand-written chain that waited on
  * `maquina_livre.py --esperar` before the build stood still while that queue moved (86 min before each build, #38).
  *
  * Exit codes: 0 every step passed; 1 a step failed (or the tree changed during the gate); 2 usage, or a refusal before
@@ -40,7 +42,8 @@ Runs the issue gate on the branch's last commit, one step after the other, and s
   5. one step per tests/**/*.mutations.json the branch adds or changes against the base (git diff <base sha>...HEAD):
                     node scripts/mutate.mjs --plan <plan>, in the render-slot queue when a test of it starts Chrome
 The base is refs/remotes/origin/main as of the last fetch, else refs/heads/main. The gate does not fetch: git fetch first.
-No step waits for the machine check; each step's log goes to .cache/gate/<commit>/, with summary.txt.
+Nothing goes in front of the gate: npm test waits for the machine check before each browser suite, and again after
+a Chrome launch that ran out of its time twice. Each step's log goes to .cache/gate/<commit>/, with summary.txt.
 A dirty tree is refused: the gate runs on the branch's last commit, so commit first. So are no main and a base
 with no merge base with HEAD.
 --dry-run prints the commit, the steps and the plans, and runs and writes nothing.

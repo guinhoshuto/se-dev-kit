@@ -1,0 +1,204 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "!blocks.every(block => LAUNCH_TIMEOUT.test(block))",
+      "to": "!blocks.some(block => LAUNCH_TIMEOUT.test(block))",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a log's files to run again"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "code: 'BROWSER_LAUNCH_TIMEOUT',?$/m",
+      "to": "code: 'BROWSER_LAUNCH_FAILED',?$/m",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "const blocks = section.split(",
+      "to": "const blocks = text.split(",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a log's files to run again"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "return [...new Set(blocks.map(",
+      "to": "return [...(blocks.map(",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a log's files to run again"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "code !== 0 && retries.length && left.every",
+      "to": "code !== 0 && left.every",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "left.every(entry => LAUNCH_PROFILE.test(entry)) ? launchTimeouts",
+      "to": "true ? launchTimeouts",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "(code !== 0 && retries.length",
+      "to": "(retries.length",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "const LAUNCH_PROFILE = /^playwright_chromiumdev_profile-/;",
+      "to": "const LAUNCH_PROFILE = /^playwright_chromium_profile-/;",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "if (waits.length >= LAUNCH_RERUNS)",
+      "to": "if (waits.length > LAUNCH_RERUNS)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "export const LAUNCH_RERUNS = 2;",
+      "to": "export const LAUNCH_RERUNS = 3;",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "suite.browser && again.length; again",
+      "to": "again.length; again",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "await gateFor({afterLaunchTimeout: true})",
+      "to": "await gateFor()",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "outcome = await run(name, suite, again, againLog);",
+      "to": "outcome = await run(name, suite, list, againLog);",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "      if (result.ok && afterLaunchTimeout && !said) {",
+      "to": "      if (false) {",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "if (result.ok && afterLaunchTimeout && !said)",
+      "to": "if (result.ok && afterLaunchTimeout)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "        slot.release();\n        return {ok: false, cause: 'free'",
+      "to": "        return {ok: false, cause: 'free'",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": ", ...(said ? {busy: said} : {})};",
+      "to": "};",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "      } finally {\n        allowedAgain.release();\n      }",
+      "to": "      } finally {\n      }",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "      seconds += outcome.seconds;\n",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "      retries.push(...(outcome.launchRetries ?? []));\n",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "`, running a file again after a Chrome launch timed out ${waits.length}×`",
+      "to": "''",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "so it waited ${duration(allowedAgain.waitedMs)} and ran",
+      "to": "so it ran",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "if (!allowedAgain.ok) { notes.push(`Chrome's launch timed out twice in ${files}; not run again: ${allowedAgain.reason}`); break; }",
+      "to": "if (!allowedAgain.ok) break;",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "{ notes.push(`Chrome's launch timed out twice in ${files} again; not run again after ${LAUNCH_RERUNS} waits for the machine`); break; }",
+      "to": "break;",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "...(waits.length ? {launchWaits: waits} : {})",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "  for (const result of results) for (const line of result.notes ?? []) log(",
+      "to": "  for (const result of []) for (const line of result.notes ?? []) log(",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a browser suite whose Chrome launch times out twice"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "Nothing goes in front of `npm run gate`: its runner already waits for the machine check before each browser suite, and again after a Chrome launch that runs out of its 30 s twice, and",
+      "to": "No step waits for the machine check, and",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": " When that second launch runs out too, the runner asks the machine check again: told to wait, it gives the render slot back, waits as it does before a browser suite, and runs that test file again, at most twice, its summary and the history naming the wait; told the machine is free, the suite fails.",
+      "to": "",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "Nothing goes in front of the gate: npm test waits for the machine check before each browser suite, and again after\na Chrome launch that ran out of its time twice. Each step's log",
+      "to": "No step waits for the machine check; each step's log",
+      "test": "tests/unit/agents-gate-launch.test.mjs"
+    }
+  ]
+}

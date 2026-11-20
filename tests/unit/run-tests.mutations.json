@@ -51,8 +51,8 @@
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "detail: `${seconds.toFixed(1)} s${waited}${retrying(retries)}`",
-      "to": "detail: `${seconds.toFixed(1)} s${retrying(retries)}`",
+      "from": "detail: `${seconds.toFixed(1)} s${waited}${retrying(retries)}${rerun}`",
+      "to": "detail: `${seconds.toFixed(1)} s${retrying(retries)}${rerun}`",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^npm test waits"
     },
@@ -184,15 +184,15 @@
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text)};",
-      "to": "return {code, seconds, failures: [], launchRetries: launchRetries(text)};",
+      "from": "return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text), ",
+      "to": "return {code, seconds, failures: [], launchRetries: launchRetries(text), ",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a suite's log gives the tests that failed"
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text)};",
-      "to": "return {code, seconds, failures: failedTests(text), launchRetries: []};",
+      "from": "return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text), ",
+      "to": "return {code, seconds, failures: failedTests(text), launchRetries: [], ",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a suite's log gives the tests that failed"
     },
@@ -205,8 +205,8 @@
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "${waited}${retrying(retries)}`, retries});",
-      "to": "${waited}`, retries});",
+      "from": "${waited}${retrying(retries)}${rerun}`, retries, notes});",
+      "to": "${waited}${rerun}`, retries, notes});",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a run's summary says a suite retried"
     },
@@ -219,7 +219,7 @@
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "    await recordSuite({suite: name, status, seconds: Number(seconds.toFixed(1)), waitedMs: allowed.waitedMs ?? 0, log: relative(ROOT, logPath), failures, launchRetries: retries.length});\n",
+      "from": "    await recordSuite({suite: name, status, seconds: Number(seconds.toFixed(1)), waitedMs: allowed.waitedMs ?? 0, log: relative(ROOT, logPath), failures, launchRetries: retries.length, ...(waits.length ? {launchWaits: waits} : {})});\n",
       "to": "",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a run's summary says a suite retried"
