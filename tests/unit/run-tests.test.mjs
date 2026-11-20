@@ -10,7 +10,7 @@ import {setTimeout as sleep} from "node:timers/promises";
 import {fileURLToPath} from "node:url";
 
 import {historyDir} from "../../dist/shared/render-slot.js";
-import {browserGate} from "../../scripts/lib/machine.mjs";
+import {browserGate, diskFloor} from "../../scripts/lib/machine.mjs";
 import {SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
 import {failedTests, historyFile, historyReport, launchRetries, readHistory} from "../../scripts/lib/test-history.mjs";
 import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
@@ -324,11 +324,12 @@ test("the gate takes the slot before the machine check and gives it back at once
   assert.equal(await exists(dir), false);
 });
 
-test("the gate's own check holds this checkout's real disk to SE_WIDGET_STUDIO_MIN_FREE_BYTES: a floor above its free space refuses as a low disk does", async (t) => {
+test("the gate's own check holds this checkout's real disk to SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES inside a test: a floor above its free space refuses as a low disk does", async (t) => {
   gateOn(t);
-  const saved = process.env.SE_WIDGET_STUDIO_MIN_FREE_BYTES;
-  process.env.SE_WIDGET_STUDIO_MIN_FREE_BYTES = String(1024 ** 5);
-  t.after(() => { if (saved === undefined) delete process.env.SE_WIDGET_STUDIO_MIN_FREE_BYTES; else process.env.SE_WIDGET_STUDIO_MIN_FREE_BYTES = saved; });
+  assert.ok(process.env.NODE_TEST_CONTEXT, "this file runs as a test file of node --test");
+  const saved = process.env.SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES;
+  process.env.SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES = String(1024 ** 5);
+  t.after(() => { if (saved === undefined) delete process.env.SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES; else process.env.SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES = saved; });
   let released = 0;
   const refused = await gate({take: async () => ({ok: true, release: () => { released += 1; }}), pauseMs: 0, wait: false});
   const root = fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/, "");
@@ -337,6 +338,44 @@ test("the gate's own check holds this checkout's real disk to SE_WIDGET_STUDIO_M
   assert.match(refused.reason, new RegExp(`^only \\d+\\.\\d GiB free on the volume of ${literal(root)}; browser suites need 1048576\\.0 GiB$`));
   assert.equal(refused.wait, undefined, "waiting does not free the disk");
   assert.equal(released, 1, "the slot went back");
+});
+
+test("a test's disk floor set outside a test refuses the browser suites before the slot is taken, saying why, and leaves them NOT COVERED until it is unset", async (t) => {
+  gateOn(t);
+  // An npm test a session started with SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES=0: no NODE_TEST_CONTEXT in its environment (#47).
+  const outside = {SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES: "0"};
+  let taken = 0;
+  const outsideGate = () => gate({
+    floor: () => diskFloor(outside),
+    take: async () => { taken += 1; return {ok: true, release: () => {}}; },
+    check: async () => assert.fail("the machine was checked"),
+    pauseMs: 0
+  });
+  const reason = "SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES is set outside a test: only a test (node --test) may stand in for the free disk, and a run outside one keeps the 3 GiB floor of the browser suites";
+  const refused = await outsideGate();
+  assert.deepEqual(refused, {ok: false, cause: "floor", reason});
+  assert.equal(taken, 0, "the slot was never taken");
+
+  const lines = [];
+  const code = await runSuites(["integration", "web:browser"], {
+    suites: {integration: {browser: true}, "web:browser": {browser: true}},
+    files: async () => ["fake.test.mjs"],
+    gateFor: outsideGate,
+    run: async (name) => assert.fail(`${name} ran`),
+    newDirectory: async () => join(tmpdir(), "sws-runner-unused"),
+    log: (line) => lines.push(line)
+  });
+  const summary = lines.join("\n");
+  assert.equal(code, 0, "a skipped suite fails no run; the gate's exit 3 names it");
+  assert.match(summary, new RegExp(`^integration +skipped +${literal(reason)}$`, "m"));
+  assert.match(summary, /^NOT COVERED: integration, web:browser\. This run did not test them: unset SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES, which only a test may set, then run npm run test:browser\.$/m);
+  assert.equal(taken, 0);
+
+  // The floor the gate holds the disk to reaches its check.
+  const floors = [];
+  const inside = await gate({floor: () => 5, take: async () => ({ok: true, release: () => {}}), check: async (minFreeBytes) => { floors.push(minFreeBytes); return {ok: true}; }, pauseMs: 0});
+  assert.equal(inside.ok, true);
+  assert.deepEqual(floors, [5]);
 });
 
 test("a suite's processes get its TMPDIR and a render slot inside it, never the machine's", () => {

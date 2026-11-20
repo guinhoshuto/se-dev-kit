@@ -17,16 +17,23 @@ export const BROWSER_MARKER = '--se-widget-studio';
 /** Free space a browser suite needs before it starts: the machine rule is "no render below 3 GB free". */
 export const MIN_FREE_BYTES = 3 * 1024 ** 3;
 
+/** The variable through which a test stands in for the free disk; nothing but a test may set it (#47). */
+export const TEST_FLOOR = 'SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES';
+
 /**
- * The floor the runner's gate holds the real disk to: MIN_FREE_BYTES, unless SE_WIDGET_STUDIO_MIN_FREE_BYTES names
- * another, as a whole number of bytes. It stands in for the disk in a test, as RENDER_SLOT_DIR does for the slot and
- * MACHINE_CHECK for the machine check: a unit test that runs the mutate CLI through that gate sets 0, so its result does
- * not follow the machine's free disk (#44: at 0.4 GiB free, the real floor stopped such a test and the gate with it).
+ * The floor the runner's gate holds the real disk to: MIN_FREE_BYTES, unless a test names another in
+ * SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES, as a whole number of bytes. It stands in for the disk in a test, as
+ * RENDER_SLOT_DIR does for the slot and MACHINE_CHECK for the machine check: a unit test that runs the mutate CLI through
+ * that gate sets 0, so its result does not follow the machine's free disk (#44: at 0.4 GiB free, the real floor stopped
+ * such a test and the gate with it). A test is a process with NODE_TEST_CONTEXT, which node --test gives each test file
+ * and what that file starts with its environment. Set anywhere else (an npm test, npm run gate or npm run mutate that a
+ * session started), the variable throws, saying why: nothing outside a test lowers the 3 GiB floor (#47).
  */
 export function diskFloor(env = process.env) {
-  const value = env.SE_WIDGET_STUDIO_MIN_FREE_BYTES;
+  const value = env[TEST_FLOOR];
   if (value === undefined || value === '') return MIN_FREE_BYTES;
-  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error(`SE_WIDGET_STUDIO_MIN_FREE_BYTES must be a whole number of bytes, not ${JSON.stringify(value)}.`);
+  if (!env.NODE_TEST_CONTEXT) throw new Error(`${TEST_FLOOR} is set outside a test: only a test (node --test) may stand in for the free disk, and a run outside one keeps the 3 GiB floor of the browser suites`);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error(`${TEST_FLOOR} must be a whole number of bytes, not ${JSON.stringify(value)}.`);
   return Number(value);
 }
 

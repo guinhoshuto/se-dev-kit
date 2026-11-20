@@ -185,7 +185,8 @@ async function cliCheckout(t) {
   await mkdir(join(root, "tests/integration"), {recursive: true});
   await writeFile(join(root, "tests/integration/opens-chrome.test.mjs"), CHROME_TEST);
   // A machine check that always says free, so only the slot can stop the run; its tests also set the gate's disk floor to
-  // 0 bytes (SE_WIDGET_STUDIO_MIN_FREE_BYTES), since at 0.4 GiB free the real floor refused the run first (#44).
+  // 0 bytes (SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES), since at 0.4 GiB free the real floor refused the run first (#44). They
+  // keep NODE_TEST_CONTEXT in the CLI's environment: outside a test, that floor is refused (#47).
   await writeFile(join(root, "free-machine.py"), "import json\nprint(json.dumps({'livre': True, 'reasons': []}))\n");
   execFileSync("git", ["init", "-q"], {cwd: root, stdio: "ignore"});
   execFileSync("git", ["add", "."], {cwd: root, stdio: "ignore"});
@@ -199,8 +200,8 @@ test("with the render slot held by another process, the CLI stops a mutation who
   t.after(() => holder.kill("SIGKILL"));
   await mkdir(slot);
   await writeFile(join(slot, "owner.json"), JSON.stringify({pid: holder.pid, repo: "background-creator", command: "npm run stills", startedAt: new Date().toISOString()}));
-  const env = {...process.env, RENDER_SLOT_DIR: slot, MACHINE_CHECK: join(root, "free-machine.py"), SE_WIDGET_STUDIO_MIN_FREE_BYTES: "0"};
-  for (const name of ["NODE_TEST_CONTEXT", "RENDER_SLOT_HELD", "SE_WIDGET_STUDIO_TEST_GATE"]) delete env[name];
+  const env = {...process.env, RENDER_SLOT_DIR: slot, MACHINE_CHECK: join(root, "free-machine.py"), SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES: "0"};
+  for (const name of ["RENDER_SLOT_HELD", "SE_WIDGET_STUDIO_TEST_GATE"]) delete env[name];
   const cli = spawn(process.execPath, ["scripts/mutate.mjs", "lib/value.mjs", "--from", "1", "--to", "2", "--test", "tests/integration/opens-chrome.test.mjs"], {cwd: root, env, stdio: ["ignore", "pipe", "pipe"]});
   let output = "";
   cli.stdout.on("data", chunk => {output += chunk;});
@@ -233,8 +234,8 @@ test("held by a chain of the harness that cedes, the slot refuses the CLI, whose
     ""
   ].join("\n"));
   // The queued run asks no machine check (RENDER_SLOT_CHECK=off); the mutate it runs asks the free one, on a free disk.
-  const env = {...process.env, RENDER_SLOT_DIR: slot, RENDER_SLOT_CHECK: "off", MACHINE_CHECK: join(root, "free-machine.py"), SE_WIDGET_STUDIO_MIN_FREE_BYTES: "0"};
-  for (const name of ["NODE_TEST_CONTEXT", "RENDER_SLOT_HELD", "RENDER_SLOT_CEDE", "SE_WIDGET_STUDIO_TEST_GATE"]) delete env[name];
+  const env = {...process.env, RENDER_SLOT_DIR: slot, RENDER_SLOT_CHECK: "off", MACHINE_CHECK: join(root, "free-machine.py"), SE_WIDGET_STUDIO_TEST_MIN_FREE_BYTES: "0"};
+  for (const name of ["RENDER_SLOT_HELD", "RENDER_SLOT_CEDE", "SE_WIDGET_STUDIO_TEST_GATE"]) delete env[name];
   const script = "dist/shared/render-slot.js";
   const first = chainRound(t, {script, label: "chain.1", env, cwd: root});
   await first.holding;
