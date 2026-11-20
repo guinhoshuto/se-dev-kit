@@ -20,8 +20,8 @@
     },
     {
       "file": "scripts/gate.mjs",
-      "from": "`${base}...HEAD`",
-      "to": "`${base}..HEAD`",
+      "from": "`${base.sha}...HEAD`",
+      "to": "`${base.sha}..HEAD`",
       "test": "tests/unit/gate.test.mjs"
     },
     {
@@ -142,6 +142,90 @@
       "file": "package.json",
       "from": "\"gate\": \"node scripts/gate.mjs\"",
       "to": "\"gate\": \"node scripts/run-tests.mjs\"",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "{ref: 'refs/remotes/origin/main', name: 'origin/main'}, {ref: 'refs/heads/main', name: 'main'}",
+      "to": "{ref: 'refs/heads/main', name: 'main'}, {ref: 'refs/remotes/origin/main', name: 'origin/main'}",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "{ref: 'refs/remotes/origin/main', name: 'origin/main'}, ",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "ref: 'refs/remotes/origin/main'",
+      "to": "ref: 'origin/main'",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "ref: 'refs/heads/main'",
+      "to": "ref: 'main'",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "`${base.sha}...HEAD`",
+      "to": "`${base.name}...HEAD`",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "short: git(root, ['rev-parse', '--short', sha]).trim()",
+      "to": "short: sha",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "catch (error) {throw new UsageError(`Cannot diff against",
+      "to": "catch (error) {if (base.name !== 'main') return changedPlans({root, base: {name: 'main', sha: 'refs/heads/main', short: 'main'}}); throw new UsageError(`Cannot diff against",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "catch (error) {throw new UsageError(`Cannot diff against",
+      "to": "catch (error) {return []; throw new UsageError(`Cannot diff against",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "  throw new UsageError(`There is no main in ",
+      "to": "  return {name: 'main', sha: 'HEAD', short: 'HEAD'};\n  throw new UsageError(`There is no main in ",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "    error(`gate ${commit} refused: ${caught.message}`);\n    return EXIT.usage;",
+      "to": "    throw caught;",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "  log(`Base: ${base.name} (${base.short})`);\n",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "against ${base.name} (${base.short})`);",
+      "to": "against ${base.name}`);",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "against `origin/main` as of the last fetch, or the local `main` without that ref",
+      "to": "against `main`",
+      "test": "tests/unit/gate.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": " The gate does not fetch: `git fetch` first.",
+      "to": "",
       "test": "tests/unit/gate.test.mjs"
     }
   ]
