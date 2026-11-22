@@ -9,6 +9,7 @@ import {fileURLToPath} from "node:url";
 
 import {HELD_ENV} from "../../dist/shared/render-slot.js";
 import {machineVerdict, parseVerdict, waitForMachine} from "../../dist/shared/machine-check.js";
+import {underLoad} from "./load.mjs";
 
 const cliPath = fileURLToPath(new URL("../../dist/cli/index.js", import.meta.url));
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
@@ -175,7 +176,7 @@ test("machineVerdict asks the check for this process's family and reads its busy
   assert.equal((await readFile(join(dir, "calls.log"), "utf8")).split("\n")[0], `--json --familia ${process.pid}`);
 });
 
-test("local capture and render wait for the machine check, and --no-wait fails with its reason", {timeout: 120_000}, async (t) => {
+test("local capture and render wait for the machine check, and --no-wait fails with its reason", {timeout: underLoad(120_000)}, async (t) => {
   const {[HELD_ENV]: _held, ...rest} = process.env;
   const commands = {
     capture: ["capture", exampleRoot, "--scene", "hero"],
@@ -210,7 +211,7 @@ test("local capture and render wait for the machine check, and --no-wait fails w
   }
 });
 
-test("a render of several recipes asks the machine check before it starts their shared browser", {timeout: 60_000}, async (t) => {
+test("a render of several recipes asks the machine check before it starts their shared browser", {timeout: underLoad(60_000)}, async (t) => {
   const dir = await folder(t);
   const {[HELD_ENV]: _held, ...rest} = process.env;
   const env = {...rest, RENDER_SLOT_DIR: join(dir, "render-slot"), MACHINE_CHECK: await fakeCheck(dir, "the game is open", 99)};
@@ -224,7 +225,7 @@ test("a render of several recipes asks the machine check before it starts their 
   assert.doesNotMatch(stderr, /BROWSER_NOT_FOUND/, "before the shared browser was started");
 });
 
-test("a render under a slot inherited from its parent does not ask the machine check again", {timeout: 60_000}, async (t) => {
+test("a render under a slot inherited from its parent does not ask the machine check again", {timeout: underLoad(60_000)}, async (t) => {
   const dir = await folder(t);
   const slot = join(dir, "render-slot");
   const env = {...process.env, RENDER_SLOT_DIR: slot, MACHINE_CHECK: await fakeCheck(dir, "the game is open", 99)};

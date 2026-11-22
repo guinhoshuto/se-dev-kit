@@ -12,6 +12,7 @@ import test from "node:test";
 import {UsageError, applySwap, mutate, opensChrome, parseArgs, spawnBounded} from "../../scripts/mutate.mjs";
 import {gate, takeBrowserSlot} from "../../scripts/run-tests.mjs";
 import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
+import {underLoad} from "./load.mjs";
 
 const FILES = {
   "lib/math.mjs": "export const sum = (a, b) => a + b;\nexport const unused = 1;\n",
@@ -352,11 +353,46 @@ function reapAfter(t, pids) {
 }
 const GRANDCHILD = marker => `require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(marker)}], {detached: true, stdio: ['ignore', 'inherit', 'inherit']}).unref();`;
 // A grandchild left in the run's group by a parent that exits at once: launchd adopts it before the leash notes it.
-const ORPHAN = (marker, cp = "require('node:child_process')") => `${cp}.spawn(process.execPath, ['-e', ${JSON.stringify(`require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(marker)}, 'orphan'], {stdio: 'ignore'}); process.exit(0);`)}], {stdio: 'ignore'});`;
+// With `delayMs`, the parent waits that long before it starts the grandchild, as a slow start on a loaded machine does.
+const ORPHAN = (marker, cp = "require('node:child_process')", delayMs = 0) => {
+  const start = `require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(marker)}, 'orphan'], {stdio: 'ignore'}); process.exit(0);`;
+  return `${cp}.spawn(process.execPath, ['-e', ${JSON.stringify(delayMs ? `setTimeout(() => {${start}}, ${delayMs});` : start)}], {stdio: 'ignore'});`;
+};
 // A group leader the run leaves in its tree, as Playwright's Chrome or a leash nested in the test, with an orphan in its
 // group: once the leader dies, only the kill of its group reaches the orphan.
-const LEADER = marker => `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(`${ORPHAN(marker)} setInterval(() => {}, 1000);`)}, ${JSON.stringify(marker)}], {detached: true, stdio: 'ignore'});`;
+const LEADER = (marker, delayMs = 0) => `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(`${ORPHAN(marker, undefined, delayMs)} setInterval(() => {}, 1000);`)}, ${JSON.stringify(marker)}], {detached: true, stdio: 'ignore'});`;
 const orphanOf = root => table().some(row => row.ppid === 1 && row.command.includes(root) && row.command.endsWith(" orphan"));
+
+// Issue #50: a fixed 2.5 s for launchd to adopt the orphan, under a fixed 3 s watchdog, missed on a loaded machine (the
+// gate's unit suite at load 100 to 200 on 8 cores, and once at a normal load behind the suite's own parallel files).
+// So the hung run's limit grows by observation: an attempt whose watchdog fires before the orphan is adopted ran
+// slower than its limit, and the next one gets twice that. The orphan is watched for as long as the run hangs.
+const HUNG_LIMITS = [3000, 6000, 12_000, 24_000];
+const HUNG_TIMEOUT = HUNG_LIMITS.reduce((sum, limit) => sum + limit, 0) + HUNG_LIMITS.length * (underLoad(5000) + underLoad(7000)) + 30_000;
+async function whileRunning(check, running) {
+  let ended = false;
+  running.then(() => {ended = true;}, () => {ended = true;});
+  for (; !ended; await pause(100)) if (check()) return true;
+  return false;
+}
+/** Runs `script(root)` hung under the watchdog until an attempt sees its orphan adopted; returns the attempts it took. */
+async function hungRun(t, root, script) {
+  reapAfter(t, () => processesOf(root));
+  const seen = [];
+  for (const limit of HUNG_LIMITS) {
+    const started = Date.now();
+    const running = spawnBounded(process.execPath, ["-e", script(root), root], {cwd: root, limitMs: limit});
+    const orphaned = await whileRunning(() => orphanOf(root), running);
+    const run = await running;
+    const elapsed = Date.now() - started;
+    assert.equal(run.timedOut, true, `the watchdog fired (limit ${limit} ms)`);
+    assert.ok(elapsed < limit + underLoad(7000), `the run ended ${elapsed} ms after it started, under a limit of ${limit} ms`);
+    assert.ok(await until(() => !processesOf(root).length, underLoad(5000)), `still running after the ${limit} ms attempt: ${processesOf(root)}`);
+    seen.push(`${limit} ms: ${orphaned ? "adopted" : "not yet adopted"} after ${elapsed} ms`);
+    if (orphaned) return seen.length;
+  }
+  assert.fail(`the orphan was never adopted by launchd while the run hung: ${seen.join("; ")}`);
+}
 
 test("a folder whose owner died is swept when the next is made, and one whose owner lives is kept", async t => {
   const dead = spawnSync(process.execPath, ["-e", ""]).pid;
@@ -374,28 +410,21 @@ test("a folder whose owner died is swept when the next is made, and one whose ow
   assert.equal(await exists(join(tmpdir(), names.launchd)), true, "an owner this user may not signal (EPERM) counts as alive");
 });
 
-test("the watchdog stops a hung run and everything it started, a detached grandchild and an orphan in its group included", {timeout: 30_000}, async t => {
+test("the watchdog stops a hung run and everything it started, a detached grandchild and an orphan in its group included", {timeout: HUNG_TIMEOUT}, async t => {
   const root = await folder(t, "sws-mutate-hang-");
-  reapAfter(t, () => processesOf(root));
-  const started = Date.now();
-  const running = spawnBounded(process.execPath, ["-e", `${GRANDCHILD(root)} ${ORPHAN(root)} setInterval(() => {}, 1000);`, root], {cwd: root, limitMs: 3000});
-  const orphaned = await until(() => table().some(row => row.ppid === 1 && row.command.includes(root) && row.command.endsWith(" orphan")), 2500);
-  const run = await running;
-  assert.ok(orphaned, "the orphan was adopted by launchd while the run hung");
-  assert.equal(run.timedOut, true, "the watchdog fired");
-  assert.ok(Date.now() - started < 10_000, `the run ended ${Date.now() - started} ms after it started`);
-  assert.ok(await until(() => !processesOf(root).length, 5000), `still running: ${processesOf(root)}`);
+  await hungRun(t, root, marker => `${GRANDCHILD(marker)} ${ORPHAN(marker)} setInterval(() => {}, 1000);`);
 });
 
-test("the watchdog's reap takes the group of a leader in the run's tree, and the orphan adopted there", {timeout: 30_000}, async t => {
+test("the watchdog's reap takes the group of a leader in the run's tree, and the orphan adopted there", {timeout: HUNG_TIMEOUT}, async t => {
   const root = await folder(t, "sws-mutate-nested-");
-  reapAfter(t, () => processesOf(root));
-  const running = spawnBounded(process.execPath, ["-e", `${LEADER(root)} setInterval(() => {}, 1000);`, root], {cwd: root, limitMs: 3000});
-  const orphaned = await until(() => orphanOf(root), 2500);
-  const run = await running;
-  assert.ok(orphaned, "the orphan in the leader's group was adopted by launchd while the run hung");
-  assert.equal(run.timedOut, true, "the watchdog fired");
-  assert.ok(await until(() => !processesOf(root).length, 5000), `still running: ${processesOf(root)}`);
+  await hungRun(t, root, marker => `${LEADER(marker)} setInterval(() => {}, 1000);`);
+});
+
+test("the watchdog tests grow the hung run's limit when its orphan starts later than the first limit, as on a loaded machine", {timeout: HUNG_TIMEOUT}, async t => {
+  const root = await folder(t, "sws-mutate-slow-");
+  // The orphan's parent waits 3.5 s, past the first 3 s limit: only a later, longer attempt sees it adopted.
+  const attempts = await hungRun(t, root, marker => `${GRANDCHILD(marker)} ${ORPHAN(marker, undefined, 3500)} setInterval(() => {}, 1000);`);
+  assert.ok(attempts >= 2, `took ${attempts} attempt(s)`);
 });
 
 test("a run that exits leaving a child on its output pipe ends, and the child is gone", {timeout: 30_000}, async t => {
