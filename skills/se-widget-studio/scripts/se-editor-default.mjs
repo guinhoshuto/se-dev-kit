@@ -106,17 +106,20 @@ export function commitWidget(widget, out, bundleName) {
     throw error;
   }
   const files = {'index.html': widget.html, 'style.css': widget.css, 'script.js': widget.js, 'fields.json': widget.fields};
+  // Independent of the caller's git: no inherited GIT_* variable (GIT_DIR, GIT_INDEX_FILE, ...), no global or system
+  // config, no hooks, no init template.
   const env = {
-    ...process.env,
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))),
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: IDENTITY.name, GIT_AUTHOR_EMAIL: IDENTITY.email, GIT_AUTHOR_DATE: IDENTITY.date,
     GIT_COMMITTER_NAME: IDENTITY.name, GIT_COMMITTER_EMAIL: IDENTITY.email, GIT_COMMITTER_DATE: IDENTITY.date
   };
-  git(out, ['-c', 'init.defaultBranch=main', 'init', '-q'], env);
+  git(out, ['-c', 'init.defaultBranch=main', 'init', '-q', '--template='], env);
   for (const [name, text] of Object.entries(files)) writeFileSync(join(out, name), text, 'utf8');
   git(out, ['-c', 'core.autocrlf=false', 'add', '--', ...Object.keys(files)], env);
   git(out, [
     '-c', `user.name=${IDENTITY.name}`, '-c', `user.email=${IDENTITY.email}`, '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false',
-    'commit', '-q', '--no-verify', '-m', `Default Custom widget from ${bundleName}`
+    '-c', 'core.hooksPath=/dev/null', 'commit', '-q', '--no-verify', '-m', `Default Custom widget from ${bundleName}`
   ], env);
   return git(out, ['rev-parse', 'HEAD'], env).toString().trim();
 }

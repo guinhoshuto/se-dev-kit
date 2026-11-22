@@ -76,6 +76,69 @@
       "to": "",
       "test": "tests/unit/se-editor-default.test.mjs",
       "name": "the same one twice is one"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "if (size > limit) throw",
+      "to": "if (false) throw",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "over its limit"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "redirect: 'error', ",
+      "to": "",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "no redirects"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "AbortSignal.timeout(30_000)",
+      "to": "undefined",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "a timeout"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "credentials: 'omit'",
+      "to": "credentials: 'include'",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "no credentials"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "if (!response.ok) throw",
+      "to": "if (false) throw",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "not 2xx"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "headers: {'user-agent': USER_AGENT}",
+      "to": "headers: {'user-agent': USER_AGENT, cookie: 'a=b'}",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "only a user-agent"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": ".filter(([key]) => !key.startsWith('GIT_'))",
+      "to": ".filter(() => true)",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "ignores the caller"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "GIT_CONFIG_GLOBAL: '/dev/null', ",
+      "to": "",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "ignores the caller"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "fetchText(bundleUrl, BUNDLE_LIMIT, 'bundle')",
+      "to": "fetchText(bundleUrl, PAGE_LIMIT, 'bundle')",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "fetches the page and then its bundle"
     }
   ]
 }
