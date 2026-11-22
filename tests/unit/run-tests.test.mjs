@@ -14,6 +14,7 @@ import {browserGate, diskFloor} from "../../scripts/lib/machine.mjs";
 import {LAUNCH_RERUNS, SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
 import {failedTests, historyFile, historyReport, launchRetries, launchTimeoutFiles, readHistory} from "../../scripts/lib/test-history.mjs";
 import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
+import {EXIT, notCoveredSuites, runGate} from "../../scripts/gate.mjs";
 
 // This file runs the runner's own functions: its fake suites stay out of the live checkout's test history.
 process.env.TEST_HISTORY_FILE = "off";
@@ -597,6 +598,93 @@ test("a file whose launch keeps timing out runs again at most LAUNCH_RERUNS time
   }
   const unit = await attempt(timedOut, {unit: {}});
   assert.deepEqual([unit.runs, unit.asked], [1, []], "a suite without Chrome asks no gate");
+});
+
+// 2026-11-21 (#48): a test that skips NOT COVERED showed only in the reporter's stream; the summary spoke of suites alone.
+test("a suite's log lists each test skipped NOT COVERED, a nested one too, with its reason; a skip with another reason is not listed", {timeout: 60_000}, async (t) => {
+  const log = await logFile(t);
+  const {code, notCovered} = await execute("not-covered", {flags: []}, ["tests/fixtures/runner/not-covered.test.mjs"], log, {echo: false});
+  assert.equal(code, 0, await readFile(log, "utf8"));
+  assert.deepEqual(notCovered, [
+    {test: "a skip that names its command", reason: "ffmpeg is missing; run brew install ffmpeg (x) --write"},
+    {test: "an options skip", reason: "the option's reason"},
+    {test: "a nested skip", reason: "the nested reason"}
+  ]);
+});
+
+test("a test skipped NOT COVERED gets a summary line with its suite and reason, once across a run again of its file, a failed suite's too, and fails no run", async () => {
+  const file = "tests/integration/session-update.test.mjs";
+  const first = {test: "first", reason: "run a --write"};
+  const second = {test: "second", reason: "run b"};
+  const summary = async (outcomes, suites) => {
+    const lines = [];
+    const code = await runSuites(Object.keys(suites), {
+      suites,
+      files: async () => ["fake.test.mjs"],
+      gateFor: async () => ({ok: true, release: () => {}, waitedMs: 0, busy: "load 40.1 on 8 cores"}),
+      run: async () => outcomes.shift(),
+      newDirectory: async () => join(tmpdir(), "sws-runner-unused"),
+      log: (line) => lines.push(line)
+    });
+    return {code, lines};
+  };
+  const passed = await summary([{code: 0, seconds: 1, notCovered: [first]}], {unit: {}});
+  assert.equal(passed.code, 0, "a skipped test fails no run");
+  assert.deepEqual(passed.lines.filter((line) => line.includes("NOT COVERED")), ["NOT COVERED in unit: first # run a --write"]);
+
+  // The #46 loop: the file runs again after its launch timed out, skips the same test again, and one more.
+  const third = {test: "third", reason: "run c"};
+  const timedOut = {code: 1, seconds: 1, launchRetries: ["Chrome launch retried: why"], launchTimeouts: [file], left: [], notCovered: [first, second]};
+  const again = await summary([timedOut, {code: 0, seconds: 1, notCovered: [first, third]}], {"web:browser": {browser: true}});
+  assert.equal(again.code, 0);
+  assert.deepEqual(again.lines.filter((line) => line.includes("NOT COVERED")), ["NOT COVERED in web:browser: first # run a --write", "NOT COVERED in web:browser: second # run b", "NOT COVERED in web:browser: third # run c"]);
+
+  const failed = await summary([{code: 1, seconds: 1, notCovered: [second]}], {unit: {}, web: {}});
+  assert.equal(failed.code, 1);
+  assert.ok(failed.lines.includes("NOT COVERED in unit: second # run b"), failed.lines.join("\n"));
+  assert.ok(failed.lines.indexOf("NOT COVERED in unit: second # run b") > failed.lines.findIndex((line) => /^unit +failed/.test(line)), "the line comes after the suites'");
+});
+
+test("with the vault source of the render slot changed after its last sync, the summary names the sync command once, and the gate copies that line under npm test and exits 3", {timeout: 90_000}, async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "sws-runner-home-"));
+  t.after(() => rm(home, {recursive: true, force: true}));
+  // The source is the copy plus a line, so the copy still matches the sha256 its last sync recorded.
+  await mkdir(join(home, "obsidian", "AI", "scripts"), {recursive: true});
+  const copy = await readFile(fileURLToPath(new URL("../../src/shared/render-slot.ts", import.meta.url)), "utf8");
+  await writeFile(join(home, "obsidian", "AI", "scripts", "render-slot.ts"), `${copy}// changed\n`);
+  const name = "src/shared/render-slot.ts is the vault source byte for byte, or the copy its last sync recorded";
+  const lines = [];
+  const logs = [];
+  const code = await runSuites(["unit"], {
+    suites: {unit: {flags: [`--test-name-pattern=^${literal(name)}$`]}},
+    files: async () => ["tests/unit/render-slot.test.mjs"],
+    run: async (label, suite, list, logPath) => { logs.push(logPath); return execute(label, suite, list, logPath, {echo: false, environment: {...process.env, HOME: home}}); },
+    newDirectory: async () => home,
+    log: (line) => lines.push(line)
+  });
+  const command = "python3 ~/obsidian/AI/scripts/render_slot_copias.py --write --repo se-dev-kit";
+  const naming = lines.filter((line) => line.includes(command));
+  assert.deepEqual(naming, [`NOT COVERED in unit: ${name} # ~/obsidian/AI/scripts/render-slot.ts changed after the last sync, which src/shared/render-slot.ts still matches; run ${command}`]);
+  assert.equal(code, 0);
+
+  // npm test echoes the reporter's stream before its summary.
+  const output = `${await readFile(logs[0], "utf8")}\n${lines.join("\n")}\n`;
+  assert.ok(output.includes(`﹣ ${name}`), "the reporter's own skip line is in npm test's output");
+  const root = join(home, "checkout");
+  await mkdir(root);
+  const git = (...args) => execFileSync("git", ["-c", "user.name=Runner Test", "-c", "user.email=runner@example.com", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {cwd: root, stdio: "ignore"});
+  git("init", "-q", "-b", "main");
+  await writeFile(join(root, ".gitignore"), ".cache/\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const shown = [];
+  const exit = await runGate({root, run: async (step) => ({code: 0, output: step.name === "npm test" ? output : ""}), log: (line) => shown.push(line), error: (line) => shown.push(line), stopped: () => undefined});
+  assert.equal(exit, EXIT.notCovered);
+  const under = shown.findIndex((line) => line.startsWith("npm test "));
+  assert.equal(shown[under + 1], `  ${naming[0]}`);
+  assert.equal(shown.filter((line) => line.includes(command)).length, 1, shown.join("\n"));
+  assert.deepEqual(notCoveredSuites(naming), []);
+  assert.doesNotMatch(shown.at(-1), /test:browser/);
 });
 
 test("a log's files to run again are those whose failing tests all ended in a launch timeout, as the reporter printed it on 2026-11-20", () => {

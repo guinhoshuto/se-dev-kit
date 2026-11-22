@@ -28,6 +28,15 @@ export function failedTests(text) {
     .map(([, file, test, error]) => ({file, test, error: error.slice(0, ERROR_LENGTH)}));
 }
 
+/**
+ * The tests a suite's log lists as skipped NOT COVERED, `t.skip("NOT COVERED: …")` or `{skip: "NOT COVERED: …"}`, as
+ * Node's spec reporter prints them (`﹣ <name> (<ms>ms) # NOT COVERED: <reason>`, indented when nested): the name and
+ * what follows `NOT COVERED: `. A skip with another reason is not listed. The line carries no file name.
+ */
+export function notCoveredTests(text) {
+  return [...text.matchAll(/^[ \t]*﹣ (.+?) \([\d.]+ms\) # NOT COVERED: (.+)$/gm)].map(([, test, reason]) => ({test, reason}));
+}
+
 // The code Node's reporter prints under a failing test's error when Chrome did not start in time (src/capture/browser.ts).
 const LAUNCH_TIMEOUT = /^[ \t]*code: 'BROWSER_LAUNCH_TIMEOUT',?$/m;
 

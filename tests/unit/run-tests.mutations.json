@@ -205,8 +205,8 @@
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "${waited}${retrying(retries)}${rerun}`, retries, notes});",
-      "to": "${waited}${rerun}`, retries, notes});",
+      "from": "${waited}${retrying(retries)}${rerun}`, retries, notes, notCovered: [...skips.values()]});",
+      "to": "${waited}${rerun}`, retries, notes, notCovered: [...skips.values()]});",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a run's summary says a suite retried"
     },

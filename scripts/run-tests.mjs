@@ -12,6 +12,8 @@
 // - a suite's summary says when a test had to start Chrome twice, and why (#33); when that second launch ran out of
 //   time too, the runner asks the machine check again and, if it says to wait, gives the slot back, waits as for the
 //   suite's start, and runs that file again, at most LAUNCH_RERUNS times, the summary naming the wait (#46);
+// - a test skipped with a reason that starts NOT COVERED: gets a summary line of its own, `NOT COVERED in <suite>:
+//   <test> # <the rest of the reason>`, each once across the runs of its file, a suite that failed too; it fails no run (#48);
 // - every finished suite adds a line to the live checkout's .cache/test-history.jsonl, which --history counts.
 //
 //   node scripts/run-tests.mjs <suite>...        suites: unit, integration, web, web:browser
@@ -26,7 +28,7 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {isEntryPoint} from './lib/entry-point.mjs';
 import {TEST_FLOOR, browserGate, diskFloor} from './lib/machine.mjs';
-import {appendHistory, failedTests, historyFile, historyReport, launchRetries, launchTimeoutFiles, readHistory} from './lib/test-history.mjs';
+import {appendHistory, failedTests, historyFile, historyReport, launchRetries, launchTimeoutFiles, notCoveredTests, readHistory} from './lib/test-history.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LOGS = join(ROOT, '.cache', 'test-logs');
@@ -182,14 +184,15 @@ export function suiteEnvironment(environment, temporary) {
   return {...rest, TMPDIR: temporary, RENDER_SLOT_DIR: join(temporary, SUITE_SLOT), MACHINE_CHECK: join(temporary, 'no-machine-check'), TEST_HISTORY_FILE: 'off'};
 }
 
-export async function execute(label, suite, files, logPath, {echo = true} = {}) {
+/** Runs a suite's files into its log; `environment` is the one the suite's own is made from (suiteEnvironment). */
+export async function execute(label, suite, files, logPath, {echo = true, environment = process.env} = {}) {
   const args = nodeArgs(suite, files);
   // Chrome keeps a Unix socket under TMPDIR; macOS caps that path at 104 bytes, so browser suites use /tmp.
   const temporary = await mkdtemp(join(suite.browser && process.platform === 'darwin' ? '/tmp' : tmpdir(), 'sws-'));
   const log = createWriteStream(logPath, {flags: 'a'});
   const started = Date.now();
   log.write(`$ node ${args.join(' ')}\n# ${label}: node ${process.version}, TMPDIR=${temporary}, ${new Date(started).toISOString()}\n`);
-  const child = spawn(process.execPath, args, {cwd: ROOT, env: suiteEnvironment(process.env, temporary), stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn(process.execPath, args, {cwd: ROOT, env: suiteEnvironment(environment, temporary), stdio: ['ignore', 'pipe', 'pipe']});
   child.stdout.on('data', chunk => { if (echo) process.stdout.write(chunk); log.write(chunk); });
   child.stderr.on('data', chunk => { if (echo) process.stderr.write(chunk); log.write(chunk); });
   let code = await new Promise(done => child.once('close', (exit, signal) => done(exit ?? (signal ? 1 : 0))));
@@ -205,7 +208,7 @@ export async function execute(label, suite, files, logPath, {echo = true} = {}) 
   log.write(`# ${label}: exit ${code} after ${seconds.toFixed(1)} s\n`);
   await new Promise(done => log.end(done));
   const text = await readFile(logPath, 'utf8');
-  return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text), launchTimeouts: launchTimeoutFiles(text), left};
+  return {code, seconds, failures: failedTests(text), launchRetries: launchRetries(text), launchTimeouts: launchTimeoutFiles(text), notCovered: notCoveredTests(text), left};
 }
 
 /**
@@ -287,6 +290,10 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
     }
     let seconds = outcome.seconds;
     const retries = [...(outcome.launchRetries ?? [])];
+    // A test skipped NOT COVERED, in the first run or in a run again of its file, is named once.
+    const skips = new Map();
+    const keepSkips = result => { for (const skip of result.notCovered ?? []) skips.set(`${skip.test} # ${skip.reason}`, skip); };
+    keepSkips(outcome);
     // A launch that timed out twice while the load rose: the machine check is asked again, and its wait runs the file again (#46).
     const waits = [];
     const notes = [];
@@ -305,13 +312,14 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
       }
       seconds += outcome.seconds;
       retries.push(...(outcome.launchRetries ?? []));
+      keepSkips(outcome);
       waits.push({files: again, waitedMs: allowedAgain.waitedMs, why: allowedAgain.busy, log: relative(ROOT, againLog), status: outcome.code === 0 ? 'passed' : 'failed'});
       notes.push(`Chrome's launch timed out twice in ${files}; the machine check said to wait (${allowedAgain.busy}), so it waited ${duration(allowedAgain.waitedMs)} and ran ${again.length === 1 ? 'it' : 'them'} again: ${waits.at(-1).status}`);
     }
     const {code, failures = []} = outcome;
     const status = code === 0 ? 'passed' : 'failed';
     const rerun = waits.length ? `, running a file again after a Chrome launch timed out ${waits.length}×` : '';
-    results.push({name, status, detail: `${seconds.toFixed(1)} s${waited}${retrying(retries)}${rerun}`, retries, notes});
+    results.push({name, status, detail: `${seconds.toFixed(1)} s${waited}${retrying(retries)}${rerun}`, retries, notes, notCovered: [...skips.values()]});
     await recordSuite({suite: name, status, seconds: Number(seconds.toFixed(1)), waitedMs: allowed.waitedMs ?? 0, log: relative(ROOT, logPath), failures, launchRetries: retries.length, ...(waits.length ? {launchWaits: waits} : {})});
     if (code !== 0) {
       // The run stops at its first failed suite; the ones after it stay in the summary, so it does not read as one failure.
@@ -323,6 +331,8 @@ export async function runSuites(names, {suites = SUITES, files = suiteFiles, gat
   for (const result of results) log(`${result.name.padEnd(12)} ${result.status.padEnd(8)} ${result.detail}`);
   for (const result of results) for (const line of result.retries ?? []) log(`${result.name}: ${line}`);
   for (const result of results) for (const line of result.notes ?? []) log(`${result.name}: ${line.replace(/\.$/, '')}.`);
+  // Never `NOT COVERED: …`, which names suites (gate.mjs reads those): a skipped test fails no run, but no run tested it.
+  for (const result of results) for (const {test, reason} of result.notCovered ?? []) log(`NOT COVERED in ${result.name}: ${test} # ${reason}`);
   const skipped = results.filter(result => result.status === 'skipped');
   // A line per cause, in the order its first suite came.
   for (const cause of new Set(skipped.map(result => result.cause))) log(`NOT COVERED: ${skipped.filter(result => result.cause === cause).map(result => result.name).join(', ')}. This run did not test them${cover(cause)}.`);

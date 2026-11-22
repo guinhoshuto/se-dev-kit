@@ -16,7 +16,7 @@
  *
  * Exit codes: 0 every step passed; 1 a step failed (or the tree changed during the gate); 2 usage, or a refusal before
  * any step (outside a git checkout, a dirty tree, no main, a base with no merge base with HEAD); 3 every step passed but
- * npm test left suites NOT COVERED.
+ * npm test left suites or tests NOT COVERED.
  */
 import {execFileSync, spawn} from 'node:child_process';
 import {createWriteStream, existsSync, readFileSync} from 'node:fs';
@@ -47,7 +47,7 @@ a Chrome launch that ran out of its time twice. Each step's log goes to .cache/g
 A dirty tree is refused: the gate runs on the branch's last commit, so commit first. So are no main and a base
 with no merge base with HEAD.
 --dry-run prints the commit, the steps and the plans, and runs and writes nothing.
-Exit codes: 0 all passed, 1 a step failed, 2 usage or refusal, 3 all passed but npm test left suites NOT COVERED.`;
+Exit codes: 0 all passed, 1 a step failed, 2 usage or refusal, 3 all passed but npm test left suites or tests NOT COVERED.`;
 
 export function parseArgs(args) {
   const options = {dryRun: false, help: false};
@@ -156,6 +156,16 @@ export function forwardSignals() {
 const clock = () => new Date().toTimeString().slice(0, 8);
 const seconds = ms => (ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60_000)} min`);
 
+/**
+ * npm test's summary lines of what it did not test, in their order: a suite's (`NOT COVERED: <suites>. …`) and a
+ * skipped test's (`NOT COVERED in <suite>: <test> # …`), never the reporter's own `﹣ <test> (…ms) # NOT COVERED: …`
+ * that npm test echoes before its summary.
+ */
+export const notCoveredLines = output => output.match(/^NOT COVERED(?:: | in [a-z][a-z:]*: ).+$/gm) ?? [];
+
+/** The lines of skipped tests among notCoveredLines. */
+export const notCoveredTestLines = lines => lines.filter(line => /^NOT COVERED in [a-z][a-z:]*: /.test(line));
+
 /** The suites of every NOT COVERED line, in their order, each once. */
 export const notCoveredSuites = lines => [...new Set(lines.flatMap(line => (line.match(/^NOT COVERED: (.+?)\. /)?.[1] ?? '').split(', ').filter(Boolean)))];
 
@@ -201,7 +211,7 @@ export async function runGate({root = ROOT, run = runStep, log = console.log, er
     const {code, output} = await run(step, {root, logPath});
     const result = {step, status: code === 0 ? 'passed' : 'failed', took: seconds(Date.now() - started), shown, extra: [], below: []};
     if (step.name === 'npm test') {
-      result.below = output.match(/^NOT COVERED: .+$/gm) ?? [];
+      result.below = notCoveredLines(output);
       const logs = [...output.matchAll(/^Logs: (.+\/)$/gm)].at(-1);
       if (logs) result.extra.push(`Logs: ${logs[1]}`);
     }
@@ -225,10 +235,15 @@ export async function runGate({root = ROOT, run = runStep, log = console.log, er
     for (const line of result.below ?? []) summary.push(`  ${line}`);
   }
   if (!plans.length) summary.push(`${'mutation plans'.padEnd(width)} none     no tests/**/*.mutations.json added or changed against ${base.name} (${base.short})`);
-  const uncovered = notCoveredSuites(results.find(result => result.step.name === 'npm test')?.below ?? []);
+  const below = results.find(result => result.step.name === 'npm test')?.below ?? [];
+  const uncovered = notCoveredSuites(below);
+  const tests = notCoveredTestLines(below).length;
+  // A skipped test names its own step; npm run test:browser is the suites' step.
+  const skippedTests = `skipped ${tests} test(s) NOT COVERED, listed under it with what to run: do what each says, or name it in the question.`;
   let last; let code;
   if (failed) {last = `gate ${commit} FAILED at ${failed.step.name}: ${failed.shown}`; code = EXIT.failed;}
-  else if (uncovered.length) {last = `gate ${commit} passed, but npm test left NOT COVERED: ${uncovered.join(', ')}. Run npm run test:browser again, or name them in the question.`; code = EXIT.notCovered;}
+  else if (uncovered.length) {last = `gate ${commit} passed, but npm test left NOT COVERED: ${uncovered.join(', ')}. Run npm run test:browser again, or name them in the question.${tests ? ` npm test also ${skippedTests}` : ''}`; code = EXIT.notCovered;}
+  else if (tests) {last = `gate ${commit} passed, but npm test ${skippedTests}`; code = EXIT.notCovered;}
   else {last = `gate ${commit} passed: ${steps.length} step(s).`; code = EXIT.passed;}
   summary.push(last);
   await writeFile(join(directory, 'summary.txt'), `${summary.join('\n')}\n`);

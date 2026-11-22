@@ -50,14 +50,14 @@
     },
     {
       "file": "scripts/gate.mjs",
-      "from": "result.below = output.match(/^NOT COVERED: .+$/gm) ?? [];",
+      "from": "result.below = notCoveredLines(output);",
       "to": "result.below = [];",
       "test": "tests/unit/gate.test.mjs"
     },
     {
       "file": "scripts/gate.mjs",
-      "from": "code = EXIT.notCovered;",
-      "to": "code = EXIT.passed;",
+      "from": "or name them in the question.${tests ? ` npm test also ${skippedTests}` : ''}`; code = EXIT.notCovered;}",
+      "to": "or name them in the question.${tests ? ` npm test also ${skippedTests}` : ''}`; code = EXIT.passed;}",
       "test": "tests/unit/gate.test.mjs"
     },
     {
