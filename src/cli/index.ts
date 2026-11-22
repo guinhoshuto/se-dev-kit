@@ -14,7 +14,7 @@ import {runBrowserSmoke, runScenarios} from "../scenarios/runner.js";
 import {createDefaultScene} from "../scenarios/state.js";
 import {startStudioServer} from "../server/server.js";
 import {tutorialPreviewIndex} from "../tutorial/preview.js";
-import {closeStudioBrowser, createIsolatedContext, launchStudioBrowser} from "../capture/browser.js";
+import {closeStudioBrowser, closeTimeoutDetail, createIsolatedContext, launchStudioBrowser} from "../capture/browser.js";
 import {
   planRecipe,
   planTutorialRecipe,
@@ -568,7 +568,7 @@ program
       } finally {
         if (shared) {
           const closing = await closeStudioBrowser(shared.browser);
-          if (!closing.closed) process.stderr.write(`Browser close timed out; killed PID ${closing.killed.join(", ") || "none found"} after ${closing.elapsedMs} ms.\n`);
+          if (!closing.closed) process.stderr.write(`Browser close timed out; ${closeTimeoutDetail(closing)}.\n`);
         }
       }
     }, options.wait !== false);

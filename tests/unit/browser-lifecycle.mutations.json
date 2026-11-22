@@ -55,6 +55,111 @@
       "to": "[\"--disable-gpu\"]",
       "test": "tests/unit/browser-lifecycle.test.mjs",
       "name": "^every launched browser gets the switches"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "cleanup: {settled, waitedMs, ...await removeLaunchFolders(record.folders, record.temporary)}}",
+      "to": "cleanup: {settled, waitedMs, removed: [], gone: [], failed: [], skipped: []}}",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a close that runs out of time removes its browser's folders"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "...await removeLaunchFolders([...profiles], temporary)})",
+      "to": "removed: [], gone: [], failed: [], skipped: []})",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch that runs out of time removes the profile"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "if (dirname(resolve(folder)) !== resolve(temporary) || !PLAYWRIGHT_FOLDER.test(name)) {",
+      "to": "if (false) {",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^removeLaunchFolders removes only a Playwright folder"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "dirname(resolve(folder)) !== resolve(temporary)",
+      "to": "!resolve(folder).startsWith(resolve(temporary))",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^removeLaunchFolders removes only a Playwright folder"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "const PLAYWRIGHT_FOLDER = /^(?:playwright-artifacts-|playwright_chromiumdev_profile-)[^/]+$/;",
+      "to": "const PLAYWRIGHT_FOLDER = /^[^/]+$/;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^removeLaunchFolders removes only a Playwright folder"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "const PLAYWRIGHT_FOLDER = /^(?:playwright-artifacts-|playwright_chromiumdev_profile-)[^/]+$/;",
+      "to": "const PLAYWRIGHT_FOLDER = /^(?:playwright-artifacts-|playwright_chromiumdev_profile-)[^/]*$/;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^removeLaunchFolders removes only a Playwright folder"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "directory = (await lstat(folder)).isDirectory();",
+      "to": "directory = true;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^removeLaunchFolders removes only a Playwright folder"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "const settled = await settlesWithin(closing, options.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS);",
+      "to": "const settled = false;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a close that runs out of time waits for Playwright's own cleanup"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "const settled = await settlesWithin(closing, options.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS);",
+      "to": "const settled = await closing.then(() => true, () => true);",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a close that runs out of time removes its browser's folders"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "const settled = await settlesWithin(launching, options.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS);",
+      "to": "const settled = await launching.then(() => true, () => true);",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch that runs out of time removes the profile"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "const settled = await settlesWithin(launching, options.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS);",
+      "to": "const settled = false;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch fails with BROWSER_LAUNCH_TIMEOUT only when"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "launched.set(browser, {marker, temporary, folders: playwrightFolders(browser)});",
+      "to": "launched.set(browser, {marker, temporary, folders: []});",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launched browser's artifacts folder and profile are found"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "[server?.options?.artifactsDir, server?._userDataDirForTest]",
+      "to": "[server?._userDataDirForTest]",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launched browser's artifacts folder and profile are found"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "if (closed || !record) return {closed, elapsedMs: Date.now() - started, killed: []};",
+      "to": "if (!record) return {closed, elapsedMs: Date.now() - started, killed: []};",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launched browser's artifacts folder and profile are found"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "export const CLEANUP_TIMEOUT_MS = 5_000;",
+      "to": "export const CLEANUP_TIMEOUT_MS = 60_000;",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launched browser's artifacts folder and profile are found"
     }
   ]
 }

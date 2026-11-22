@@ -37,7 +37,7 @@ import {compileVariantTutorial, EMULATE_MENU, stillFrameIndex, tutorialCamera, t
 import type {TutorialTimeline} from "../tutorial/timeline.js";
 import {videoWidgetEvents} from "../tutorial/preview.js";
 import {DEFAULT_FIXED_TIME, DEFAULT_SEED} from "../scenarios/state.js";
-import {closeStudioBrowser, launchStudioBrowser, type BrowserDetection, type FontRoute} from "./browser.js";
+import {closeStudioBrowser, closeTimeoutDetail, launchStudioBrowser, type BrowserDetection, type FontRoute} from "./browser.js";
 import {FontsMissingError, type FontResolver} from "../fonts/resolver.js";
 import {hashFile, hashJson, sha256} from "./hash.js";
 import {assertRecipeMatrixCardinality, expandRecipe} from "./matrix.js";
@@ -1370,7 +1370,7 @@ export async function renderRecipe(
       trace("browser close");
       const closing = await closeStudioBrowser(browser);
       if (closing.closed) trace("browser closed", `${closing.elapsedMs} ms`);
-      else trace("browser close timed out", `killed PID ${closing.killed.join(", ") || "none found"} after ${closing.elapsedMs} ms`);
+      else trace("browser close timed out", closeTimeoutDetail(closing));
     }
     trace("server close");
     await server.close();

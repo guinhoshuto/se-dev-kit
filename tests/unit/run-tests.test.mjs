@@ -564,7 +564,7 @@ test("a browser suite whose Chrome launch times out twice asks the machine check
   assert.equal(entries[1].launchWaits, undefined);
 });
 
-test("a file whose launch keeps timing out runs again at most LAUNCH_RERUNS times; another failure, another leftover, no retried launch or a suite without Chrome runs nothing again", async () => {
+test("a file whose launch keeps timing out runs again at most LAUNCH_RERUNS times; another failure, any leftover (a launch profile too), no retried launch or a suite without Chrome runs nothing again", async () => {
   const file = "tests/integration/session-update.test.mjs";
   const timedOut = {code: 1, seconds: 1, launchRetries: ["Chrome launch retried: why"], launchTimeouts: [file], left: [], failures: [{file, test: "t", error: "Error [StudioError]: Chrome did not start within 30 s (/Chrome)."}]};
   const attempt = async (outcome, suites = {integration: {browser: true}, "web:browser": {browser: true}}) => {
@@ -589,9 +589,8 @@ test("a file whose launch keeps timing out runs again at most LAUNCH_RERUNS time
   assert.ok(stuck.text.includes(`integration: Chrome's launch timed out twice in ${file} again; not run again after 2 waits for the machine.`), stuck.text);
   assert.match(stuck.text, /^web:browser +not run +after integration failed$/m);
 
-  const profile = await attempt({...timedOut, left: ["playwright_chromiumdev_profile-Ad6i5f"]});
-  assert.equal(profile.runs, 1 + LAUNCH_RERUNS, "the profile of a Chrome the launch killed is no failure of its own");
-  for (const [why, outcome] of [["another failure", {...timedOut, launchTimeouts: []}], ["another leftover", {...timedOut, left: ["xcrun_db"]}], ["no retried launch", {...timedOut, launchRetries: []}], ["a passing suite", {...timedOut, code: 0}]]) {
+  // The launch removes the profile of a Chrome it killed (#52): one left behind fails the suite like any other leftover.
+  for (const [why, outcome] of [["a launch profile left", {...timedOut, left: ["playwright_chromiumdev_profile-Ad6i5f"]}], ["launch artifacts left", {...timedOut, left: ["playwright-artifacts-Q1w2e3"]}], ["another failure", {...timedOut, launchTimeouts: []}], ["another leftover", {...timedOut, left: ["xcrun_db"]}], ["no retried launch", {...timedOut, launchRetries: []}], ["a passing suite", {...timedOut, code: 0}]]) {
     const once = await attempt(outcome);
     assert.deepEqual([once.runs, once.asked.length], [outcome.code ? 1 : 2, outcome.code ? 1 : 2], why);
     assert.doesNotMatch(once.text, /running a file again/, why);
