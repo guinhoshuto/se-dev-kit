@@ -217,15 +217,13 @@ export async function execute(label, suite, files, logPath, {echo = true, enviro
  * launch still times out after two waits for a free machine is not timed out by the load alone.
  */
 export const LAUNCH_RERUNS = 2;
-// What a Chrome that launch killed can leave in a suite's temporary folder: the profile Playwright made for it (2026-11-20).
-const LAUNCH_PROFILE = /^playwright_chromiumdev_profile-/;
-
 /**
  * The files to run again after the machine waited: every failing test of the outcome ended in a launch that timed out
- * after its retry, and it left nothing in its temporary folder but the profiles of the Chromes those launches killed.
+ * after its retry, and the suite left nothing in its temporary folder. The profile of a Chrome a launch killed is a
+ * leftover like any other: src/capture/browser.ts removes it itself (#52), so one that stays is a failure.
  */
 export const timedOutFiles = ({code, launchRetries: retries = [], launchTimeouts = [], left = []}) =>
-  (code !== 0 && retries.length && left.every(entry => LAUNCH_PROFILE.test(entry)) ? launchTimeouts : []);
+  (code !== 0 && retries.length && left.length === 0 ? launchTimeouts : []);
 
 /** Adds a finished suite to the test history. A history that cannot be written fails no run. */
 async function recordSuite(entry) {

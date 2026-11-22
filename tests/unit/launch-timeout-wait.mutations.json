@@ -30,15 +30,22 @@
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "code !== 0 && retries.length && left.every",
-      "to": "code !== 0 && left.every",
+      "from": "code !== 0 && retries.length && left.length",
+      "to": "code !== 0 && left.length",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a file whose launch keeps timing out"
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "left.every(entry => LAUNCH_PROFILE.test(entry)) ? launchTimeouts",
-      "to": "true ? launchTimeouts",
+      "from": "retries.length && left.length === 0 ? launchTimeouts",
+      "to": "retries.length ? launchTimeouts",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a file whose launch keeps timing out"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "left.length === 0 ? launchTimeouts",
+      "to": "left.every(entry => /^playwright_chromiumdev_profile-/.test(entry)) ? launchTimeouts",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a file whose launch keeps timing out"
     },
@@ -51,8 +58,8 @@
     },
     {
       "file": "scripts/run-tests.mjs",
-      "from": "const LAUNCH_PROFILE = /^playwright_chromiumdev_profile-/;",
-      "to": "const LAUNCH_PROFILE = /^playwright_chromium_profile-/;",
+      "from": "left.length === 0 ? launchTimeouts",
+      "to": "left.length <= 1 ? launchTimeouts",
       "test": "tests/unit/run-tests.test.mjs",
       "name": "^a file whose launch keeps timing out"
     },

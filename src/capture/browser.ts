@@ -1,7 +1,8 @@
 import {execFile} from "node:child_process";
-import {access, realpath} from "node:fs/promises";
+import {access, lstat, realpath, rm} from "node:fs/promises";
 import {constants} from "node:fs";
-import {cpus, loadavg, platform} from "node:os";
+import {cpus, loadavg, platform, tmpdir} from "node:os";
+import {basename, dirname, resolve} from "node:path";
 import {promisify} from "node:util";
 import {chromium, errors, type Browser, type BrowserContext, type Page, type Request} from "playwright-core";
 import {StudioError} from "../shared/errors.js";
@@ -72,7 +73,15 @@ export async function detectBrowser(explicitPath?: string): Promise<BrowserDetec
  */
 export const BROWSER_MARKER = "--se-widget-studio";
 let launches = 0;
-const markers = new WeakMap<Browser, string>();
+/** What a close that runs out of time needs of a browser launchStudioBrowser started. */
+interface LaunchRecord {
+  marker: string;
+  /** os.tmpdir() as it was at the launch: Playwright made the browser's folders in it. */
+  temporary: string;
+  /** The browser's artifacts folder and profile, from Playwright's own server object; empty when it moved. */
+  folders: string[];
+}
+const launched = new WeakMap<Browser, LaunchRecord>();
 
 /** How long Chrome may take to start before the launch fails and the process it started is killed. */
 export const LAUNCH_TIMEOUT_MS = 30_000;
@@ -81,6 +90,15 @@ export const CLOSE_TIMEOUT_MS = 10_000;
 // Room for Playwright to report its own launch timeout first. It may not: on its timeout it waits for
 // the process to close gracefully, which a hung browser never does (a fake one held it for 30 s).
 const LAUNCH_GRACE_MS = 5_000;
+/**
+ * How long a close or a launch that ran out of time waits, after its browser was killed, for Playwright's own cleanup
+ * to finish before this module removes that browser's folders itself (#52). Playwright removes them only after the
+ * process and every helper holding its stderr are gone, and asynchronously: under load, or with a helper that
+ * outlives the kill, a render's process could exit first and leave them in TMPDIR.
+ */
+export const CLEANUP_TIMEOUT_MS = 5_000;
+/** The prefixes of the folders Playwright 1.54 makes in os.tmpdir() for a launch (server/browserType.js). */
+const PLAYWRIGHT_FOLDER = /^(?:playwright-artifacts-|playwright_chromiumdev_profile-)[^/]+$/;
 const OUTER_DEADLINE = Symbol("launch deadline");
 
 const execFileAsync = promisify(execFile);
@@ -116,6 +134,8 @@ export async function launchStudioBrowser(options: {
   launchRetries?: number;
   /** Takes the line that says a launch started again, and why; stderr by default. */
   onLaunchRetry?: (line: string) => void;
+  /** How long a launch that ran out of time waits for Playwright's cleanup; CLEANUP_TIMEOUT_MS by default. */
+  cleanupTimeoutMs?: number;
 } = {}): Promise<{browser: Browser; detection: BrowserDetection}> {
   const detection = await detectBrowser(options.browserPath);
   const executablePath = detection.executablePath;
@@ -138,15 +158,17 @@ export async function launchStudioBrowser(options: {
   }
 }
 
-async function launchOnce(executablePath: string, options: {headed?: boolean; launchTimeoutMs?: number}): Promise<Browser> {
+async function launchOnce(executablePath: string, options: {headed?: boolean; launchTimeoutMs?: number; cleanupTimeoutMs?: number}): Promise<Browser> {
   launches += 1;
   const marker = `${BROWSER_MARKER}=${process.pid}-${launches}`;
   const timeout = options.launchTimeoutMs ?? LAUNCH_TIMEOUT_MS;
-  const launchTimeout = () => new StudioError(
+  const launchTimeout = (cleanup: BrowserCleanup) => new StudioError(
     "BROWSER_LAUNCH_TIMEOUT",
     `Chrome did not start within ${timeout / 1000} s (${executablePath}).`,
-    "The machine may be busy with another render: check for running headless Chrome, wait, and retry. The process this launch started was killed."
+    `The machine may be busy with another render: check for running headless Chrome, wait, and retry. The process this launch started was killed; ${describeCleanup("launch", cleanup)}.`
   );
+  // Resolved now: a relative TMPDIR names the folders against this launch's working directory, not a later close's.
+  const temporary = resolve(tmpdir());
   const launching = chromium.launch({executablePath, headless: !options.headed, args: [marker, ...REPRODUCIBLE_RASTER_ARGS], timeout});
   let deadline: NodeJS.Timeout | undefined;
   try {
@@ -156,17 +178,126 @@ async function launchOnce(executablePath: string, options: {headed?: boolean; la
         deadline = setTimeout(() => reject(OUTER_DEADLINE), timeout + LAUNCH_GRACE_MS);
       })
     ]);
-    markers.set(browser, marker);
+    launched.set(browser, {marker, temporary, folders: playwrightFolders(browser).map((folder) => resolve(folder))});
     return browser;
   } catch (error) {
     // A launch that settles after the deadline must not leave its browser running.
     launching.then((late) => late.close()).catch(() => undefined);
     if (error !== OUTER_DEADLINE && !(error instanceof errors.TimeoutError)) throw error;
-    await killLaunchedBrowser(marker);
-    throw launchTimeout();
+    const killed = await killLaunchedBrowser(marker);
+    // The profile this launch made, named by the killed process's command line or, when Playwright's own timeout came
+    // first and its process is gone, by the call log of that error. The artifacts folder is named by neither. Known
+    // limit: when Chrome's main process has already exited and a helper still holds its stderr, our deadline comes
+    // first, the ps finds no child and there is no call log, so the profile is not named and may be left behind.
+    const profiles = new Set([...killed.map((child) => child.command), error instanceof Error ? error.message : ""].flatMap(userDataDirs));
+    const started = Date.now();
+    const settled = await settlesWithin(launching, options.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS);
+    throw launchTimeout({settled, waitedMs: Date.now() - started, ...await removeLaunchFolders([...profiles], temporary)});
   } finally {
     clearTimeout(deadline);
   }
+}
+
+/** The `--user-data-dir` values in a command line or a Playwright call log. A path with a space ends at it. */
+function userDataDirs(text: string): string[] {
+  return [...text.matchAll(/(?:^|\s)--user-data-dir=(\S+)/g)].map((match) => match[1]!);
+}
+
+/** Whether `promise` settles, either way, within `ms`. */
+async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const settled = await Promise.race([
+    promise.then(() => true, () => true),
+    new Promise<false>((resolveWait) => {
+      timer = setTimeout(() => resolveWait(false), ms);
+    })
+  ]);
+  clearTimeout(timer);
+  return settled;
+}
+
+/**
+ * The artifacts folder and the profile of a launched browser, read from Playwright's server object behind the
+ * in-process client (`_toImpl`, `options.artifactsDir`, `_userDataDirForTest` in playwright-core 1.54). Internal:
+ * tests/unit/browser-lifecycle.test.mjs pins it, so an upgrade that moves them fails there instead of cleaning nothing.
+ */
+function playwrightFolders(browser: Browser): string[] {
+  try {
+    const server = (browser as unknown as {_toImpl?: () => unknown})._toImpl?.() as {options?: {artifactsDir?: unknown}; _userDataDirForTest?: unknown} | undefined;
+    return [server?.options?.artifactsDir, server?._userDataDirForTest].filter((folder): folder is string => typeof folder === "string");
+  } catch {
+    return [];
+  }
+}
+
+/** The folders closeStudioBrowser would remove for `browser` after a close that ran out of time. For tests. */
+export function launchFolders(browser: Browser): {temporary: string; folders: string[]} | undefined {
+  const record = launched.get(browser);
+  return record && {temporary: record.temporary, folders: [...record.folders]};
+}
+
+/** The folders of one launch that were removed, already gone, could not be removed, or were not removed. */
+export interface FolderCleanup {
+  /** Folder names. */
+  removed: string[];
+  gone: string[];
+  failed: string[];
+  /** Full paths: not a Playwright folder directly in the launch's temporary folder, or not a plain directory. */
+  skipped: string[];
+}
+
+export interface BrowserCleanup extends FolderCleanup {
+  /** Whether Playwright's own close (or launch) settled while it was waited for, after the kill. */
+  settled: boolean;
+  waitedMs: number;
+}
+
+/**
+ * Removes the folders that `folders` names, each only when it is a Playwright launch folder directly in `temporary`
+ * (os.tmpdir() at its launch) and a plain directory: a path from anywhere else is skipped and reported, never removed.
+ */
+export async function removeLaunchFolders(folders: string[], temporary: string): Promise<FolderCleanup> {
+  const result: FolderCleanup = {removed: [], gone: [], failed: [], skipped: []};
+  for (const folder of new Set(folders)) {
+    // One resolved path for the check, the lstat and the rm: the kernel follows a link before a `..`, so checking
+    // `<tmp>/link/../<name>` normalized while removing it raw would remove `<link target>/../<name>`.
+    const path = resolve(folder);
+    const name = basename(path);
+    if (dirname(path) !== resolve(temporary) || !PLAYWRIGHT_FOLDER.test(name)) {
+      result.skipped.push(folder);
+      continue;
+    }
+    let directory: boolean;
+    try {
+      // lstat: a symbolic link is no directory, so a link named like a profile is skipped, its target untouched.
+      directory = (await lstat(path)).isDirectory();
+    } catch {
+      result.gone.push(name);
+      continue;
+    }
+    if (!directory) {
+      result.skipped.push(folder);
+      continue;
+    }
+    try {
+      await rm(path, {recursive: true, force: true, maxRetries: 5});
+      result.removed.push(name);
+    } catch {
+      result.failed.push(name);
+    }
+  }
+  return result;
+}
+
+/** One clause on what happened after a kill: `Playwright's close finished after 3120 ms; removed …`. */
+export function describeCleanup(what: "close" | "launch", cleanup: BrowserCleanup): string {
+  const parts = [`Playwright's ${what} ${cleanup.settled ? "finished" : "still pending"} after ${cleanup.waitedMs} ms`];
+  if (cleanup.removed.length) parts.push(`removed ${cleanup.removed.join(", ")}`);
+  if (cleanup.gone.length) parts.push(`already gone ${cleanup.gone.join(", ")}`);
+  if (cleanup.failed.length) parts.push(`could not remove ${cleanup.failed.join(", ")}`);
+  if (cleanup.skipped.length) parts.push(`skipped ${cleanup.skipped.join(", ")} (not a Playwright folder of the temporary folder)`);
+  if (parts.length === 1) parts.push("no folder of it was named");
+  return parts.join("; ");
 }
 
 export interface BrowserCloseResult {
@@ -174,41 +305,49 @@ export interface BrowserCloseResult {
   closed: boolean;
   elapsedMs: number;
   killed: number[];
+  /** After a close that ran out of time, for a browser from launchStudioBrowser: the wait and its folders. */
+  cleanup?: BrowserCleanup;
 }
 
 /**
  * Closes a browser from launchStudioBrowser within `timeoutMs`. A close that hangs kills the
  * browser's process group (found by its marker among this process's children), so a finished
- * render never waits forever on Chrome. A close that fails counts as closed: the work is done.
+ * render never waits forever on Chrome; then it waits up to `cleanupTimeoutMs` for Playwright's
+ * close to finish and removes what is left of that browser's own folders. A close that fails
+ * counts as closed: the work is done.
  */
-export async function closeStudioBrowser(browser: Browser, options: {timeoutMs?: number} = {}): Promise<BrowserCloseResult> {
+export async function closeStudioBrowser(browser: Browser, options: {timeoutMs?: number; cleanupTimeoutMs?: number} = {}): Promise<BrowserCloseResult> {
   const started = Date.now();
-  let timer: NodeJS.Timeout | undefined;
-  const closed = await Promise.race([
-    browser.close().then(() => true, () => true),
-    new Promise<false>((resolveClose) => {
-      timer = setTimeout(() => resolveClose(false), options.timeoutMs ?? CLOSE_TIMEOUT_MS);
-    })
-  ]);
-  clearTimeout(timer);
-  const marker = markers.get(browser);
-  const killed = closed || !marker ? [] : await killLaunchedBrowser(marker);
-  return {closed, elapsedMs: Date.now() - started, killed};
+  const closing = browser.close();
+  const closed = await settlesWithin(closing, options.timeoutMs ?? CLOSE_TIMEOUT_MS);
+  const record = launched.get(browser);
+  if (closed || !record) return {closed, elapsedMs: Date.now() - started, killed: []};
+  const killed = (await killLaunchedBrowser(record.marker)).map((child) => child.pid);
+  const elapsedMs = Date.now() - started;
+  const settled = await settlesWithin(closing, options.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS);
+  const waitedMs = Date.now() - started - elapsedMs;
+  return {closed, elapsedMs, killed, cleanup: {settled, waitedMs, ...await removeLaunchFolders(record.folders, record.temporary)}};
 }
 
-/** SIGKILLs the process group of this process's child Chrome that carries `marker`. POSIX only. */
-async function killLaunchedBrowser(marker: string): Promise<number[]> {
+/** The line a caller prints for a close that ran out of time: `killed PID 123 after 10054 ms; Playwright's close …`. */
+export function closeTimeoutDetail(result: BrowserCloseResult): string {
+  const killed = `killed PID ${result.killed.join(", ") || "none found"} after ${result.elapsedMs} ms`;
+  return result.cleanup ? `${killed}; ${describeCleanup("close", result.cleanup)}` : killed;
+}
+
+/** SIGKILLs the process group of this process's child Chrome that carries `marker`, and says which, with its command line. POSIX only. */
+async function killLaunchedBrowser(marker: string): Promise<{pid: number; command: string}[]> {
   let listing: string;
   try {
     ({stdout: listing} = await execFileAsync("ps", ["-axww", "-o", "pid=,ppid=,command="], {maxBuffer: 32 * 1024 * 1024}));
   } catch {
     return [];
   }
-  const pids = listing.split("\n").flatMap((line) => {
+  const found = listing.split("\n").flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
-    return match && Number(match[2]) === process.pid && ` ${match[3]} `.includes(` ${marker} `) ? [Number(match[1])] : [];
+    return match && Number(match[2]) === process.pid && ` ${match[3]} `.includes(` ${marker} `) ? [{pid: Number(match[1]), command: match[3]!}] : [];
   });
-  for (const pid of pids) {
+  for (const {pid} of found) {
     // Playwright starts Chrome as the leader of its own process group, which holds its helpers too.
     try {
       process.kill(-pid, "SIGKILL");
@@ -220,7 +359,7 @@ async function killLaunchedBrowser(marker: string): Promise<number[]> {
       }
     }
   }
-  return pids;
+  return found;
 }
 
 /** A Google Fonts answer the trusted process fulfills itself; nothing is fetched from the network. */
