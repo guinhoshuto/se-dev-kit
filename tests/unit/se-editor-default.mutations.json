@@ -1,0 +1,81 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "new RegExp(`\\\\{\\\\s*${PAIR}(?:",
+      "to": "new RegExp(`MZ=\\\\{\\\\s*${PAIR}(?:",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "finds the default widget by its content"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "    if (!value.js.includes('onWidgetLoad')) continue;\n",
+      "to": "",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "finds the default widget by its content"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "'fields.json': widget.fields}",
+      "to": "'fields.json': JSON.stringify(JSON.parse(widget.fields), null, 2)}",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "byte for byte"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "mkdirSync(out); // throws when it exists: never replaced",
+      "to": "mkdirSync(out, {recursive: true});",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "an existing --out is refused"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) continue;\n",
+      "to": "",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "ambiguous"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "|\\$(?!\\{))*`)/.source;",
+      "to": "|\\$)*`)/.source;",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "leaves no folder"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "url.protocol !== 'https:' || ",
+      "to": "",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "before any request"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "url.hostname !== HOST",
+      "to": "!url.hostname.includes(HOST)",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "before any request"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "if (url.origin !== origin || ",
+      "to": "if (",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "bundlePath reads"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "GIT_AUTHOR_DATE: IDENTITY.date",
+      "to": "GIT_AUTHOR_DATE: new Date().toISOString()",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "the same commit each time"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-default.mjs",
+      "from": "    if (kept.has(key)) continue;\n",
+      "to": "",
+      "test": "tests/unit/se-editor-default.test.mjs",
+      "name": "the same one twice is one"
+    }
+  ]
+}
