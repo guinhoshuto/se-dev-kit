@@ -7,6 +7,8 @@ import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
 import test, {after} from "node:test";
 
+import {underLoad} from "./load.mjs";
+
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL("../../dist/cli/index.js", import.meta.url));
 const exampleRoot = fileURLToPath(new URL("../../examples/basic-chat/", import.meta.url));
@@ -26,7 +28,7 @@ async function runCli(args) {
   }
 }
 
-test("render takes several recipes in order, or --all, and keeps a single recipe's output shape", {timeout: 60_000}, async () => {
+test("render takes several recipes in order, or --all, and keeps a single recipe's output shape", {timeout: underLoad(120_000)}, async () => {
   const single = await runCli(["render", exampleRoot, "--recipe", "listing-media", "--dry-run", "--json"]);
   assert.equal(single.code, 0, single.stderr);
   assert.equal(JSON.parse(single.stdout).status, "dry-run", "one recipe still prints one result object");
@@ -47,7 +49,7 @@ test("render takes several recipes in order, or --all, and keeps a single recipe
   assert.equal(JSON.parse(unknown.stderr).code, "RECIPE_NOT_FOUND", unknown.stderr);
 });
 
-test("render --fps and --duration replace the recipe's video timing for the run, validated as a recipe", {timeout: 60_000}, async () => {
+test("render --fps and --duration replace the recipe's video timing for the run, validated as a recipe", {timeout: underLoad(120_000)}, async () => {
   const base = JSON.parse((await runCli(["render", exampleRoot, "--recipe", "listing-tutorial", "--dry-run", "--json"])).stdout);
   const fast = await runCli(["render", exampleRoot, "--recipe", "listing-tutorial", "--fps", "5", "--dry-run", "--json"]);
   assert.equal(fast.code, 0, fast.stderr);
@@ -72,7 +74,7 @@ test("render --fps and --duration replace the recipe's video timing for the run,
   assert.match(shortError.hint, /render --duration/);
 });
 
-test("render --plan-only refuses --dry-run and a recipe without a tutorial video before it waits for the machine", {timeout: 60_000}, async () => {
+test("render --plan-only refuses --dry-run and a recipe without a tutorial video before it waits for the machine", {timeout: underLoad(120_000)}, async () => {
   const both = await runCli(["render", exampleRoot, "--recipe", "listing-tutorial", "--plan-only", "--dry-run", "--json"]);
   assert.equal(JSON.parse(both.stderr).code, "RENDER_MODE", both.stderr);
   // A check after the slot would answer with the busy machine (--no-wait) or the missing browser instead.
@@ -82,7 +84,7 @@ test("render --plan-only refuses --dry-run and a recipe without a tutorial video
   assert.match(error.detail, /"listing-media"/);
 });
 
-test("render --sheet-at refuses other modes, a recipe without video, and instants outside the video before it waits for the machine", {timeout: 60_000}, async () => {
+test("render --sheet-at refuses other modes, a recipe without video, and instants outside the video before it waits for the machine", {timeout: underLoad(120_000)}, async () => {
   const sheetAt = (recipe, instants, ...extra) =>
     runCli(["render", exampleRoot, "--recipe", recipe, "--sheet-at", instants, "--no-wait", "--browser-path", "/nonexistent/chrome", "--json", ...extra]);
   // A check after the slot would answer with the busy machine (--no-wait) or, from the first recipe, the missing browser.

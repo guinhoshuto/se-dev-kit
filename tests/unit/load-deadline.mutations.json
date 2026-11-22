@@ -1,0 +1,25 @@
+{
+  "mutations": [
+    {
+      "file": "tests/unit/load.mjs",
+      "from": "return Math.ceil(ms * Math.max(1, load / cores));",
+      "to": "return ms;",
+      "test": "tests/unit/load.test.mjs",
+      "name": "^underLoad stretches a deadline by the load per core"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "{cwd: root, limitMs: limit}",
+      "to": "{cwd: root, limitMs: 3000}",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the watchdog tests grow the hung run's limit"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "const orphaned = await whileRunning(() => orphanOf(root), running);",
+      "to": "const orphaned = await until(() => orphanOf(root), 2500);",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the watchdog tests grow the hung run's limit"
+    }
+  ]
+}

@@ -11,6 +11,12 @@ import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
 
 import {HELD_ENV, acquireRenderSlot, releaseRenderSlot, renderSlotHolder} from "../../dist/shared/render-slot.js";
+import {underLoad} from "./load.mjs";
+
+/** Polls `check` every 50 ms until it holds or `ms` pass, a deadline in time that a loaded machine stretches. */
+async function waitFor(check, ms) {
+  for (const end = Date.now() + ms; !check() && Date.now() < end;) await sleep(50);
+}
 
 const execFileAsync = promisify(execFile);
 const moduleUrl = new URL("../../dist/shared/render-slot.js", import.meta.url).href;
@@ -128,7 +134,7 @@ test("the owner's children and nested calls run under its slot, an unrelated pro
   assert.equal(releaseRenderSlot(dir), false, "nothing is left to release");
 });
 
-test("the slot is released when its owner exits without releasing it and when it gets SIGTERM", {timeout: 30_000}, async (t) => {
+test("the slot is released when its owner exits without releasing it and when it gets SIGTERM", {timeout: underLoad(30_000)}, async (t) => {
   const dir = await slotFolder(t);
   await inChild(`await m.acquireRenderSlot({dir: ${JSON.stringify(dir)}, command: "exits", wait: false}); process.exit(0);`);
   assert.equal(await exists(dir), false, "released on exit");
@@ -140,7 +146,7 @@ setInterval(() => {}, 1000);`], {stdio: ["ignore", "pipe", "inherit"]});
   t.after(() => child.kill("SIGKILL"));
   let output = "";
   child.stdout.on("data", (chunk) => { output += chunk; });
-  for (let attempt = 0; attempt < 100 && !output.includes("held"); attempt += 1) await sleep(50);
+  await waitFor(() => output.includes("held"), underLoad(5000));
   assert.equal(await ownerPid(dir), child.pid);
   child.kill("SIGTERM");
   const [code] = await once(child, "exit");
@@ -148,7 +154,7 @@ setInterval(() => {}, 1000);`], {stdio: ["ignore", "pipe", "inherit"]});
   assert.equal(await exists(dir), false, "released on SIGTERM");
 });
 
-test("local capture and render wait for the render slot another process holds, and a dry run does not", {timeout: 90_000}, async (t) => {
+test("local capture and render wait for the render slot another process holds, and a dry run does not", {timeout: underLoad(90_000)}, async (t) => {
   const dir = await slotFolder(t);
   const output = await mkdtemp(join(tmpdir(), "sws-slot-cli-"));
   t.after(() => rm(output, {recursive: true, force: true}));
@@ -172,7 +178,7 @@ test("local capture and render wait for the render slot another process holds, a
     let stderr = "";
     cli.stderr.on("data", (chunk) => { stderr += chunk; });
     const waiting = `Waiting for the render slot, held by pid ${other.pid} (background-creator: npm run render:mp4)`;
-    for (let attempt = 0; attempt < 200 && !stderr.includes(waiting); attempt += 1) await sleep(50);
+    await waitFor(() => stderr.includes(waiting), underLoad(10_000));
     assert.ok(stderr.includes(waiting), `${name}: ${stderr}`);
     assert.equal(await ownerPid(dir), other.pid);
 
@@ -186,7 +192,7 @@ test("local capture and render wait for the render slot another process holds, a
 
 // HAR-335 (issue #23): the copy predated the slot's history, so a product job from this repo left no line in it, and
 // the vault's triage read "no product job between two grants" while a local render had held the slot.
-test("a local capture through this repo's copy leaves its grant and release in `render-slot vez --historico`", {timeout: 90_000}, async (t) => {
+test("a local capture through this repo's copy leaves its grant and release in `render-slot vez --historico`", {timeout: underLoad(90_000)}, async (t) => {
   const dir = await slotFolder(t);
   const output = await mkdtemp(join(tmpdir(), "sws-slot-history-"));
   t.after(() => rm(output, {recursive: true, force: true}));
