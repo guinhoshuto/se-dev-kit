@@ -11,8 +11,8 @@ import {fileURLToPath} from "node:url";
 
 import {historyDir} from "../../dist/shared/render-slot.js";
 import {browserGate, diskFloor} from "../../scripts/lib/machine.mjs";
-import {SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
-import {failedTests, historyFile, historyReport, launchRetries, readHistory} from "../../scripts/lib/test-history.mjs";
+import {LAUNCH_RERUNS, SUITES, execute, gate, leftovers, nodeArgs, runSuites, suiteEnvironment, suiteForFile, takeBrowserSlot} from "../../scripts/run-tests.mjs";
+import {failedTests, historyFile, historyReport, launchRetries, launchTimeoutFiles, readHistory} from "../../scripts/lib/test-history.mjs";
 import {chainRound, queueHolds} from "../fixtures/runner/ceding-chain.mjs";
 
 // This file runs the runner's own functions: its fake suites stay out of the live checkout's test history.
@@ -495,6 +495,120 @@ test("a run's summary says a suite retried a Chrome launch and why, and the hist
   assert.match(report, /^integration: 2 run\(s\), 1 passed, 0 failed, 1 skipped; a Chrome launch retried in 1$/m);
   assert.match(report, /^web:browser: 1 run\(s\), 0 passed, 1 failed, 0 skipped$/m);
   assert.match(report, /^ {2}1× tests\/integration\/css-transition\.test\.mjs: a video draws; last on \d{4}-\d\d-\d\d: at 300 ms the plain box is 247, not 255$/m);
+});
+
+test("a browser suite whose Chrome launch times out twice asks the machine check again: told to wait, it gives the slot back, waits, runs that file again and passes, naming the wait; told the machine is free, it fails as before", {timeout: 120_000}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sws-launch-wait-"));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  const starts = join(directory, "chrome-starts");
+  process.env.SWS_FAKE_LAUNCH_STARTS = starts;
+  t.after(() => { delete process.env.SWS_FAKE_LAUNCH_STARTS; });
+  const history = join(directory, "history.jsonl");
+  process.env.TEST_HISTORY_FILE = history;
+  t.after(() => { process.env.TEST_HISTORY_FILE = "off"; });
+  const fixture = "tests/fixtures/runner/launch-timeout.test.mjs";
+  let holding = false;
+  const holds = [];
+  const take = async () => { holds.push(holding); holding = true; return {ok: true, release: () => { holding = false; }}; };
+  const ran = [];
+  const suiteRun = async (name, suite, list, logPath) => { ran.push([list, basename(logPath), holding]); return execute(name, suite, list, logPath, {echo: false}); };
+  const runWith = async (check, logs) => {
+    const lines = [];
+    const code = await runSuites(["integration"], {
+      suites: {integration: {browser: true, flags: []}},
+      files: async () => [fixture],
+      gateFor: (options) => gate({...options, take, floor: () => 0, check, pauseMs: 0, backoffMs: 20, log: () => {}}),
+      run: suiteRun,
+      newDirectory: async () => { await mkdir(logs); return logs; },
+      log: (line) => lines.push(line)
+    });
+    return {code, text: lines.join("\n")};
+  };
+
+  // Free at the suite's start; after the two timeouts, busy for one hold's three checks, then free, and Chrome starts.
+  const busy = {ok: false, wait: true, reason: "the machine check says to wait: load 31.6 on 8 cores"};
+  let checks = 0;
+  const waiting = await runWith(async () => {
+    checks += 1;
+    if (checks === 1) return {ok: true};
+    if (checks <= 4) return busy;
+    await writeFile(starts, "");
+    return {ok: true};
+  }, join(directory, "waits"));
+  assert.equal(waiting.code, 0, waiting.text);
+  assert.equal(checks, 5);
+  assert.deepEqual(ran, [[[fixture], "integration.log", true], [[fixture], "integration-again-1.log", true]], "the file runs again, in a log of its own, holding the slot");
+  assert.deepEqual(holds, [false, false, false], "the slot was given back after the timeout and while the machine was busy");
+  assert.equal(holding, false);
+  assert.match(waiting.text, /^integration +passed +\d+\.\d s, retrying a Chrome launch 1×, running a file again after a Chrome launch timed out 1×$/m);
+  assert.match(waiting.text, new RegExp(`^integration: Chrome's launch timed out twice in ${literal(fixture)}; the machine check said to wait \\(${literal(busy.reason)}\\), so it waited \\d+\\.\\d s and ran it again: passed\\.$`, "m"));
+  assert.match(waiting.text, /^integration: Chrome launch retried: Chrome did not start within 0\.3 s /m);
+
+  // Free when asked again: two timeouts fail the suite, as before the wait existed.
+  await rm(starts, {force: true});
+  ran.length = 0;
+  holds.length = 0;
+  const free = await runWith(async () => ({ok: true}), join(directory, "free"));
+  assert.equal(free.code, 1, free.text);
+  assert.deepEqual(ran.map(([, log]) => log), ["integration.log"]);
+  assert.equal(holding, false);
+  assert.match(free.text, /^integration +failed +\d+\.\d s, retrying a Chrome launch 1×$/m);
+  assert.ok(free.text.includes(`integration: Chrome's launch timed out twice in ${fixture}; not run again: the machine check says the machine is free, so waiting would not mend the launch.`), free.text);
+
+  const entries = (await readFile(history, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(entries.map((entry) => [entry.status, entry.launchRetries, entry.failures.map((failure) => failure.file)]), [["passed", 1, []], ["failed", 1, [fixture]]]);
+  const [wait] = entries[0].launchWaits;
+  assert.deepEqual({...wait, waitedMs: wait.waitedMs >= 20}, {files: [fixture], waitedMs: true, why: busy.reason, log: wait.log, status: "passed"});
+  assert.match(wait.log, /waits\/integration-again-1\.log$/);
+  assert.equal(entries[1].launchWaits, undefined);
+});
+
+test("a file whose launch keeps timing out runs again at most LAUNCH_RERUNS times; another failure, another leftover, no retried launch or a suite without Chrome runs nothing again", async () => {
+  const file = "tests/integration/session-update.test.mjs";
+  const timedOut = {code: 1, seconds: 1, launchRetries: ["Chrome launch retried: why"], launchTimeouts: [file], left: [], failures: [{file, test: "t", error: "Error [StudioError]: Chrome did not start within 30 s (/Chrome)."}]};
+  const attempt = async (outcome, suites = {integration: {browser: true}, "web:browser": {browser: true}}) => {
+    const asked = [];
+    const lists = [];
+    const lines = [];
+    const code = await runSuites(Object.keys(suites), {
+      suites,
+      files: async () => ["fake.test.mjs"],
+      gateFor: async (options) => { asked.push(options); return {ok: true, release: () => {}, waitedMs: 90_000, busy: "load 40.1 on 8 cores"}; },
+      run: async (name, suite, list) => { lists.push(list); return outcome; },
+      newDirectory: async () => join(tmpdir(), "sws-runner-unused"),
+      log: (line) => lines.push(line)
+    });
+    return {code, runs: lists.length, lists, asked, text: lines.join("\n")};
+  };
+  assert.equal(LAUNCH_RERUNS, 2);
+  const stuck = await attempt(timedOut);
+  assert.deepEqual([stuck.code, stuck.runs, stuck.asked], [1, 1 + LAUNCH_RERUNS, [undefined, {afterLaunchTimeout: true}, {afterLaunchTimeout: true}]]);
+  assert.deepEqual(stuck.lists, [["fake.test.mjs"], [file], [file]], "only the file whose launch timed out runs again");
+  assert.match(stuck.text, /^integration +failed +3\.0 s, after 2 min waiting for the render slot, retrying a Chrome launch 3×, running a file again after a Chrome launch timed out 2×$/m);
+  assert.ok(stuck.text.includes(`integration: Chrome's launch timed out twice in ${file} again; not run again after 2 waits for the machine.`), stuck.text);
+  assert.match(stuck.text, /^web:browser +not run +after integration failed$/m);
+
+  const profile = await attempt({...timedOut, left: ["playwright_chromiumdev_profile-Ad6i5f"]});
+  assert.equal(profile.runs, 1 + LAUNCH_RERUNS, "the profile of a Chrome the launch killed is no failure of its own");
+  for (const [why, outcome] of [["another failure", {...timedOut, launchTimeouts: []}], ["another leftover", {...timedOut, left: ["xcrun_db"]}], ["no retried launch", {...timedOut, launchRetries: []}], ["a passing suite", {...timedOut, code: 0}]]) {
+    const once = await attempt(outcome);
+    assert.deepEqual([once.runs, once.asked.length], [outcome.code ? 1 : 2, outcome.code ? 1 : 2], why);
+    assert.doesNotMatch(once.text, /running a file again/, why);
+  }
+  const unit = await attempt(timedOut, {unit: {}});
+  assert.deepEqual([unit.runs, unit.asked], [1, []], "a suite without Chrome asks no gate");
+});
+
+test("a log's files to run again are those whose failing tests all ended in a launch timeout, as the reporter printed it on 2026-11-20", () => {
+  const timeout = "test at tests/integration/jquery-recents.test.mjs:32:1\n✖ the widget frame loads jQuery 3.3.1 before the widget's HTML scripts (84490.536958ms)\n  Error [StudioError]: Chrome did not start within 30 s (/Applications/Google Chrome.app/Contents/MacOS/Google Chrome).\n      at launchTimeout (file:///x/dist/capture/browser.js:124:33)\n      at async TestContext.<anonymous> (file:///x/tests/integration/jquery-recents.test.mjs:54:21) {\n    code: 'BROWSER_LAUNCH_TIMEOUT',\n    hint: 'The machine may be busy with another render: check for running headless Chrome, wait, and retry. The process this launch started was killed.'\n  }\n\nintegration left 1 entry in its temporary folder: playwright_chromiumdev_profile-Ad6i5f\n";
+  const other = "test at tests/integration/browser-lifecycle.test.mjs:89:1\n✖ a launched Chrome runs a transition on the main thread (5677.349125ms)\n  AssertionError [ERR_ASSERTION]: Chrome drew 3 frames of a transition while the main thread was blocked\n      at TestContext.<anonymous> (file:///x/tests/integration/browser-lifecycle.test.mjs:123:10) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n  }\n\n";
+  const log = (...blocks) => `✔ other (1.2ms)\n\n✖ failing tests:\n\n${blocks.join("")}`;
+  assert.deepEqual(launchTimeoutFiles(log(timeout)), ["tests/integration/jquery-recents.test.mjs"]);
+  assert.deepEqual(launchTimeoutFiles(log(timeout, timeout.replace(":32:1", ":90:1"))), ["tests/integration/jquery-recents.test.mjs"], "a file once");
+  assert.deepEqual(launchTimeoutFiles(log(other, timeout)), [], "that run also had other failures");
+  assert.deepEqual(launchTimeoutFiles(`    code: 'BROWSER_LAUNCH_TIMEOUT',\n${log(other)}`), [], "a timeout outside the failing list is none");
+  assert.deepEqual(launchTimeoutFiles(`${other}${log(timeout)}`), ["tests/integration/jquery-recents.test.mjs"], "a failure above the failing list is not in it");
+  assert.deepEqual(launchTimeoutFiles("✔ all passed\n"), []);
 });
 
 test("the history counts each test's failures across runs, the most frequent first, and survives a line cut short", () => {

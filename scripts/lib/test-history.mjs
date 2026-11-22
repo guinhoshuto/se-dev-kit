@@ -28,6 +28,21 @@ export function failedTests(text) {
     .map(([, file, test, error]) => ({file, test, error: error.slice(0, ERROR_LENGTH)}));
 }
 
+// The code Node's reporter prints under a failing test's error when Chrome did not start in time (src/capture/browser.ts).
+const LAUNCH_TIMEOUT = /^[ \t]*code: 'BROWSER_LAUNCH_TIMEOUT',?$/m;
+
+/**
+ * The files of a suite's log whose failing tests all ended in a Chrome launch that ran out of its time, after the retry
+ * launchStudioBrowser makes; none when any other test failed, or none did. The reporter lists each failing test as a
+ * block from its `test at` line, the error's `code` inside it.
+ */
+export function launchTimeoutFiles(text) {
+  const section = text.split('✖ failing tests:')[1] ?? '';
+  const blocks = section.split(/^(?=test at )/m).filter(block => block.startsWith('test at '));
+  if (!blocks.length || !blocks.every(block => LAUNCH_TIMEOUT.test(block))) return [];
+  return [...new Set(blocks.map(block => block.match(/^test at (.+?):\d+:\d+/)[1]))];
+}
+
 /** The lines a suite's log holds for a Chrome launch that was started again (LAUNCH_RETRY_NOTE in src/capture/browser.ts). */
 export const launchRetries = text => text.match(RETRY_LINE) ?? [];
 

@@ -162,6 +162,7 @@ With `--integration`, the same script calls no hosted API: it runs `tests/integr
 - `git -C <subfolder> ls-tree <commit>` lists that subfolder, but `git show <commit>:<file>` reads from the root of the commit.
 - `mutate` now stops before each mutation when `git status --porcelain` or `HEAD` differ from the run start, so a plan test that writes an untracked, non-ignored file into the checkout stops the run; ignore that file (see `seen.txt` in `mutate.test.mjs`).
 - A new `validate` check lives in a module of its own, as `src/validation/network-urls.ts` does (#35), and `src/validation/project.ts` gains only its import and one `diagnostics.push(...)` line. That file holds the `from` anchors of two mutation plans (`tests/unit/field-inventory.mutations.json` and `tests/unit/fields-themes-check.mutations.json`), and each must occur there exactly its `occurrences` times: new code that repeats one, such as `if (diagnostics.length === 0) {` or `if (missing.length > 0) {` at the same indentation, fails `tests/unit/mutation-plans.test.mjs`.
+- `tests/integration/capture.test.mjs` times out under load, outside any change to capture: on 2026-11-20, at load 18 to 30, it failed alone in two gates (`:578` screenshot, 3× in the history; `:77`; `:170` launch). Wait for the machine and run it again before reading the code.
 
 ## Guides
 
