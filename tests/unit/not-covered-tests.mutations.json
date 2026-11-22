@@ -1,0 +1,109 @@
+{
+  "mutations": [
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "# NOT COVERED: (.+)$/gm",
+      "to": "# (.+)$/gm",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's log lists each test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "/^[ \\t]*﹣ (.+?)",
+      "to": "/^﹣ (.+?)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's log lists each test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/lib/test-history.mjs",
+      "from": "map(([, test, reason]) => ({test, reason}))",
+      "to": "map(([, test, reason]) => ({test, reason: `NOT COVERED: ${reason}`}))",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's log lists each test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "notCovered: notCoveredTests(text), left}",
+      "to": "notCovered: [], left}",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a suite's log lists each test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "env: suiteEnvironment(environment, temporary)",
+      "to": "env: suiteEnvironment(process.env, temporary)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^with the vault source of the render slot changed"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "skips.set(`${skip.test} # ${skip.reason}`, skip)",
+      "to": "skips.set(`${skips.size}`, skip)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a test skipped NOT COVERED gets a summary line"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "      keepSkips(outcome);\n",
+      "to": "",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a test skipped NOT COVERED gets a summary line"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "notes, notCovered: [...skips.values()]}",
+      "to": "notes, notCovered: code ? [] : [...skips.values()]}",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a test skipped NOT COVERED gets a summary line"
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "from": "log(`NOT COVERED in ${result.name}: ${test} # ${reason}`)",
+      "to": "log(`NOT COVERED: ${result.name}: ${test} # ${reason}`)",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^a test skipped NOT COVERED gets a summary line"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "output.match(/^NOT COVERED(?:: | in [a-z][a-z:]*: ).+$/gm)",
+      "to": "output.match(/^.*NOT COVERED(?:: | in [a-z][a-z:]*: ).+$/gm)",
+      "test": "tests/unit/gate.test.mjs",
+      "name": "^a test npm test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "output.match(/^NOT COVERED(?:: | in [a-z][a-z:]*: ).+$/gm)",
+      "to": "output.match(/^NOT COVERED(?:: ).+$/gm)",
+      "test": "tests/unit/gate.test.mjs",
+      "name": "^a test npm test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "lines.filter(line => /^NOT COVERED in [a-z][a-z:]*: /.test(line))",
+      "to": "lines.filter(line => /^NOT COVERED/.test(line))",
+      "test": "tests/unit/gate.test.mjs",
+      "name": "^a test npm test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "else if (tests) {last = `gate ${commit} passed, but npm test ${skippedTests}`; code = EXIT.notCovered;}",
+      "to": "else if (tests) {last = `gate ${commit} passed, but npm test ${skippedTests}`; code = EXIT.passed;}",
+      "test": "tests/unit/gate.test.mjs",
+      "name": "^a test npm test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "${tests ? ` npm test also ${skippedTests}` : ''}",
+      "to": "",
+      "test": "tests/unit/gate.test.mjs",
+      "name": "^a test npm test skipped NOT COVERED"
+    },
+    {
+      "file": "scripts/gate.mjs",
+      "from": "else if (tests) {last",
+      "to": "else if (false) {last",
+      "test": "tests/unit/run-tests.test.mjs",
+      "name": "^with the vault source of the render slot changed"
+    }
+  ]
+}

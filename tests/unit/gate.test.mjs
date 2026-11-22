@@ -5,7 +5,7 @@ import {mkdir, mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {dirname, join, resolve} from "node:path";
 import test from "node:test";
-import {EXIT, UsageError, changedPlans, dryRun, gateBase, gitState, parseArgs, runGate} from "../../scripts/gate.mjs";
+import {EXIT, UsageError, changedPlans, dryRun, gateBase, gitState, notCoveredSuites, parseArgs, runGate} from "../../scripts/gate.mjs";
 
 // npm run gate is the gate of a session on one issue (AGENTS.md step 2). Sessions wrote their own zsh chains, which
 // waited on `maquina_livre.py --esperar` before npm run build while the render-slot queue moved (86 min before each
@@ -109,6 +109,28 @@ test("a NOT COVERED left by npm test is copied under its line, the other steps s
   assert.deepEqual(runner.seen.map(step => step.name), STEPS);
   assert.equal(lines[lines.findIndex(line => line.startsWith("npm test ")) + 1], `  ${notCovered}`);
   assert.equal(last, `gate ${commit} passed, but npm test left NOT COVERED: integration, web:browser. Run npm run test:browser again, or name them in the question.`);
+});
+
+// 2026-11-21 (#48): a test skipped NOT COVERED reached neither the runner's summary nor the gate.
+test("a test npm test skipped NOT COVERED is copied under npm test once, apart from the suites, and the gate exits 3 with a sentence of its own", async t => {
+  const {root, commit} = await checkout(t);
+  const suiteLine = "NOT COVERED: integration. This run did not test them; run npm run test:browser, which waits its turn in the render slot queue.";
+  const testLine = "NOT COVERED in web:browser: the copy test # the source changed; run sync --write";
+  // npm test echoes the reporter's stream, whose skip line also holds NOT COVERED, before its summary.
+  const echoed = "  ﹣ the copy test (0.4ms) # NOT COVERED: the source changed; run sync --write";
+  const both = await gate(root, fake({outputs: {"npm test": `${echoed}\nweb:browser  passed   1.0 s\n${suiteLine}\n${testLine}\nLogs: .cache/test-logs/run-3/\n`}}));
+  assert.equal(both.code, EXIT.notCovered);
+  const under = both.lines.findIndex(line => line.startsWith("npm test "));
+  assert.deepEqual(both.lines.slice(under + 1, under + 3), [`  ${suiteLine}`, `  ${testLine}`]);
+  assert.equal(both.lines.filter(line => line.includes("NOT COVERED")).length, 3, both.lines.join("\n"));
+  assert.deepEqual(notCoveredSuites([suiteLine, testLine]), ["integration"]);
+  assert.equal(both.last, `gate ${commit} passed, but npm test left NOT COVERED: integration. Run npm run test:browser again, or name them in the question. npm test also skipped 1 test(s) NOT COVERED, listed under it with what to run: do what each says, or name it in the question.`);
+
+  const {root: other, commit: otherCommit} = await checkout(t);
+  const tests = await gate(other, fake({outputs: {"npm test": `${echoed}\n${testLine}\nNOT COVERED in unit: another # run x\nLogs: .cache/test-logs/run-4/\n`}}));
+  assert.equal(tests.code, EXIT.notCovered);
+  assert.equal(tests.last, `gate ${otherCommit} passed, but npm test skipped 2 test(s) NOT COVERED, listed under it with what to run: do what each says, or name it in the question.`);
+  assert.doesNotMatch(tests.last, /test:browser/, "npm run test:browser runs suites, not a skipped test's step");
 });
 
 test("without origin/main, the plans against main are the tests/ plans the branch adds or changes since the merge base, without deleted ones", async t => {
@@ -280,7 +302,8 @@ test("AGENTS.md step 2 of a session on one issue names npm run gate, and package
   const agents = readFileSync(join(repo, "AGENTS.md"), "utf8");
   const section = agents.split(/^## A session on one issue$/m)[1].split(/^## |^<!--/m)[0];
   const step = section.split("\n").find(line => line.startsWith("2. "));
-  assert.ok(step?.includes("`npm run gate`"), "step 2 does not name npm run gate");
+  // The gate is the step itself, not one of its later mentions ("Nothing goes in front of `npm run gate`", f8a0aeb).
+  assert.ok(step?.startsWith("2. The whole gate on the branch's last commit: `npm run gate` ("), "step 2 does not name npm run gate as the gate");
   assert.ok(step.includes("each step's log in `.cache/gate/<commit>/`"), "step 2 does not say where the logs go");
   assert.ok(step.includes("against `origin/main` as of the last fetch, or the local `main` without that ref"), "step 2 does not say the plans' base");
   assert.ok(step.includes("The gate does not fetch: `git fetch` first."), "step 2 does not say to fetch first");
