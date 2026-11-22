@@ -302,7 +302,8 @@ test("AGENTS.md step 2 of a session on one issue names npm run gate, and package
   const agents = readFileSync(join(repo, "AGENTS.md"), "utf8");
   const section = agents.split(/^## A session on one issue$/m)[1].split(/^## |^<!--/m)[0];
   const step = section.split("\n").find(line => line.startsWith("2. "));
-  assert.ok(step?.includes("`npm run gate`"), "step 2 does not name npm run gate");
+  // The gate is the step itself, not one of its later mentions ("Nothing goes in front of `npm run gate`", f8a0aeb).
+  assert.ok(step?.startsWith("2. The whole gate on the branch's last commit: `npm run gate` ("), "step 2 does not name npm run gate as the gate");
   assert.ok(step.includes("each step's log in `.cache/gate/<commit>/`"), "step 2 does not say where the logs go");
   assert.ok(step.includes("against `origin/main` as of the last fetch, or the local `main` without that ref"), "step 2 does not say the plans' base");
   assert.ok(step.includes("The gate does not fetch: `git fetch` first."), "step 2 does not say to fetch first");
