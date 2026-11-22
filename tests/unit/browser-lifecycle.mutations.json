@@ -72,15 +72,15 @@
     },
     {
       "file": "src/capture/browser.ts",
-      "from": "if (dirname(resolve(folder)) !== resolve(temporary) || !PLAYWRIGHT_FOLDER.test(name)) {",
+      "from": "if (dirname(path) !== resolve(temporary) || !PLAYWRIGHT_FOLDER.test(name)) {",
       "to": "if (false) {",
       "test": "tests/unit/browser-lifecycle.test.mjs",
       "name": "^removeLaunchFolders removes only a Playwright folder"
     },
     {
       "file": "src/capture/browser.ts",
-      "from": "dirname(resolve(folder)) !== resolve(temporary)",
-      "to": "!resolve(folder).startsWith(resolve(temporary))",
+      "from": "dirname(path) !== resolve(temporary)",
+      "to": "!path.startsWith(resolve(temporary))",
       "test": "tests/unit/browser-lifecycle.test.mjs",
       "name": "^removeLaunchFolders removes only a Playwright folder"
     },
@@ -100,7 +100,7 @@
     },
     {
       "file": "src/capture/browser.ts",
-      "from": "directory = (await lstat(folder)).isDirectory();",
+      "from": "directory = (await lstat(path)).isDirectory();",
       "to": "directory = true;",
       "test": "tests/unit/browser-lifecycle.test.mjs",
       "name": "^removeLaunchFolders removes only a Playwright folder"
@@ -135,7 +135,7 @@
     },
     {
       "file": "src/capture/browser.ts",
-      "from": "launched.set(browser, {marker, temporary, folders: playwrightFolders(browser)});",
+      "from": "launched.set(browser, {marker, temporary, folders: playwrightFolders(browser).map((folder) => resolve(folder))});",
       "to": "launched.set(browser, {marker, temporary, folders: []});",
       "test": "tests/unit/browser-lifecycle.test.mjs",
       "name": "^a launched browser's artifacts folder and profile are found"
@@ -160,6 +160,41 @@
       "to": "export const CLEANUP_TIMEOUT_MS = 60_000;",
       "test": "tests/unit/browser-lifecycle.test.mjs",
       "name": "^a launched browser's artifacts folder and profile are found"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "directory = (await lstat(path)).isDirectory();",
+      "to": "directory = (await lstat(folder)).isDirectory();",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^removeLaunchFolders checks and removes one resolved path"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "await rm(path, {recursive: true, force: true, maxRetries: 5});",
+      "to": "await rm(folder, {recursive: true, force: true, maxRetries: 5});",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^removeLaunchFolders checks and removes one resolved path"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "error instanceof Error ? error.message : \"\"",
+      "to": "\"\"",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch whose Playwright timeout comes first names its profile from the call log"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "const temporary = resolve(tmpdir());",
+      "to": "const temporary = tmpdir();",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch under a relative TMPDIR"
+    },
+    {
+      "file": "src/capture/browser.ts",
+      "from": "folders: playwrightFolders(browser).map((folder) => resolve(folder))}",
+      "to": "folders: playwrightFolders(browser)}",
+      "test": "tests/unit/browser-lifecycle.test.mjs",
+      "name": "^a launch under a relative TMPDIR"
     }
   ]
 }

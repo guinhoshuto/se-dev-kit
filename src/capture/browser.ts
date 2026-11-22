@@ -167,7 +167,8 @@ async function launchOnce(executablePath: string, options: {headed?: boolean; la
     `Chrome did not start within ${timeout / 1000} s (${executablePath}).`,
     `The machine may be busy with another render: check for running headless Chrome, wait, and retry. The process this launch started was killed; ${describeCleanup("launch", cleanup)}.`
   );
-  const temporary = tmpdir();
+  // Resolved now: a relative TMPDIR names the folders against this launch's working directory, not a later close's.
+  const temporary = resolve(tmpdir());
   const launching = chromium.launch({executablePath, headless: !options.headed, args: [marker, ...REPRODUCIBLE_RASTER_ARGS], timeout});
   let deadline: NodeJS.Timeout | undefined;
   try {
@@ -177,7 +178,7 @@ async function launchOnce(executablePath: string, options: {headed?: boolean; la
         deadline = setTimeout(() => reject(OUTER_DEADLINE), timeout + LAUNCH_GRACE_MS);
       })
     ]);
-    launched.set(browser, {marker, temporary, folders: playwrightFolders(browser)});
+    launched.set(browser, {marker, temporary, folders: playwrightFolders(browser).map((folder) => resolve(folder))});
     return browser;
   } catch (error) {
     // A launch that settles after the deadline must not leave its browser running.
@@ -185,7 +186,9 @@ async function launchOnce(executablePath: string, options: {headed?: boolean; la
     if (error !== OUTER_DEADLINE && !(error instanceof errors.TimeoutError)) throw error;
     const killed = await killLaunchedBrowser(marker);
     // The profile this launch made, named by the killed process's command line or, when Playwright's own timeout came
-    // first and its process is gone, by the call log of that error. The artifacts folder is named by neither.
+    // first and its process is gone, by the call log of that error. The artifacts folder is named by neither. Known
+    // limit: when Chrome's main process has already exited and a helper still holds its stderr, our deadline comes
+    // first, the ps finds no child and there is no call log, so the profile is not named and may be left behind.
     const profiles = new Set([...killed.map((child) => child.command), error instanceof Error ? error.message : ""].flatMap(userDataDirs));
     const started = Date.now();
     const settled = await settlesWithin(launching, options.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS);
@@ -256,15 +259,18 @@ export interface BrowserCleanup extends FolderCleanup {
 export async function removeLaunchFolders(folders: string[], temporary: string): Promise<FolderCleanup> {
   const result: FolderCleanup = {removed: [], gone: [], failed: [], skipped: []};
   for (const folder of new Set(folders)) {
-    const name = basename(folder);
-    if (dirname(resolve(folder)) !== resolve(temporary) || !PLAYWRIGHT_FOLDER.test(name)) {
+    // One resolved path for the check, the lstat and the rm: the kernel follows a link before a `..`, so checking
+    // `<tmp>/link/../<name>` normalized while removing it raw would remove `<link target>/../<name>`.
+    const path = resolve(folder);
+    const name = basename(path);
+    if (dirname(path) !== resolve(temporary) || !PLAYWRIGHT_FOLDER.test(name)) {
       result.skipped.push(folder);
       continue;
     }
     let directory: boolean;
     try {
       // lstat: a symbolic link is no directory, so a link named like a profile is skipped, its target untouched.
-      directory = (await lstat(folder)).isDirectory();
+      directory = (await lstat(path)).isDirectory();
     } catch {
       result.gone.push(name);
       continue;
@@ -274,7 +280,7 @@ export async function removeLaunchFolders(folders: string[], temporary: string):
       continue;
     }
     try {
-      await rm(folder, {recursive: true, force: true, maxRetries: 5});
+      await rm(path, {recursive: true, force: true, maxRetries: 5});
       result.removed.push(name);
     } catch {
       result.failed.push(name);
@@ -290,7 +296,7 @@ export function describeCleanup(what: "close" | "launch", cleanup: BrowserCleanu
   if (cleanup.gone.length) parts.push(`already gone ${cleanup.gone.join(", ")}`);
   if (cleanup.failed.length) parts.push(`could not remove ${cleanup.failed.join(", ")}`);
   if (cleanup.skipped.length) parts.push(`skipped ${cleanup.skipped.join(", ")} (not a Playwright folder of the temporary folder)`);
-  if (parts.length === 1) parts.push("no folder of it named");
+  if (parts.length === 1) parts.push("no folder of it was named");
   return parts.join("; ");
 }
 

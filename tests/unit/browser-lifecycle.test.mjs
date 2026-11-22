@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
-import {basename, dirname, join} from "node:path";
+import {basename, dirname, isAbsolute, join, relative} from "node:path";
 import {setTimeout as sleep} from "node:timers/promises";
 import test from "node:test";
 
@@ -84,7 +84,7 @@ test("a launch fails with BROWSER_LAUNCH_TIMEOUT only when the second start runs
   const said = [];
   await assert.rejects(launchStudioBrowser({browserPath: fake, launchTimeoutMs: 1_000, onLaunchRetry: (line) => said.push(line)}), (error) => {
     assert.equal(error.code, "BROWSER_LAUNCH_TIMEOUT");
-    // Playwright's own timeout came first and took its process along: the profile is named by its call log.
+    // The hung shell is still alive at the kill: its command line, found by ps, names the profile.
     assert.match(error.hint, /; Playwright's launch finished after \d+ ms; (?:already gone|removed) playwright_chromiumdev_profile-\S+\.$/);
     return true;
   });
@@ -115,7 +115,7 @@ test("a launch that fails for any other reason is not started again", {timeout: 
 // A test's own timeout below two launches and their grace leaves the retry no time to work. `npm test` had a first run
 // fail on one launch on 2026-11-04 (#33); a test's own bound shorter than this would still fail it, with another message.
 test("a test that starts Chrome in its body leaves room for a retried launch", async () => {
-  const room = 2 * (LAUNCH_TIMEOUT_MS + 5_000) + 30_000;
+  const room = 2 * (LAUNCH_TIMEOUT_MS + 5_000 + CLEANUP_TIMEOUT_MS) + 30_000;
   const checked = [];
   for (const folder of ["../integration/", "../web/"]) {
     const directory = new URL(folder, import.meta.url);
@@ -240,6 +240,29 @@ test("a launched browser's artifacts folder and profile are found right after th
   assert.deepEqual(await temporary.own(), [], "Playwright's own close removed them");
 });
 
+test("a launch under a relative TMPDIR records its temporary folder and its folders as absolute paths", {timeout: 30_000, skip: process.platform === "win32"}, async (t) => {
+  const temporary = await playwrightTemporary(t, "launch-relative");
+  const {fake} = await flakyBrowser(t, 0);
+  const relativeTemporary = relative(process.cwd(), temporary.directory);
+  assert.equal(isAbsolute(relativeTemporary), false);
+  const before = process.env.TMPDIR;
+  process.env.TMPDIR = relativeTemporary;
+  let launched;
+  try {
+    launched = await launchStudioBrowser({browserPath: fake, launchTimeoutMs: 10_000, launchRetries: 0});
+  } finally {
+    if (before === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = before;
+  }
+  t.after(() => closeStudioBrowser(launched.browser));
+  // A close from another working directory still removes these, not namesakes under it.
+  const found = launchFolders(launched.browser);
+  assert.equal(found?.temporary, temporary.directory);
+  assert.equal(found.folders.length, 2, JSON.stringify(found));
+  for (const folder of found.folders) assert.equal(dirname(folder), temporary.directory, `${folder} is absolute`);
+  assert.equal((await closeStudioBrowser(launched.browser)).closed, true);
+});
+
 test("a close that runs out of time removes its browser's folders when Playwright's cleanup does not, and leaves another browser's", {timeout: 30_000, skip: process.platform === "win32"}, async (t) => {
   const temporary = await playwrightTemporary(t, "close-cleanup");
   const fake = await unclosableBrowser(t, {held: true});
@@ -289,6 +312,41 @@ test("a launch that runs out of time removes the profile of the Chrome it killed
   assert.ok(Date.now() - started < 15_000, `the launch failed after ${Date.now() - started} ms`);
   assert.deepEqual(await temporary.own(), [], "no folder of this launch is left");
   assert.deepEqual((await readdir(temporary.directory)).sort(), [...temporary.foreign].sort(), "another browser's folders survive");
+});
+
+test("a launch whose Playwright timeout comes first names its profile from the call log", {timeout: 30_000, skip: process.platform === "win32"}, async (t) => {
+  const temporary = await playwrightTemporary(t, "launch-call-log");
+  const directory = await mkdtemp(join(tmpdir(), "sws-launch-silent-"));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  // Answers nothing on the pipe and exits at Browser.close: Playwright's own timeout (1 s) comes before this module's
+  // deadline, Playwright closes the process, ps finds no child, and only the error's call log names the profile.
+  await writeFile(join(directory, "silent-chrome.mjs"), PIPE_CHROME.replace('output.write(JSON.stringify({id, result}) + "\\0");', ""));
+  const fake = join(directory, "fake-chrome");
+  await writeFile(fake, `#!/bin/sh\nexec '${process.execPath}' '${join(directory, "silent-chrome.mjs")}' "$@"\n`, {mode: 0o755});
+  await assert.rejects(temporary.within(() => launchStudioBrowser({browserPath: fake, launchTimeoutMs: 1_000, launchRetries: 0})), (error) => {
+    assert.equal(error.code, "BROWSER_LAUNCH_TIMEOUT");
+    assert.match(error.hint, /The process this launch started was killed; Playwright's launch finished after \d+ ms; (?:already gone|removed) playwright_chromiumdev_profile-\S+\.$/);
+    return true;
+  });
+  assert.deepEqual(await temporary.own(), [], "no folder of this launch is left");
+  assert.deepEqual((await readdir(temporary.directory)).sort(), [...temporary.foreign].sort(), "another browser's folders survive");
+});
+
+test("removeLaunchFolders checks and removes one resolved path, so a link before a `..` cannot reach outside", async (t) => {
+  const temporary = await mkdtemp(join(tmpdir(), "sws-remove-dotdot-"));
+  const outside = await mkdtemp(join(tmpdir(), "sws-remove-dotdot-outside-"));
+  t.after(() => Promise.all([temporary, outside].map((folder) => rm(folder, {recursive: true, force: true}))));
+  // The kernel follows `link-dir` first: `<temporary>/link-dir/../<name>` is `<outside>/<name>` on disk. `up` exists
+  // only outside, so the lstat decides; `both` exists in both places, so the rm decides.
+  await mkdir(join(outside, "inner"));
+  const victims = ["playwright_chromiumdev_profile-up", "playwright_chromiumdev_profile-both"].map((name) => join(outside, name));
+  for (const victim of victims) await mkdir(victim);
+  await mkdir(join(temporary, "playwright_chromiumdev_profile-both"));
+  await symlink(join(outside, "inner"), join(temporary, "link-dir"));
+  const result = await removeLaunchFolders(victims.map((victim) => `${join(temporary, "link-dir")}/../${basename(victim)}`), temporary);
+  assert.deepEqual(result, {removed: ["playwright_chromiumdev_profile-both"], gone: ["playwright_chromiumdev_profile-up"], failed: [], skipped: []});
+  for (const victim of victims) assert.equal((await lstat(victim)).isDirectory(), true, `${victim}, outside the temporary folder, survives`);
+  await assert.rejects(lstat(join(temporary, "playwright_chromiumdev_profile-both")), {code: "ENOENT"});
 });
 
 test("removeLaunchFolders removes only a Playwright folder directly in the launch's temporary folder", async (t) => {
