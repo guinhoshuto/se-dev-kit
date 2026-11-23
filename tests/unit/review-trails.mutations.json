@@ -44,7 +44,7 @@
     },
     {
       "file": "src/capture/review-media.ts",
-      "from": "  return [\"-protocol_whitelist\", \"file\", \"-i\", `file:${path}`];",
+      "from": "  return [\"-format_whitelist\", FORMAT_WHITELIST, \"-protocol_whitelist\", \"file\", \"-i\", `file:${path}`];",
       "to": "  return [\"-i\", path];",
       "test": "tests/unit/review-trails.test.mjs",
       "name": "^review media decodes only a regular file inside"
@@ -83,6 +83,111 @@
       "to": "      if (trail) maxInto(trail, frame);",
       "test": "tests/unit/review-trails.test.mjs",
       "name": "^review media end to end"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "return [\"-format_whitelist\", FORMAT_WHITELIST, \"-protocol_whitelist\", \"file\"",
+      "to": "return [\"-protocol_whitelist\", \"file\"",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media refuses a playlist"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "if (!VIDEO_EXTENSIONS.some((extension) => real.toLowerCase().endsWith(extension))) {",
+      "to": "if (false) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media refuses a playlist"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "const regular = real === undefined ? false : (await lstat(real)).isFile();",
+      "to": "const regular = real !== undefined;",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media refuses a folder or a FIFO"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "if (width > MAX_SIDE || height > MAX_SIDE || frames > MAX_FRAMES) {",
+      "to": "if (height > MAX_SIDE || frames > MAX_FRAMES) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media refuses a probe over"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "if (width > MAX_SIDE || height > MAX_SIDE || frames > MAX_FRAMES) {",
+      "to": "if (width > MAX_SIDE || frames > MAX_FRAMES) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media refuses a probe over"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "if (width > MAX_SIDE || height > MAX_SIDE || frames > MAX_FRAMES) {",
+      "to": "if (width > MAX_SIDE || height > MAX_SIDE) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media refuses a probe over"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "      if (index > MAX_FRAMES) {",
+      "to": "      if (false) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media stops a decode past"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "if (code !== 0) throw new StudioError(\"FFMPEG_FAILED\"",
+      "to": "if (false) throw new StudioError(\"FFMPEG_FAILED\"",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media writes nothing when FFmpeg fails"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "if (index === 0) throw new StudioError(\"REVIEW_MEDIA_INVALID\"",
+      "to": "if (false) throw new StudioError(\"REVIEW_MEDIA_INVALID\"",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media writes nothing when FFmpeg fails"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "\"-nostdin\", \"-noautorotate\", ",
+      "to": "\"-nostdin\", ",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media writes nothing when FFmpeg fails"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "        writes.push(write);",
+      "to": "        await atomicWriteFile(dirname(page), write.path, write.data);",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media writes no trail or sheet of the first video"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "    if (cells.length >= limit) break;",
+      "to": "    if (cells.length < 0) break;",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media sheet: a tiny step"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "options.sheet!, MAX_SHEET_CELLS + 1).length",
+      "to": "options.sheet!).length",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media sheet: a tiny step"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "cell.label, scale, INK, left + layout.cellWidth);",
+      "to": "cell.label, scale, INK);",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media sheet: a caption wider"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "<= layout.cellWidth ? GLYPH_SCALE : 1;",
+      "to": "<= layout.cellWidth ? GLYPH_SCALE : GLYPH_SCALE;",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media sheet: a caption wider"
     }
   ]
 }

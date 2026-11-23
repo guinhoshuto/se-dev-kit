@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {execFile} from "node:child_process";
-import {chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile} from "node:fs/promises";
+import {chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
@@ -12,8 +12,11 @@ import {encodePng} from "../../dist/capture/png.js";
 import {reviewCaption} from "../../dist/capture/review.js";
 import {
   boxDownscale,
+  composeSheet,
+  decodeVideo,
   drawText,
   maxInto,
+  probeVideo,
   reviewMediaItems,
   secondsLabel,
   sheetFrames,
@@ -68,8 +71,8 @@ function squareFrame(index, width = W, height = H, size = 16) {
   return frame;
 }
 
-async function cli(args) {
-  return execFileAsync(process.execPath, [cliPath, "--json", ...args], {maxBuffer: 16 * 1024 * 1024}).then(
+async function cli(args, {timeout = 0, node = []} = {}) {
+  return execFileAsync(process.execPath, [...node, cliPath, "--json", ...args], {maxBuffer: 16 * 1024 * 1024, timeout}).then(
     ({stdout}) => ({code: 0, stdout, json: JSON.parse(stdout)}),
     (error) => ({code: error.code, stdout: error.stdout, stderr: error.stderr, error: error.stderr ? JSON.parse(error.stderr) : undefined})
   );
@@ -271,10 +274,213 @@ test("review media decodes only a regular file inside its render folder, by file
     await writeFile(join(root, "cover", "a.mp4"), "");
     const result = await cli(["review", join(root, "index.html"), join(root, "cover"), "--force", "--trails", ...fake.args]);
     assert.equal(result.error.code, "FFPROBE_FAILED");
-    assert.match(await readFile(fake.log, "utf8"), new RegExp(`^ffprobe .*-protocol_whitelist file -i file:${join(root, "cover", "a.mp4")}`, "m"));
+    assert.match(await readFile(fake.log, "utf8"), new RegExp(`^ffprobe .*-format_whitelist mov,mp4,m4a,3gp,3g2,mj2,matroska,webm -protocol_whitelist file -i file:${join(root, "cover", "a.mp4")}`, "m"));
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+/** Fake ffprobe and ffmpeg that record each call in `calls.log` and then run the given shell bodies. */
+async function scriptedTools(root, bodies) {
+  const log = join(root, "calls.log");
+  const tools = {};
+  for (const name of ["ffmpeg", "ffprobe"]) {
+    const path = join(root, `fake-${name}`);
+    await writeFile(path, `#!/bin/sh\nprintf '%s\\n' "${name} $*" >> '${log}'\n${bodies[name] ?? "exit 1"}\n`);
+    await chmod(path, 0o755);
+    tools[name] = path;
+  }
+  return {log, args: ["--ffmpeg-path", tools.ffmpeg, "--ffprobe-path", tools.ffprobe]};
+}
+
+/** A fake ffprobe's body that prints one video stream. */
+const probeBody = (stream) => `printf '%s' '${JSON.stringify({streams: [{r_frame_rate: "1/1", ...stream}]})}'`;
+const calls = async (log) => ((await exists(log)) ? (await readFile(log, "utf8")).split("\n").filter(Boolean) : []);
+const mediaFiles = async (root) => ((await exists(join(root, "index-media"))) ? await readdir(join(root, "index-media")) : []);
+
+test("review media refuses a playlist inside its render folder that points at a file outside it", {timeout: 120_000}, async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sws-review-media-")));
+  try {
+    const fake = await fakeTools(root);
+    await mkdir(join(root, "secret"));
+    await writeFile(join(root, "secret", "secret.ts"), "");
+    await coverFolder(root, "cover/a.m3u8");
+    const playlist = `#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1.0,\nfile:${join(root, "secret", "secret.ts")}\n#EXT-X-ENDLIST\n`;
+    await writeFile(join(root, "cover", "a.m3u8"), playlist);
+    await writeFile(join(root, "cover", "a.ffconcat"), `ffconcat version 1.0\nfile '${join(root, "secret", "secret.ts")}'\n`);
+    for (const video of ["cover/a.m3u8", "cover/a.ffconcat"]) {
+      await coverFolder(root, video);
+      const result = await cli(["review", join(root, "index.html"), join(root, "cover"), "--force", "--trails", "--sheet", "0.5", ...fake.args]);
+      assert.equal(result.code, 2, video);
+      assert.equal(result.error.code, "REVIEW_MEDIA_INVALID", video);
+      assert.equal(await exists(fake.log), false, `${video}: no ffprobe or ffmpeg call`);
+      assert.equal(await exists(join(root, "index.html")), false, `${video}: no page`);
+      assert.deepEqual(await mediaFiles(root), [], `${video}: no trail or sheet`);
+    }
+    // With the real tools, the demuxer whitelist alone refuses the playlist that the file protocol lets through.
+    const tooling = await detectMediaTooling();
+    if (!tooling.ffmpegPath || !tooling.ffprobePath) {
+      t.diagnostic("FFmpeg is not installed: the demuxer whitelist is checked only through the fake tools' arguments.");
+      return;
+    }
+    const raw = join(root, "frames.rgb");
+    await writeFile(raw, Buffer.concat(Array.from({length: 10}, (_, index) => squareFrame(index, 32, 32, 8))));
+    const encode = (format, target) => execFileAsync(tooling.ffmpegPath, ["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "32x32", "-r", "10", "-i", raw, "-c:v", "libx264", "-pix_fmt", "yuv444p", "-f", format, target]);
+    await encode("mpegts", join(root, "secret", "secret.ts"));
+    await encode("mp4", join(root, "cover", "inside.mp4"));
+    const open = await execFileAsync(tooling.ffprobePath, ["-v", "error", "-protocol_whitelist", "file", "-i", `file:${join(root, "cover", "a.m3u8")}`, "-show_entries", "stream=width", "-of", "json"]);
+    assert.match(open.stdout, /"width": 32/, "without the demuxer whitelist ffprobe reads the file outside");
+    await assert.rejects(probeVideo(tooling.ffprobePath, join(root, "cover", "a.m3u8")), {code: "FFPROBE_FAILED"});
+    const probe = {width: 32, height: 32, fps: 10, frames: 10};
+    await assert.rejects(decodeVideo({ffmpeg: tooling.ffmpegPath, path: join(root, "cover", "a.m3u8"), probe, trailEvery: 1}), {code: "FFMPEG_FAILED"});
+    assert.deepEqual(await probeVideo(tooling.ffprobePath, join(root, "cover", "inside.mp4")), probe, "an MP4 still reads");
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("review media refuses a folder or a FIFO named like a video before ffprobe runs", {timeout: 120_000}, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sws-review-media-")));
+  try {
+    const fake = await fakeTools(root);
+    await mkdir(join(root, "cover", "a.mp4"), {recursive: true});
+    await execFileAsync("mkfifo", [join(root, "cover", "b.mp4")]);
+    for (const video of ["cover/a.mp4", "cover/b.mp4"]) {
+      await coverFolder(root, video);
+      const result = await cli(["review", join(root, "index.html"), join(root, "cover"), "--force", "--trails", ...fake.args]);
+      assert.equal(result.code, 2, video);
+      assert.equal(result.error.code, "REVIEW_MEDIA_OUTSIDE", video);
+      assert.equal(await exists(fake.log), false, `${video}: no call`);
+    }
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("review media refuses a probe over 8192 px a side or 36 000 frames before FFmpeg decodes", {timeout: 120_000}, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sws-review-media-")));
+  try {
+    await coverFolder(root, "cover/a.mp4");
+    await writeFile(join(root, "cover", "a.mp4"), "");
+    for (const stream of [{width: 9000, height: 10, nb_read_packets: 10}, {width: 10, height: 8193, nb_read_packets: 10}, {width: 2, height: 2, nb_read_packets: 36_001}]) {
+      await rm(join(root, "calls.log"), {force: true});
+      const fake = await scriptedTools(root, {ffprobe: probeBody(stream), ffmpeg: "exit 1"});
+      const result = await cli(["review", join(root, "index.html"), join(root, "cover"), "--force", "--trails", ...fake.args]);
+      assert.equal(result.code, 2, JSON.stringify(stream));
+      assert.equal(result.error.code, "REVIEW_MEDIA_TOO_LARGE", JSON.stringify(stream));
+      assert.deepEqual((await calls(fake.log)).map((line) => line.split(" ")[0]), ["ffprobe"], "FFmpeg is never called");
+    }
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("review media stops a decode past 36 000 frames when ffprobe counted fewer", {timeout: 120_000}, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sws-review-media-")));
+  try {
+    await coverFolder(root, "cover/a.mp4");
+    await writeFile(join(root, "cover", "a.mp4"), "");
+    const fake = await scriptedTools(root, {ffprobe: probeBody({width: 2, height: 2, nb_read_packets: 1}), ffmpeg: `head -c ${36_002 * 12} /dev/zero`});
+    const result = await cli(["review", join(root, "index.html"), join(root, "cover"), "--trails", ...fake.args]);
+    assert.equal(result.code, 2, result.stdout);
+    assert.equal(result.error.code, "REVIEW_MEDIA_TOO_LARGE");
+    assert.match(result.error.detail, /more than 36000 frames/);
+    assert.equal(await exists(join(root, "index.html")), false);
+    assert.deepEqual(await mediaFiles(root), []);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("review media writes nothing when FFmpeg fails or decodes no frame, and decodes without autorotation", {timeout: 120_000}, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sws-review-media-")));
+  try {
+    await coverFolder(root, "cover/a.mp4");
+    await writeFile(join(root, "cover", "a.mp4"), "");
+    const probe = probeBody({width: 2, height: 2, nb_read_packets: 2});
+    for (const [ffmpeg, code] of [["head -c 12 /dev/zero; exit 1", "FFMPEG_FAILED"], ["exit 0", "REVIEW_MEDIA_INVALID"]]) {
+      await rm(join(root, "calls.log"), {force: true});
+      const fake = await scriptedTools(root, {ffprobe: probe, ffmpeg});
+      const result = await cli(["review", join(root, "index.html"), join(root, "cover"), "--trails", ...fake.args]);
+      assert.equal(result.code, 2, `${ffmpeg}: ${result.stdout}`);
+      assert.equal(result.error.code, code, ffmpeg);
+      assert.equal(await exists(join(root, "index.html")), false, `${ffmpeg}: no page`);
+      assert.deepEqual(await mediaFiles(root), [], `${ffmpeg}: no trail`);
+      const decode = (await calls(fake.log)).find((line) => line.startsWith("ffmpeg "));
+      assert.match(decode, new RegExp(`-noautorotate -format_whitelist mov,mp4,m4a,3gp,3g2,mj2,matroska,webm -protocol_whitelist file -i file:${join(root, "cover", "a.mp4")} `));
+    }
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("review media writes no trail or sheet of the first video when the second one fails to decode", {timeout: 120_000}, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sws-review-media-")));
+  try {
+    await mkdir(join(root, "cover"));
+    const manifest = {
+      schemaVersion: 1,
+      generatedAt: "2026-11-22T12:00:00.000Z",
+      recipe: {id: "cover"},
+      contactSheet: null,
+      artifacts: ["a", "b"].map((id) => ({id, screenshot: null, video: `cover/${id}.mp4`, thumbnail: null}))
+    };
+    await writeFile(join(root, "cover", "manifest.json"), JSON.stringify(manifest));
+    for (const id of ["a", "b"]) await writeFile(join(root, "cover", `${id}.mp4`), "");
+    const fake = await scriptedTools(root, {
+      ffprobe: probeBody({width: 2, height: 2, nb_read_packets: 2}),
+      ffmpeg: `case "$*" in *b.mp4*) exit 1;; esac\nhead -c 24 /dev/zero`
+    });
+    const result = await cli(["review", join(root, "index.html"), join(root, "cover"), "--trails", "--sheet", "1", ...fake.args]);
+    assert.equal(result.code, 2, result.stdout);
+    assert.equal(result.error.code, "FFMPEG_FAILED");
+    assert.match(result.error.detail, /b\.mp4/);
+    const decodes = (await calls(fake.log)).filter((line) => line.startsWith("ffmpeg "));
+    assert.equal(decodes.length, 2, "a.mp4 decoded, then b.mp4 failed");
+    assert.deepEqual(await mediaFiles(root), [], "no trail or sheet of a.mp4");
+    assert.equal(await exists(join(root, "index.html")), false, "no page");
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("review media sheet: a tiny step is refused by its count without listing every instant", {timeout: 120_000}, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sws-review-media-")));
+  try {
+    await coverFolder(root, "cover/a.mp4");
+    await writeFile(join(root, "cover", "a.mp4"), "");
+    const fake = await scriptedTools(root, {ffprobe: probeBody({width: 2, height: 2, r_frame_rate: "30/1", nb_read_packets: 300}), ffmpeg: "exit 1"});
+    // A small heap and a short deadline: listing 10^10 instants would run out of either.
+    const result = await cli(["review", join(root, "index.html"), join(root, "cover"), "--sheet", "1e-9", ...fake.args], {timeout: 30_000, node: ["--max-old-space-size=128"]});
+    assert.equal(result.code, 2, result.stderr);
+    assert.equal(result.error.code, "REVIEW_SHEET_TOO_LARGE");
+    assert.match(result.error.detail, /has \d{10} cells; a sheet holds at most 48/);
+    assert.deepEqual((await calls(fake.log)).map((line) => line.split(" ")[0]), ["ffprobe"]);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("review media sheet: a caption wider than a narrow cell drops to the small font and stops at the cell's edge", () => {
+  const blank = (width) => ({width, height: 4, data: new Uint8Array(width * 4 * 3)});
+  const ink = (sheet, x, y) => sheet.at(x, y).join() === "232,234,238";
+  const wrap = (sheet) => ({...sheet, at: (x, y) => [...sheet.data.subarray((y * sheet.width + x) * 3, (y * sheet.width + x) * 3 + 3)]});
+  const band = (sheet, x0, x1, y0, y1) => {
+    const lit = [];
+    for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) if (ink(sheet, x, y)) lit.push([x, y]);
+    return lit;
+  };
+  // Cells 20 px wide: "123.456 s" is 53 px even in the small font; it is cut, and the gap and the next cell stay clear.
+  const narrow = wrap(composeSheet([{image: blank(20), label: "123.456 s"}, {image: blank(20), label: "1.0 s"}]));
+  const top = 8 + 4;
+  assert.ok(band(narrow, 8, 28, top, top + 24).length > 0, "the first caption is drawn");
+  assert.deepEqual(band(narrow, 28, 36, top, top + 24), [], "nothing in the gap between the cells");
+  assert.deepEqual(band(narrow, 36 + 18, 36 + 20, top, top + 24), [], "the second caption (17 px) is the only ink in its cell");
+  // Cells 40 px wide: "1.0 s" is 58 px in the large font and 29 px in the small one, 7 rows tall from row 5.
+  const small = wrap(composeSheet([{image: blank(40), label: "1.0 s"}]));
+  const lit = band(small, 0, small.width, top, small.height);
+  assert.ok(lit.length > 0);
+  assert.ok(lit.every(([x, y]) => x < 8 + 29 && y >= top + 5 && y < top + 12), `small font only: ${JSON.stringify(lit.slice(-3))}`);
 });
 
 test("review media end to end: --trails --sheet 1 over a rendered moving square writes the trail, the sheet, and their codes", {timeout: 240_000}, async (t) => {

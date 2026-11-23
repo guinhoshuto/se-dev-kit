@@ -13,9 +13,11 @@ import {
   probeVideo,
   reviewMediaItems,
   secondsLabel,
+  sheetCellCount,
   sheetFrames,
   sheetStepFor,
-  type VideoProbe
+  type VideoProbe,
+  VIDEO_EXTENSIONS
 } from "./review-media.js";
 
 /**
@@ -458,6 +460,13 @@ async function containedVideo(section: ReviewSection, item: ReviewItem, path: st
       "Trails and sheets read only the videos inside each render folder; review that render's own folder."
     );
   }
+  if (!VIDEO_EXTENSIONS.some((extension) => real.toLowerCase().endsWith(extension))) {
+    throw new StudioError(
+      "REVIEW_MEDIA_INVALID",
+      `${item.code} (${item.file}) is not an ${VIDEO_EXTENSIONS.join(", ")} file, so review does not decode it.`,
+      "Trails and sheets read only the MP4, WebM, and MOV videos a render writes."
+    );
+  }
   return real;
 }
 
@@ -564,11 +573,12 @@ export async function writeReviewPage(options: {
     for (const job of plan.jobs) {
       job.probe = await probeVideo(ffprobe!, job.video);
       if (job.sheet) {
-        const cells = sheetFrames(job.probe.frames, job.probe.fps, options.sheet!).length;
+        const cells = sheetFrames(job.probe.frames, job.probe.fps, options.sheet!, MAX_SHEET_CELLS + 1).length;
         if (cells > MAX_SHEET_CELLS) {
+          const count = Math.max(cells, sheetCellCount(job.probe.frames, job.probe.fps, options.sheet!));
           throw new StudioError(
             "REVIEW_SHEET_TOO_LARGE",
-            `A sheet of ${job.sheet.source} every ${options.sheet} s has ${cells} cells; a sheet holds at most ${MAX_SHEET_CELLS}.`,
+            `A sheet of ${job.sheet.source} every ${options.sheet} s has ${count} cells; a sheet holds at most ${MAX_SHEET_CELLS}.`,
             `Pass --sheet ${sheetStepFor(job.probe.frames / job.probe.fps)} or more.`
           );
         }
@@ -576,6 +586,8 @@ export async function writeReviewPage(options: {
     }
     const trails: ReviewMediaResult[] = [];
     const sheets: ReviewMediaResult[] = [];
+    // Every video decodes before any file is written: a failure leaves no trail or sheet behind without its page.
+    const writes: {path: string; data: Buffer}[] = [];
     for (const job of plan.jobs) {
       const probe = job.probe!;
       const instants = job.sheet ? sheetFrames(probe.frames, probe.fps, options.sheet!) : [];
@@ -587,7 +599,8 @@ export async function writeReviewPage(options: {
         ...(job.sheet ? {sheetIndexes: instants.map((instant) => instant.frame)} : {})
       });
       if (job.trail && decoded.trail) {
-        await atomicWriteFile(dirname(page), job.trail.path!, encodePng(probe.width, probe.height, 3, decoded.trail.data));
+        const write = {path: job.trail.path!, data: encodePng(probe.width, probe.height, 3, decoded.trail.data)};
+        writes.push(write);
         trails.push({code: job.trail.code, source: job.trail.source!, file: job.trail.path!});
       }
       if (job.sheet) {
@@ -596,10 +609,11 @@ export async function writeReviewPage(options: {
           .map((instant) => ({image: decoded.cells.get(instant.frame)!, label: secondsLabel(instant.seconds, options.sheet!)}));
         if (cells.length === 0) throw new StudioError("REVIEW_MEDIA_INVALID", `FFmpeg decoded none of the sheet's frames of ${job.video}.`);
         const sheet = composeSheet(cells);
-        await atomicWriteFile(dirname(page), job.sheet.path!, encodePng(sheet.width, sheet.height, 3, sheet.data));
+        writes.push({path: job.sheet.path!, data: encodePng(sheet.width, sheet.height, 3, sheet.data)});
         sheets.push({code: job.sheet.code, source: job.sheet.source!, file: job.sheet.path!, cells: cells.length});
       }
     }
+    for (const write of writes) await atomicWriteFile(dirname(page), write.path, write.data);
     derived = {
       ...(options.trails ? {trails} : {}),
       ...(options.sheet === undefined ? {} : {sheets}),

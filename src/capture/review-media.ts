@@ -45,15 +45,24 @@ export function trailOf(frames: readonly Uint8Array[], every: number): Uint8Arra
   return trail;
 }
 
-/** The sheet's instants 0, S, 2S, … below the video's duration, each with the first frame at or after it. */
-export function sheetFrames(frameCount: number, fps: number, seconds: number): {seconds: number; frame: number}[] {
+/**
+ * The sheet's instants 0, S, 2S, … below the video's duration, each with the first frame at or after it; with `limit`,
+ * at most that many, so a tiny S is counted without building every instant.
+ */
+export function sheetFrames(frameCount: number, fps: number, seconds: number, limit = Infinity): {seconds: number; frame: number}[] {
   const duration = frameCount / fps;
   const cells: {seconds: number; frame: number}[] = [];
   for (let step = 0; step * seconds < duration - 1e-9; step += 1) {
+    if (cells.length >= limit) break;
     const at = step * seconds;
     cells.push({seconds: at, frame: Math.min(frameCount - 1, Math.max(0, Math.ceil(at * fps - 1e-6)))});
   }
   return cells;
+}
+
+/** How many instants a sheet of `frameCount` frames at `fps` every `seconds` has, counted without listing them. */
+export function sheetCellCount(frameCount: number, fps: number, seconds: number): number {
+  return Math.max(1, Math.ceil((frameCount / fps - 1e-9) / seconds));
 }
 
 /** The decimals S needs, at least one and at most three. */
@@ -132,8 +141,19 @@ const GLYPHS: Record<string, readonly string[]> = {
   " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"]
 };
 
-/** Draws `text` with the bitmap font, its top left at (x, y), each font pixel `scale` pixels wide; returns its width. */
-export function drawText(image: RgbImage, x: number, y: number, text: string, scale: number, color: readonly number[] = INK): number {
+/**
+ * Draws `text` with the bitmap font, its top left at (x, y), each font pixel `scale` pixels wide, nothing at or right
+ * of `right`; returns its width.
+ */
+export function drawText(
+  image: RgbImage,
+  x: number,
+  y: number,
+  text: string,
+  scale: number,
+  color: readonly number[] = INK,
+  right = image.width
+): number {
   let left = x;
   for (const character of text) {
     const glyph = GLYPHS[character];
@@ -145,7 +165,7 @@ export function drawText(image: RgbImage, x: number, y: number, text: string, sc
           for (let dx = 0; dx < scale; dx += 1) {
             const px = left + glyphX * scale + dx;
             const py = y + glyphY * scale + dy;
-            if (px < 0 || py < 0 || px >= image.width || py >= image.height) continue;
+            if (px < 0 || py < 0 || px >= Math.min(image.width, right) || py >= image.height) continue;
             image.data.set(color.slice(0, 3), (py * image.width + px) * 3);
           }
         }
@@ -192,7 +212,9 @@ export function composeSheet(cells: readonly {image: RgbImage; label: string}[])
       const row = cell.image.data.subarray(y * cell.image.width * 3, (y * cell.image.width + Math.min(cell.image.width, layout.cellWidth)) * 3);
       sheet.data.set(row, ((top + y) * sheet.width + left) * 3);
     }
-    drawText(sheet, left, top + layout.cellHeight + 5, cell.label, GLYPH_SCALE);
+    // A caption wider than a narrow cell drops to the small font, and is cut at the cell's edge if it still overflows.
+    const scale = cell.label.length * 6 * GLYPH_SCALE - GLYPH_SCALE <= layout.cellWidth ? GLYPH_SCALE : 1;
+    drawText(sheet, left, top + layout.cellHeight + 5, cell.label, scale, INK, left + layout.cellWidth);
   });
   return sheet;
 }
@@ -240,9 +262,21 @@ export interface VideoProbe {
   frames: number;
 }
 
-/** The arguments that make FFmpeg and ffprobe read only this file: the file protocol, by absolute `file:` URL. */
+/** The containers the renderer writes; a video with another extension is refused before FFmpeg sees it. */
+export const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov"] as const;
+
+/**
+ * The demuxers FFmpeg and ffprobe may use: MP4/MOV and Matroska/WebM. A playlist or concat list (HLS, `ffconcat`)
+ * inside the render folder would otherwise make them open other files.
+ */
+export const FORMAT_WHITELIST = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm";
+
+/**
+ * The arguments that make FFmpeg and ffprobe read only this file: the MP4 and WebM demuxers and the file protocol, by
+ * absolute `file:` URL.
+ */
 export function fileInput(path: string): string[] {
-  return ["-protocol_whitelist", "file", "-i", `file:${path}`];
+  return ["-format_whitelist", FORMAT_WHITELIST, "-protocol_whitelist", "file", "-i", `file:${path}`];
 }
 
 function rate(value: unknown): number {
@@ -302,9 +336,10 @@ export async function decodeVideo(options: {
   let filled = 0;
   let index = 0;
   let overflow = false;
+  // `-noautorotate`: every frame keeps the coded size ffprobe reports; a rotation in the metadata is not applied.
   const child = spawn(
     options.ffmpeg,
-    ["-v", "error", "-nostdin", ...fileInput(options.path), "-map", "0:v:0", "-an", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+    ["-v", "error", "-nostdin", "-noautorotate", ...fileInput(options.path), "-map", "0:v:0", "-an", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
     {shell: false, stdio: ["ignore", "pipe", "pipe"]}
   );
   let stderr = "";
