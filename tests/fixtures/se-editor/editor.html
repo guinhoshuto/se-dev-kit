@@ -17,6 +17,15 @@
   the overlay's link for OBS inside a `.widget-form` of its own (labelled here, to prove the label is not enough), the
   layer's name, and a group outside any form. Reading the value of any of them counts in window.__fixture.decoyReads.
 
+  The editor since StreamElements' redesign of 2026-11 is chosen by the URL's ?ui=new, in the markup of the editor's
+  public JavaScript (read on 2026-11-22): the React code editor of ?ui=react, and a layer panel of four sections whose
+  headers open one at a time (a click on the open one closes it), Layers open at the load. Which one is open lives in the
+  page, never in what Save keeps, and each header click counts in window.__fixture.sections. The Settings section stays
+  in the page when closed, with no height, and holds the React Open Editor button, which does nothing while the section
+  is closed (seen on 2026-11-17), and the fields: Base UI accordion groups that keep their content in the page, hidden
+  while closed, and one `[data-slot="field"]` row per field. A row in the Position section, outside Settings, has the
+  label of a widget's field, and reading its value counts in decoyReads too.
+
   The test sets window.__FIXTURE_WIDGETS = [{name, html, css, js, fields, fieldData}] before the page loads, and reads
   window.__fixture: each widget's applied code, and counts of what was clicked and written.
 -->
@@ -38,6 +47,12 @@
   .help-dialog { position: fixed; right: 0; bottom: 0; width: 80px; height: 24px; background: #444; color: #fff; }
   md-nav-bar ul { margin: 0; padding: 0; }
   md-nav-bar li { list-style: none; display: inline-block; }
+  .widget-details-expandable-content { max-height: 0; padding: 0; overflow: hidden; }
+  .widget-details-expandable-content.expanded { max-height: none; overflow: visible; }
+  #widget-details__widget-settings { width: 280px; }
+  #widget-details__widget-settings [data-slot="field"] { display: block; width: 260px; }
+  #widget-details__widget-settings label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #widget-details__widget-settings input, #widget-details__widget-settings textarea, #widget-details__widget-settings button { display: block; box-sizing: border-box; max-width: 100%; }
 </style>
 </head>
 <body>
@@ -64,6 +79,7 @@
     selections: 0,
     renames: 0,
     toggles: 0,
+    sections: 0,
     decoyReads: 0,
     opens: 0,
     dones: 0,
@@ -72,6 +88,8 @@
     frozen: false
   };
   window.__fixture = state;
+  const UI = new URLSearchParams(location.search).get('ui');
+  const NEW_UI = UI === 'new';
   const reformat = (fields) => JSON.stringify(JSON.parse(fields), null, 2);
 
   // Monaco: models live until Done disposes them.
@@ -171,6 +189,72 @@
     return el;
   };
 
+  // ?ui=new: the layer panel's four sections, Layers open at the load. A section's content stays in the page.
+  let expanded = 'Layers';
+  if (NEW_UI) {
+    const sections = [];
+    const apply = () => {
+      for (const {title, header, content} of sections) {
+        header.classList.toggle('se-widget-details-v3__header__expanded', expanded === title);
+        content.classList.toggle('expanded', expanded === title);
+      }
+    };
+    const section = (title, content) => {
+      const header = tag('div', {'data-editor-action': `${title} toggle expand state`, class: 'se-widget-details-v3__header'});
+      const toggle = tag('se-button', {size: 'icon', class: 'se-widget-details-v3__header__toggle'});
+      toggle.append(tag('button', {type: 'button'}));
+      header.append(tag('se-icon'), tag('span', {}, title), toggle);
+      header.addEventListener('click', () => {
+        state.sections += 1;
+        expanded = expanded === title ? '' : title;
+        apply();
+      });
+      content.classList.add('widget-details-expandable-content');
+      sections.push({title, header, content});
+      return [header, content];
+    };
+    const layersBox = tag('div');
+    layersBox.append(document.getElementById('layers'));
+    const settingsBox = tag('div', {id: 'widget-details__widget-settings', class: 'widget-details-expandable-content__settings'});
+    settingsBox.append(document.getElementById('settings'));
+    const position = tag('form', {class: 'widget-form widget-details-expandable-content__size'});
+    const row = tag('div', {role: 'group', 'data-slot': 'field', 'data-orientation': 'vertical'});
+    const decoy = tag('input', {id: 'position-decoy', class: 'decoy', type: 'text', value: 'FIXTUREPOSITION'});
+    countReads(decoy);
+    row.append(tag('label', {'data-slot': 'field-label', for: 'position-decoy'}, 'Speed'), decoy);
+    position.append(row);
+    document.querySelector('.overlay-editor__toolbar').after(...section('Layers', layersBox), ...section('Settings', settingsBox),
+      ...section('Position, size and style', position), ...section('Animation settings', tag('div')));
+    apply();
+  }
+
+  // ?ui=new: a group is a Base UI accordion item, whose content stays in the page, hidden while the group is closed.
+  const accordionItem = (widget, group, accordion) => {
+    const item = tag('div', {'data-slot': 'accordion-item'});
+    const id = `panel-${(lastId += 1)}`;
+    const trigger = tag('button', {type: 'button', 'data-slot': 'accordion-trigger', 'aria-controls': id}, group);
+    const content = tag('div', {id, 'data-slot': 'accordion-content'});
+    const apply = () => {
+      const open = Boolean(widget.expandedGroups[group]);
+      trigger.setAttribute('aria-expanded', String(open));
+      trigger.toggleAttribute('data-panel-open', open);
+      content.toggleAttribute('data-open', open);
+      content.toggleAttribute('data-closed', !open);
+      content.hidden = !open;
+    };
+    trigger.addEventListener('click', () => {
+      state.toggles += 1;
+      widget.expandedGroups[group] = !widget.expandedGroups[group];
+      apply();
+    });
+    apply();
+    const heading = tag('h3');
+    heading.append(trigger);
+    item.append(heading, content);
+    accordion.append(item);
+    return content;
+  };
+
   // One field, as the editor's template maps each type to its field; any other type stays a native input.
   let lastId = 0;
   const fieldRow = (widget, key, field) => {
@@ -197,6 +281,36 @@
       });
       return input;
     };
+    // ?ui=new: a Base UI field row, its label a [data-slot="field-label"], and a number field committing when it is left.
+    if (NEW_UI) {
+      const row = tag('div', {role: 'group', 'data-slot': 'field', 'data-orientation': 'vertical'});
+      const fieldLabel = (attributes = {}) => tag('label', {'data-slot': 'field-label', ...attributes}, label);
+      const numberField = (attributes = {}) => {
+        const root = tag('div', {'data-slot': 'number-field', ...attributes});
+        const group = tag('div', {'data-slot': 'number-field-group'});
+        group.append(number({'aria-label': key}));
+        root.append(group);
+        return root;
+      };
+      if (field.type === 'text') {
+        // A label may hold an icon: its whole text is the label, and none of its leaves is.
+        const own = fieldLabel({for: id});
+        own.append(tag('span', {class: 'field-label-icon', 'aria-hidden': 'true'}));
+        row.append(own, field.mode === 'textarea' ? text('textarea', {id}) : text('input', {id, type: 'text'}));
+      } else if (field.type === 'number') {
+        row.append(fieldLabel(), numberField());
+      } else if (field.type === 'slider') {
+        row.append(fieldLabel({id}), tag('input', {type: 'range', 'aria-labelledby': id}), numberField({class: 'w-14 shrink-0'}));
+      } else if (field.type === 'dropdown') {
+        row.append(fieldLabel({id}), tag('button', {type: 'button', role: 'combobox', 'aria-labelledby': id}, current), tag('input', {'aria-hidden': 'true', tabindex: '-1', value: current}));
+      } else {
+        const input = tag('input', {id, type: field.type === 'colorpicker' ? 'color' : field.type, ...(field.readonly ? {readonly: ''} : {})});
+        input.value = current;
+        input.addEventListener('input', () => { widget.fieldData[key] = input.value; });
+        row.append(fieldLabel({for: id}), input);
+      }
+      return row;
+    }
     if (field.type === 'text') {
       item.append(tag('label', {for: id}, label), field.mode === 'textarea' ? text('textarea', {id}) : text('input', {id, type: 'text'}));
     } else if (field.type === 'number') {
@@ -237,20 +351,30 @@
       settings.append(name);
       return;
     }
-    const container = document.createElement('div');
-    container.className = 'custom-event-list-editor-button-container';
-    const button = document.createElement('button');
-    button.className = 'md-primary md-raised md-button';
-    button.textContent = 'Open Editor';
-    button.addEventListener('click', () => openEditor(widget));
-    container.appendChild(button);
-    const form = document.createElement('div');
-    form.className = 'widget-form flex-100 form-no-padding';
-    const details = tag('div', {id: 'widget-details', class: 'widget-form form-no-padding'});
-    const inner = tag('div', {class: 'settings'});
-    inner.append(container, form);
-    details.append(inner);
-    settings.append(name, details);
+    let form;
+    if (NEW_UI) {
+      const column = tag('div', {class: 'flex min-w-0 flex-col'});
+      const button = tag('button', {type: 'button', 'data-slot': 'button', class: 'my-3 self-center'}, 'Open Editor');
+      button.addEventListener('click', () => openEditor(widget));
+      form = tag('div', {'data-slot': 'accordion'});
+      column.append(button, form);
+      settings.append(name, column);
+    } else {
+      const container = document.createElement('div');
+      container.className = 'custom-event-list-editor-button-container';
+      const button = document.createElement('button');
+      button.className = 'md-primary md-raised md-button';
+      button.textContent = 'Open Editor';
+      button.addEventListener('click', () => openEditor(widget));
+      container.appendChild(button);
+      form = document.createElement('div');
+      form.className = 'widget-form flex-100 form-no-padding';
+      const details = tag('div', {id: 'widget-details', class: 'widget-form form-no-padding'});
+      const inner = tag('div', {class: 'settings'});
+      inner.append(container, form);
+      details.append(inner);
+      settings.append(name, details);
+    }
     // The first group starts open, and a group's state is saved with the overlay.
     widget.expandedGroups ??= {};
     const groups = new Map();
@@ -259,24 +383,27 @@
       const group = field.group ?? 'Fields';
       if (!groups.has(group)) {
         widget.expandedGroups[group] ??= groups.size === 0;
-        const element = tag('custom-widget-fields-group');
-        const body = tag('div', {class: 'settings-fields custom-fields'});
-        const toggle = tag('button', {type: 'button', class: 'custom-fields__toggle'}, group);
-        const apply = () => {
-          toggle.setAttribute('aria-expanded', String(widget.expandedGroups[group]));
-          body.classList.toggle('ng-hide', !widget.expandedGroups[group]);
-        };
-        toggle.addEventListener('click', () => {
-          state.toggles += 1;
-          widget.expandedGroups[group] = !widget.expandedGroups[group];
+        if (NEW_UI) groups.set(group, accordionItem(widget, group, form));
+        else {
+          const element = tag('custom-widget-fields-group');
+          const body = tag('div', {class: 'settings-fields custom-fields'});
+          const toggle = tag('button', {type: 'button', class: 'custom-fields__toggle'}, group);
+          const apply = () => {
+            toggle.setAttribute('aria-expanded', String(widget.expandedGroups[group]));
+            body.classList.toggle('ng-hide', !widget.expandedGroups[group]);
+          };
+          toggle.addEventListener('click', () => {
+            state.toggles += 1;
+            widget.expandedGroups[group] = !widget.expandedGroups[group];
+            apply();
+          });
           apply();
-        });
-        apply();
-        const header = tag('md-subheader');
-        header.append(toggle);
-        element.append(header, body);
-        form.append(element);
-        groups.set(group, body);
+          const header = tag('md-subheader');
+          header.append(toggle);
+          element.append(header, body);
+          form.append(element);
+          groups.set(group, body);
+        }
       }
       groups.get(group).append(fieldRow(widget, key, field));
       }
@@ -294,7 +421,7 @@
   // the page once Done returned (measured on 2026-11-11); this one stays in it, hidden, with its Monaco inside, so that
   // a dialog that is closing but still in the page is tested against the code that must not count it as open. The
   // default is the AngularJS Material editor above.
-  const REACT = new URLSearchParams(location.search).get('ui') === 'react';
+  const REACT = UI === 'react' || NEW_UI;
   if (REACT) {
     // A dialog of the page that is no code editor: it has no Monaco, and it stays open the whole time.
     const help = document.createElement('div');
@@ -356,6 +483,7 @@
   };
 
   const openEditor = (widget) => {
+    if (NEW_UI && expanded !== 'Settings') return;
     if (REACT) return openReactEditor(widget);
     state.opens += 1;
     const dialog = document.createElement('md-dialog');
