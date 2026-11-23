@@ -33,7 +33,12 @@
   // A custom widget's fields, in the editor's own template. `.widget-form` alone would not do: the panel with the
   // overlay's link for OBS, with its key, has that class too (`.details-content.widget-form`, `#overlay-url`).
   const FIELD_LABELS = '.widget-form custom-widget-fields-group label';
-  const FIELD_ROW = 'md-input-container, .custom-fields__item';
+  // Since StreamElements' redesign of 2026-11, a layer's Settings section holds its Open Editor button and its fields,
+  // each a `[data-slot="field"]` row with its `[data-slot="field-label"]` (the editor's public JavaScript, read on
+  // 2026-11-22). Nothing outside that section is read: the page may still hold an input with the overlay's link.
+  const SETTINGS = '#widget-details__widget-settings';
+  const NEW_FIELD_LABELS = `${SETTINGS} [data-slot="field"] [data-slot="field-label"]`;
+  const FIELD_ROW = 'md-input-container, .custom-fields__item, [data-slot="field"]';
   const VALUE_TYPES = ['text', 'number', 'search', 'url', 'email', 'tel'];
   // How long the editor gets to show a written value as its own: React renders it and AngularJS applies it right away.
   const SETTLE_MS = 150;
@@ -62,7 +67,29 @@
   const doneButton = (box) => box.querySelector('.exit-code-editor')
     || [...box.querySelectorAll('button:not([role="tab"])')].find((el) => el.textContent.trim() === 'Done')
     || null;
-  const openEditorButton = () => document.querySelector('.custom-event-list-editor-button-container button');
+  const openEditorButton = () => document.querySelector('.custom-event-list-editor-button-container button')
+    || [...document.querySelectorAll(`${SETTINGS} button[data-slot="button"]`)].find((el) => el.textContent.trim() === 'Open Editor')
+    || null;
+  // The redesigned editor shows one section of the layer's panel at a time (Layers, Settings, Position, size and style,
+  // Animation settings), and a click on the open one's header closes it. Which one is open lives in the tab, not in the
+  // overlay, so opening Settings is never saved; it closes the layer list, but the calls pick a layer by the page's
+  // markup, where the list stays. The editor before the redesign has no such header, and nothing is clicked there.
+  const settingsHeader = () => document.querySelector('[data-editor-action="Settings toggle expand state"]');
+  const settingsOpen = () => {
+    const content = document.querySelector(SETTINGS);
+    return settingsHeader().classList.contains('se-widget-details-v3__header__expanded') || Boolean(content && content.classList.contains('expanded'));
+  };
+  const openSettings = async (name) => {
+    if (!settingsHeader()) return {ok: true, clicked: false};
+    if (!settingsOpen()) {
+      settingsHeader().click();
+      if (!(await waitFor(settingsOpen, 1500))) {
+        return {ok: false, error: `"${name}": its Settings section did not open: open it by its ref (find "Settings" and click the ref) and call again.`};
+      }
+      return {ok: true, clicked: true};
+    }
+    return {ok: true, clicked: false};
+  };
   const hidden = () => (document.visibilityState === 'visible' ? null
     : {ok: false, error: 'The editor tab is in the background, where its timers stall: bring it to the front and call again.'});
   const needFiles = () => (!plan() ? noPlan : api.state.files ? null
@@ -202,11 +229,15 @@
     }
     const previous = openEditorButton();
     rows[0].click();
-    // The selected layer's settings replace the previous one's; wait for its Open Editor button, then take what is there.
-    const button = (await waitFor(() => {
+    // The selected layer's settings replace the previous one's; wait for its Open Editor button, open its Settings
+    // section, then take what is there.
+    await waitFor(() => {
       const current = openEditorButton();
       return current && current !== previous ? current : null;
-    }, 1500)) || openEditorButton();
+    }, 1500);
+    const settings = await openSettings(name);
+    if (!settings.ok) return settings;
+    const button = openEditorButton() || (settings.clicked ? await waitFor(openEditorButton, 1500) : null);
     if (!button) return {ok: false, error: `"${name}" shows no Open Editor button: it may not be a custom widget.`};
     press(button);
     return (await waitFor(dialog, 3000)) ? {ok: true} : {ok: false, error: `Open Editor did not open the code editor of "${name}".`};
@@ -290,6 +321,11 @@
       // (measured on 2026-11-05). Until the mark, the list names the previous layer and the page may hold its fields.
       await waitFor(isSelected, 3000);
     }
+    if (isSelected()) {
+      const section = await openSettings(name);
+      if (!section.ok) return section;
+      if (section.clicked) await waitFor(openEditorButton, 1500);
+    }
     return isSelected() && openEditorButton() ? {ok: true, name}
       : {ok: false, error: `"${name}" shows no field panel: it may not be a custom widget.`};
   };
@@ -297,7 +333,7 @@
   // A closed group keeps its inputs in the page, and a group left open is saved with the overlay, so no group is opened.
   const fieldInput = (label, layer) => {
     if (typeof label !== 'string' || !label.trim()) return {ok: false, error: "Pass the field's label."};
-    const matching = [...document.querySelectorAll(FIELD_LABELS)].filter((el) => el.textContent.trim() === label.trim());
+    const matching = [...document.querySelectorAll(`${FIELD_LABELS}, ${NEW_FIELD_LABELS}`)].filter((el) => el.textContent.trim() === label.trim());
     if (!matching.length) {
       return {ok: false, error: `No field of "${layer}" is labelled "${label}": nothing was read or written. A field its FIELDS show only under a condition may be hidden now.`};
     }

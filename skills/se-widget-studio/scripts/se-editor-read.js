@@ -185,10 +185,19 @@
 
   const labels = (texts) => {
     const wanted = Array.isArray(texts) ? texts : plan() ? plan().labels : [];
-    const panel = [...document.querySelectorAll('.widget-form')].find(visible);
+    // Since StreamElements' redesign of 2026-11 the selected layer's fields are in its Settings section, which stays in
+    // the page when closed, with no height; one section of the panel is open at a time. Each label is a
+    // `[data-slot="field-label"]` whose whole text is the label, an icon inside it or not (the editor's public
+    // JavaScript, read on 2026-11-22). The editor before the redesign has no such section.
+    const settings = document.querySelector('#widget-details__widget-settings');
+    if (settings && !settings.classList.contains('expanded')
+      && !document.querySelector('[data-editor-action="Settings toggle expand state"].se-widget-details-v3__header__expanded')) {
+      return {ok: false, error: 'The selected layer\'s Settings section is closed: open it by its ref (find "Settings" and click the ref) and call labels() again.'};
+    }
+    const panel = settings || [...document.querySelectorAll('.widget-form')].find(visible);
     if (!panel) return {ok: false, error: 'No field panel is shown: select a custom widget layer and open its Settings.'};
     const edge = panel.getBoundingClientRect().right;
-    const leaves = [...panel.querySelectorAll('*')].filter((el) => el.children.length === 0);
+    const leaves = settings ? [...panel.querySelectorAll('[data-slot="field-label"]')] : [...panel.querySelectorAll('*')].filter((el) => el.children.length === 0);
     const results = wanted.map((text) => {
       const matches = leaves.filter((el) => el.textContent.trim() === text);
       if (!matches.length) return {text, status: 'not found'};

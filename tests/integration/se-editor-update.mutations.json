@@ -531,6 +531,76 @@
       "to": "|| null",
       "test": "tests/integration/se-editor-update.test.mjs",
       "name": "^react editor: run moves"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "[...document.querySelectorAll(`${SETTINGS} button[data-slot=\"button\"]`)]",
+      "to": "[]",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: run moves every widget"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (!settingsOpen()) {",
+      "to": "if (true) {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: with the Settings section already open"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const section = await openSettings(name);",
+      "to": "const section = {ok: true};",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: setField and readField open"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const settings = await openSettings(name);",
+      "to": "const settings = {ok: true};",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: open, scan, apply"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "querySelectorAll(`${FIELD_LABELS}, ${NEW_FIELD_LABELS}`)",
+      "to": "querySelectorAll(FIELD_LABELS)",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: setField and readField open"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "const NEW_FIELD_LABELS = `${SETTINGS} [data-slot",
+      "to": "const NEW_FIELD_LABELS = `[data-slot",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: setField and readField open"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": ".custom-fields__item, [data-slot=\"field\"]';",
+      "to": ".custom-fields__item';",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: setField and readField open"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "if (settings && !settings.classList.contains('expanded')",
+      "to": "if (false && !settings.classList.contains('expanded')",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: the labels call"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-read.js",
+      "from": "const leaves = settings ? [...panel.querySelectorAll('[data-slot=\"field-label\"]')] :",
+      "to": "const leaves =",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: the labels call"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (!(await waitFor(settingsOpen, 1500))) {",
+      "to": "if (false) {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: a Settings section that does not open"
     }
   ]
 }

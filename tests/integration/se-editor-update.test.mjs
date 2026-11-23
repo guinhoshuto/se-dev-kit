@@ -111,7 +111,8 @@ async function editor(t, widgets, {url = EDITOR, update = true, using = plan, ui
 /**
  * The fixture editor at `url` with these widgets, nothing pasted yet, served with these response headers. `ui` is the
  * fixture's code editor markup: "react" loads the page at `?ui=react`, the React dialog of StreamElements' 2026-11-11
- * redesign; without it the page is the AngularJS Material editor.
+ * redesign; "new" loads it at `?ui=new`, that dialog and the layer panel of the redesign, whose Settings section starts
+ * closed; without it the page is the AngularJS Material editor.
  */
 async function fixture(t, widgets, {url = EDITOR, headers = {}, ui} = {}) {
   if (!browser) {
@@ -342,9 +343,9 @@ test("code that fits both commits once its placeholders are filled reads UNVERIF
 // The flows that reach the code editor, once on each markup of it: the AngularJS Material dialog and the React dialog
 // StreamElements switched to (seen 2026-11-11). The fixture's React dialog stays in the page, hidden, after Done (the
 // real one left the page), so that the visibility guard of dialog() has something to refuse.
-const SHOWN = {angular: "md-dialog.code-editor-dialog", react: "[role=\"dialog\"].bg-popover:visible"};
-const IN_PAGE = {angular: "md-dialog.code-editor-dialog", react: "[role=\"dialog\"].bg-popover"};
-const UIS = {angular: undefined, react: "react"};
+const SHOWN = {angular: "md-dialog.code-editor-dialog", react: "[role=\"dialog\"].bg-popover:visible", new: "[role=\"dialog\"].bg-popover:visible"};
+const IN_PAGE = {angular: "md-dialog.code-editor-dialog", react: "[role=\"dialog\"].bg-popover", new: "[role=\"dialog\"].bg-popover"};
+const UIS = {angular: undefined, react: "react", new: "new"};
 const NO_EDITOR = {ok: false, error: "No code editor is open."};
 
 for (const [ui, markup] of Object.entries(UIS)) {
@@ -379,7 +380,8 @@ for (const [ui, markup] of Object.entries(UIS)) {
     assert.deepEqual(codeOf(state, "minimal"), normalized(NEW));
     assert.deepEqual(codeOf(state, "halloween"), normalized(OLD), "the other widget is untouched");
     assert.deepEqual({saves: state.saves, opens: state.opens, dones: state.dones, writes: state.writes}, {saves: 0, opens: 2, dones: 2, writes: 4});
-    assert.equal(await session.page.locator(IN_PAGE[ui]).count(), ui === "react" ? 2 : 0, "the fixture's React dialog stays in the page, hidden; the AngularJS one leaves");
+    assert.equal(await session.page.locator(IN_PAGE[ui]).count(), ui === "angular" ? 0 : 2, "the fixture's React dialog stays in the page, hidden; the AngularJS one leaves");
+    assert.equal(state.sections, ui === "new" ? 1 : 0, "the first call opened the closed Settings section, and no call closed it");
   });
 
   test(`${ui} editor: run moves every widget, never saves, and the canvas shows each one`, {timeout: 60_000}, async (t) => {
@@ -398,6 +400,7 @@ for (const [ui, markup] of Object.entries(UIS)) {
     for (const name of ["minimal", "halloween"]) assert.deepEqual(codeOf(state, name), normalized(NEW), `${name} has the new code`);
     assert.deepEqual(state.widgets.map(({fieldData}) => fieldData), [{speed: 3}, {speed: 9, theme: "dark"}], "DATA is never written");
     assert.deepEqual({saves: state.saves, opens: state.opens, dones: state.dones, writes: state.writes}, {saves: 0, opens: 2, dones: 2, writes: 8});
+    assert.equal(state.sections, ui === "new" ? 1 : 0, "the run opened the closed Settings section once, and never closed it");
     assert.equal(await session.page.locator(SHOWN[ui]).count(), 0);
     assert.equal((await session.call("seEditor.canvas()")).ok, true);
     assert.deepEqual(session.requests.filter((url) => !url.startsWith("blob:")), [markup ? `${EDITOR}?ui=${markup}` : EDITOR]);
@@ -609,6 +612,133 @@ test("setField refuses a value that is not a string or a number, and neither run
   }
   assert.equal((await session.state()).selections, 0);
   assert.deepEqual(await fieldDataOf(session), [{items: "a"}]);
+});
+
+// The editor since StreamElements' redesign of 2026-11 (`?ui=new`): the layer panel opens one section at a time and
+// loads with the layer list open, so a layer's Settings section, with its Open Editor button and its fields, starts
+// closed. Which section is open lives in the tab, never in the overlay.
+const SETTINGS_HEADER = "[data-editor-action=\"Settings toggle expand state\"]";
+const settingsExpanded = async (session) => (await session.page.getAttribute(SETTINGS_HEADER, "class")).split(/\s+/).includes("se-widget-details-v3__header__expanded");
+const NOT_CUSTOM = /may not be a custom widget/;
+const NEW_FORM = {...FORM, fields: JSON.stringify({...JSON.parse(FORM.fields), hide: {type: "number", label: LONG, value: 0}}, null, 2) + "\n"};
+const newFormEditor = (t, widgets) => editor(t, widgets, {using: null, ui: "new"});
+
+test("new editor: setField and readField open the closed Settings section, write by label, and leave the groups as they were", {timeout: 60_000}, async (t) => {
+  const session = await newFormEditor(t, [widget("minimal", FORM, {items: "a, b", speed: 3, theme: "dark"})]);
+  if (!session) return;
+  assert.equal(await settingsExpanded(session), false, "the layer list is open at the load, so Settings is closed");
+  const answers = [];
+  const call = async (expression) => {
+    const text = await session.page.evaluate(expression);
+    answers.push(text);
+    return JSON.parse(text);
+  };
+  assert.deepEqual(await call(`seEditor.readField(${JSON.stringify(ITEMS)})`), {ok: true, layer: "minimal", label: ITEMS, value: "a, b"});
+  assert.equal(await settingsExpanded(session), true, "the call opened Settings");
+  assert.deepEqual(await call(`seEditor.setField(${JSON.stringify(ITEMS)}, "x, y", "minimal")`), {ok: true, layer: "minimal", label: ITEMS, old: "a, b", value: "x, y"});
+  assert.deepEqual(await call("seEditor.setField('Notes', 'second')"), {ok: true, layer: "minimal", label: "Notes", old: "first", value: "second"});
+  assert.deepEqual(await call("seEditor.setField('Delay', 7)"), {ok: true, layer: "minimal", label: "Delay", old: "5", value: "7"});
+  assert.deepEqual(await call("seEditor.setField('Bits', 1500)"), {ok: true, layer: "minimal", label: "Bits", old: "100", value: "1,500"});
+  // A slider is written through the number field next to it; a field outside Settings shares its label.
+  assert.deepEqual(await call("seEditor.setField('Speed', 9)"), {ok: true, layer: "minimal", label: "Speed", old: "3", value: "9"});
+  assert.deepEqual(await call("seEditor.readField('Speed')"), {ok: true, layer: "minimal", label: "Speed", value: "9"});
+  assert.deepEqual(await call("seEditor.setField('Mystery items', '$10[$5 FEE], $20')"), {ok: true, layer: "minimal", label: "Mystery items", old: "$10, $20", value: "$10[$5 FEE], $20"});
+  assert.equal(await session.page.locator("[data-slot=\"accordion-trigger\"]", {hasText: "Mystery slices"}).getAttribute("aria-expanded"), "false", "a closed group stays closed");
+  for (const expression of ["seEditor.readField('Theme')", "seEditor.setField('Theme', 'x')"]) {
+    const answer = await call(expression);
+    assert.doesNotMatch(JSON.stringify(answer), /"dark"/);
+    assert.match(answer.error, /^The field "Theme" of "minimal" is not one text or number input/, "a dropdown is refused");
+  }
+  for (const text of answers) assert.doesNotMatch(text, NOT_CUSTOM);
+
+  const written = {items: "x, y", speed: 9, theme: "dark", notes: "second", delay: 7, bits: 1500, mystery: "$10[$5 FEE], $20"};
+  assert.deepEqual(await fieldDataOf(session), [written], "each value reached the widget's data");
+  const state = await session.state();
+  assert.deepEqual({saves: state.saves, toggles: state.toggles, sections: state.sections, selections: state.selections, renames: state.renames, decoyReads: state.decoyReads},
+    {saves: 0, toggles: 0, sections: 1, selections: 1, renames: 0, decoyReads: 0});
+  assert.equal(await session.page.evaluate(() => document.getElementById("position-decoy").value), "FIXTUREPOSITION", "the field outside Settings is as it was");
+
+  // The section is not saved with the overlay: after a Save and a reload Settings is closed again, and the call opens it.
+  await session.page.click("#save");
+  await session.page.reload();
+  assert.equal((await session.call(READ)).ok, true);
+  assert.equal((await session.call(UPDATE)).ok, true);
+  assert.equal(await settingsExpanded(session), false);
+  assert.equal(JSON.parse(await session.page.evaluate("seEditor.readField('Mystery items')")).value, "$10[$5 FEE], $20", "what was saved reads back after the reload");
+  assert.equal(await settingsExpanded(session), true);
+  assert.equal(await session.page.locator("[data-slot=\"accordion-trigger\"]", {hasText: "Mystery slices"}).getAttribute("aria-expanded"), "false");
+});
+
+test("new editor: with the Settings section already open, no call clicks its header", {timeout: 60_000}, async (t) => {
+  const session = await editor(t, [widget("minimal"), widget("halloween", OLD, {speed: 9})], {ui: "new"});
+  if (!session) return;
+  await session.page.click(SETTINGS_HEADER);
+  assert.equal(await settingsExpanded(session), true);
+  assert.equal((await upload(session)).ok, true);
+  const result = await session.call("seEditor.run(['minimal', 'halloween'])");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.left, 0);
+  assert.deepEqual(await session.call("seEditor.readField('Speed', 'halloween')"), {ok: true, layer: "halloween", label: "Speed", value: "9"});
+  assert.deepEqual(await session.call("seEditor.readField('Speed', 'minimal')"), {ok: true, layer: "minimal", label: "Speed", value: "3"});
+  assert.equal(await settingsExpanded(session), true, "no call closed it");
+  const state = await session.state();
+  assert.deepEqual({sections: state.sections, saves: state.saves, decoyReads: state.decoyReads}, {sections: 1, saves: 0, decoyReads: 0}, "only the page's own click");
+});
+
+test("new editor: the labels call says the Settings section is closed, and measures the labels once it is open", {timeout: 60_000}, async (t) => {
+  const session = await newFormEditor(t, [widget("minimal", NEW_FORM, {})]);
+  if (!session) return;
+  await session.page.click(".widget-layers-list-item-header");
+  await session.page.waitForSelector("#widget-details__widget-settings [data-slot=\"field\"]", {state: "attached"});
+  const texts = JSON.stringify([ITEMS, LONG, "Mystery items"]);
+  const closed = await session.page.evaluate(`seEditor.labels(${texts})`);
+  assert.doesNotMatch(closed, NOT_CUSTOM);
+  assert.equal(JSON.parse(closed).ok, false);
+  assert.match(JSON.parse(closed).error, /Settings section is closed: open it by its ref \(find "Settings" and click the ref\) and call labels\(\) again\.$/);
+  assert.equal(await settingsExpanded(session), false, "the read-only half never opens it");
+
+  await session.page.click(SETTINGS_HEADER);
+  const measured = await session.call(`seEditor.labels(${texts})`);
+  assert.equal(measured.ok, false, "a cut label fails the check");
+  assert.equal(measured.panel.overflow, false);
+  assert.deepEqual(measured.labels.map(({text, status}) => ({text, status})), [
+    // This label holds an icon, so its text is in no leaf of the panel.
+    {text: ITEMS, status: "whole"},
+    {text: LONG, status: "cut"},
+    {text: "Mystery items", status: "closed group, fits"}
+  ]);
+  const state = await session.state();
+  assert.deepEqual({sections: state.sections, toggles: state.toggles}, {sections: 1, toggles: 0}, "only the page's own click");
+});
+
+test("new editor: a Settings section that does not open is said, and the layer is never taken for one that is not a custom widget", {timeout: 60_000}, async (t) => {
+  const session = await editor(t, [widget("minimal")], {ui: "new"});
+  if (!session) return;
+  assert.equal((await upload(session)).ok, true);
+  await session.page.evaluate(() => { window.__fixture.stuckSections = true; });
+  const stuck = /^"minimal": its Settings section did not open: open it by its ref \(find "Settings" and click the ref\) and call again\.$/;
+  const result = await session.call("seEditor.run(['minimal'])");
+  assert.equal(result.ok, false);
+  assert.match(result.widgets[0].error, stuck);
+  const read = await session.call("seEditor.readField('Speed')");
+  assert.match(read.error, stuck);
+  for (const answer of [result, read]) assert.doesNotMatch(JSON.stringify(answer), NOT_CUSTOM);
+  assert.equal(await settingsExpanded(session), false);
+  const state = await session.state();
+  assert.deepEqual({sections: state.sections, opens: state.opens, saves: state.saves}, {sections: 2, opens: 0, saves: 0}, "one click on the closed header per call, and no Open Editor");
+});
+
+test("new editor: a layer that is not a custom widget gets its Settings opened, and says it has no Open Editor", {timeout: 60_000}, async (t) => {
+  const session = await editor(t, [{name: "image", plain: true, ...OLD, fieldData: {}}], {ui: "new"});
+  if (!session) return;
+  assert.equal((await upload(session)).ok, true);
+  const result = await session.call("seEditor.run(['image'])");
+  assert.equal(result.ok, false);
+  assert.match(result.widgets[0].error, /^"image" shows no Open Editor button: it may not be a custom widget\.$/);
+  assert.equal(await settingsExpanded(session), true, "it was said with the layer's Settings open");
+  assert.match((await session.call("seEditor.readField('Speed', 'image')")).error, /^"image" shows no field panel: it may not be a custom widget\.$/);
+  const state = await session.state();
+  assert.deepEqual({sections: state.sections, opens: state.opens, decoyReads: state.decoyReads}, {sections: 1, opens: 0, decoyReads: 0});
 });
 
 const READ_CALLS = ["use(plan)", "layers()", "await canvas()", "labels([texts])"];
