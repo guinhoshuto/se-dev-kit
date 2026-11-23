@@ -39,6 +39,10 @@ The hosted editor preview always recreates the iframe when a field changes. The 
 
 The StreamElements editor shows a `number` or `text` field's label on one 280 px line, about 36 characters, and cuts the rest with an ellipsis. `validate` warns about a longer one as `FIELD_LABEL_TRUNCATED`.
 
+## Field ids and stored values
+
+The StreamElements editor keeps a Custom widget's stored field values by id when its FIELDS change, so a widget pasted over an existing Custom widget gets that widget's stored value in any field with the same id. On 2026-11-21 Icon Parade, pasted over the Custom widget StreamElements adds by default (the event list), showed "top" in its "From -> to" dropdown, an option it does not have, because the default widget has its own `direction` field set to `top`. `validate` warns with `FIELD_ID_DEFAULT_WIDGET` for each field id that the default widget also has; the list lives in `src/validation/default-widget-fields.ts`, read from the editor's bundle on 2026-11-21. Rename such a field.
+
 ## Button fields
 
 A FIELDS entry with `"type": "button"` is a button in the StreamElements editor. Pressing it sends no field change: the widget receives `onEventReceived` with `detail.listener` `"event:test"` and `detail.event` `{field, value, listener: "widget-button"}`, where `field` is the field id and `value` its saved value (the FIELDS `value` when none is saved). Keep its `label` within 24 characters: on 2026-10-09 a 79-character label pushed the editor's field panel out of place, and `validate` reports a longer one as `FIELD_BUTTON_LABEL_LONG`, an error. Listen for it this way:

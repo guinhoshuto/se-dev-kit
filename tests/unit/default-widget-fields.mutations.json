@@ -1,0 +1,81 @@
+{
+  "mutations": [
+    {
+      "file": "src/validation/project.ts",
+      "from": "diagnostics.push(...defaultWidgetFieldDiagnostics(project));",
+      "to": "void defaultWidgetFieldDiagnostics;",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "a direction field gets one warning"
+    },
+    {
+      "file": "src/validation/project.ts",
+      "from": "diagnostics.push(...defaultWidgetFieldDiagnostics(project));",
+      "to": "void defaultWidgetFieldDiagnostics;",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "the validate command prints the warning"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": "  \"direction\",\n",
+      "to": "",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "a direction field gets one warning"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": "  \"eventsLimit\",\n",
+      "to": "",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "every id of the default widget is warned about"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": "  \"iconColor\",\n",
+      "to": "",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "every id of the default widget is warned about"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": "  \"locale\"\n",
+      "to": "  \"locale\",\n  \"pathDirection\"\n",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "se-parade's FIELDS at 343d248 get no warning"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": ".filter((field) => defaultIds.has(field.id))",
+      "to": ".filter((field) => defaultIds.has(field.id.toLowerCase()) || defaultIds.has(field.id))",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "every id of the default widget is warned about"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": "status: \"warning\",",
+      "to": "status: \"error\",",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "a direction field gets one warning"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": "status: \"warning\",",
+      "to": "status: \"error\",",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "the validate command prints the warning"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": "a value stored under \"${field.id}\" in",
+      "to": "a value stored under it in",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "a direction field gets one warning"
+    },
+    {
+      "file": "src/validation/default-widget-fields.ts",
+      "from": "hint: DEFAULT_WIDGET_FIELD_HINT",
+      "to": "hint: \"Rename the field.\"",
+      "test": "tests/unit/default-widget-fields.test.mjs",
+      "name": "a direction field gets one warning"
+    }
+  ]
+}

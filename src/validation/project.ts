@@ -7,6 +7,7 @@ import {loadMarketplacePreset, marketplaceRecipeIssues} from "../config/presets.
 import {expandRecipe} from "../capture/matrix.js";
 import {findSensitiveTestData} from "./privacy.js";
 import {networkUrlDiagnostics} from "./network-urls.js";
+import {defaultWidgetFieldDiagnostics} from "./default-widget-fields.js";
 import {loadSampleMediaCatalog, type SampleMediaCatalog} from "../config/sample-media.js";
 import {collectSampleMediaReferences, isMultipleMediaField, sampleKindsForField} from "../studio-ui/sample-media.js";
 import {parseColor} from "../tutorial/color.js";
@@ -104,6 +105,7 @@ export async function validateProject(project: ResolvedProject): Promise<Diagnos
 
   diagnostics.push(...buttonLabelDiagnostics(project));
   diagnostics.push(...lineLabelDiagnostics(project));
+  diagnostics.push(...defaultWidgetFieldDiagnostics(project));
   diagnostics.push(...(await shippedThemeDiagnostics(project)));
 
   const sensitiveFindings = findSensitiveTestData(project);
