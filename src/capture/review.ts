@@ -1,7 +1,22 @@
-import {mkdir, readdir, readFile, stat, writeFile} from "node:fs/promises";
+import {lstat, mkdir, readdir, readFile, realpath, stat, writeFile} from "node:fs/promises";
 import {basename, dirname, join, relative, resolve, sep} from "node:path";
 import type {JsonObject} from "../types.js";
 import {StudioError} from "../shared/errors.js";
+import {isInside} from "../shared/paths.js";
+import {findExecutable} from "../validation/tools.js";
+import {atomicWriteFile} from "./output.js";
+import {encodePng} from "./png.js";
+import {
+  composeSheet,
+  decodeVideo,
+  MAX_SHEET_CELLS,
+  probeVideo,
+  reviewMediaItems,
+  secondsLabel,
+  sheetFrames,
+  sheetStepFor,
+  type VideoProbe
+} from "./review-media.js";
 
 /**
  * Review codes: a short, quotable caption for each file a render writes ("LT-03 is too dark"), on the
@@ -9,7 +24,8 @@ import {StudioError} from "../shared/errors.js";
  * variant order, so rendering the same recipe again gives every file the same code.
  */
 
-export type ReviewKind = "screenshot" | "video" | "still" | "thumbnail" | "contactSheet";
+/** `trail` and `sheet` are images the review page derives from a video (`review --trails`, `review --sheet`). */
+export type ReviewKind = "screenshot" | "video" | "still" | "thumbnail" | "contactSheet" | "trail" | "sheet";
 
 export interface ReviewItem {
   /** `LT-03`: the recipe's tag and the file's place in review order. */
@@ -21,6 +37,14 @@ export interface ReviewItem {
   variant?: string;
   /** A still's step name. */
   name?: string;
+  /** A trail's or sheet's source: the video's code. */
+  source?: string;
+  /** A trail's step: every n-th frame. */
+  every?: number;
+  /** A sheet's step, in seconds. */
+  step?: number;
+  /** Where a trail or sheet is written, beside the page; `file` is then its video's manifest path. */
+  path?: string;
 }
 
 /** What `reviewItems` reads from a manifest entry. */
@@ -79,10 +103,21 @@ export function reviewItems(tag: string, entries: readonly ReviewEntry[], contac
 
 /** The caption under a file: its code, then what it shows. */
 export function reviewCaption(item: ReviewItem): string {
+  if (item.kind === "trail" || item.kind === "sheet") {
+    const step = item.kind === "trail"
+      ? `every ${item.every === 1 ? "" : `${ordinal(item.every!)} `}frame`
+      : `every ${item.step} s`;
+    return `${item.code} · ${item.variant} · ${item.kind} of ${item.source}, ${step}`;
+  }
   const what = item.kind === "contactSheet"
     ? "contact sheet"
     : `${item.variant} · ${item.kind === "still" ? `still ${item.name}` : item.kind}`;
   return `${item.code} · ${what}`;
+}
+
+function ordinal(value: number): string {
+  const suffix = value % 100 >= 11 && value % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][value % 10] ?? "th");
+  return `${value}${suffix}`;
 }
 
 export interface ReviewSection {
@@ -114,7 +149,7 @@ const RERUN_HINT = "Run the job again with the current studio-client.mjs, whose 
 
 /** Where a review item's file is on disk. */
 export function reviewItemPath(section: ReviewSection, item: ReviewItem): string {
-  return section.files?.get(item.file) ?? join(section.outputRoot, item.file);
+  return item.path ?? section.files?.get(item.file) ?? join(section.outputRoot, item.file);
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -363,6 +398,15 @@ ${body.join("\n")}
 `;
 }
 
+export interface ReviewMediaResult {
+  code: string;
+  /** The video's code. */
+  source: string;
+  file: string;
+  /** A sheet's cells. */
+  cells?: number;
+}
+
 export interface ReviewPageResult {
   page: string;
   /** `recordedTag` only for a section the page renamed. */
@@ -371,28 +415,196 @@ export interface ReviewPageResult {
   videos: number;
   /** Files the manifests list that are not on disk; their figures stay, with their codes. */
   missing: string[];
+  /** With `--trails`: the trail written for each video. */
+  trails?: ReviewMediaResult[];
+  /** With `--sheet`: the timed frame sheet written for each video. */
+  sheets?: ReviewMediaResult[];
+  /** With `--trails` or `--sheet`: videos missing on disk, which get no trail or sheet. */
+  skipped?: string[];
 }
 
-/** Writes the review page over render folders; replacing an existing page takes `force`. */
+export interface ReviewMediaOptions {
+  /** A trail per video: the per-pixel maximum of every `trailEvery`-th frame (default 2). */
+  trails?: boolean;
+  trailEvery?: number;
+  /** A timed frame sheet per video, one cell every `sheet` seconds. */
+  sheet?: number;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+}
+
+interface MediaJob {
+  section: ReviewSection;
+  video: string;
+  trail?: ReviewItem;
+  sheet?: ReviewItem;
+  probe?: VideoProbe;
+}
+
+/** The folder beside the page that holds its trails and sheets: `index.html` → `index-media/`. */
+export function reviewMediaFolder(page: string): string {
+  return join(dirname(page), `${basename(page, ".html")}-media`);
+}
+
+/** The video's real path, refused unless it is a regular file inside its section's folder. */
+async function containedVideo(section: ReviewSection, item: ReviewItem, path: string): Promise<string> {
+  const root = await realpath(section.directory);
+  const real = await realpath(path).catch(() => undefined);
+  const regular = real === undefined ? false : (await lstat(real)).isFile();
+  if (real === undefined || !regular || !isInside(root, real)) {
+    throw new StudioError(
+      "REVIEW_MEDIA_OUTSIDE",
+      `${item.code} (${item.file}) is not a regular file inside ${section.directory}, so review does not decode it.`,
+      "Trails and sheets read only the videos inside each render folder; review that render's own folder."
+    );
+  }
+  return real;
+}
+
+function validateMediaOptions(options: ReviewMediaOptions): void {
+  if (options.trailEvery !== undefined && !options.trails) {
+    throw new StudioError("REVIEW_OPTION_INVALID", "--trail-every sets the step of a trail.", "Pass --trails with it.");
+  }
+  if (options.trailEvery !== undefined && (!Number.isInteger(options.trailEvery) || options.trailEvery < 1)) {
+    throw new StudioError("REVIEW_OPTION_INVALID", `--trail-every must be an integer of at least 1, not ${options.trailEvery}.`);
+  }
+  if (options.sheet !== undefined && (!Number.isFinite(options.sheet) || options.sheet <= 0)) {
+    throw new StudioError("REVIEW_OPTION_INVALID", `--sheet must be a number of seconds above 0, not ${options.sheet}.`);
+  }
+}
+
+/** The trail and sheet items of each section, their videos checked and their targets free (or `force`). */
+async function planReviewMedia(page: string, sections: readonly ReviewSection[], missing: readonly string[], options: ReviewMediaOptions & {force?: boolean}) {
+  const folder = reviewMediaFolder(page);
+  const rounds = new Map<string, number>();
+  const jobs: MediaJob[] = [];
+  const skipped: string[] = [];
+  const planned = [];
+  for (const section of sections) {
+    const round = (rounds.get(section.tag) ?? 0) + 1;
+    rounds.set(section.tag, round);
+    const videos: {item: ReviewItem; real: string}[] = [];
+    for (const item of section.items.filter((candidate) => candidate.kind === "video")) {
+      const path = reviewItemPath(section, item);
+      if (missing.includes(path)) skipped.push(path);
+      else videos.push({item, real: await containedVideo(section, item, path)});
+    }
+    const derived = reviewMediaItems(section.tag, section.items, videos.map((video) => video.item), {
+      ...(options.trails ? {trailEvery: options.trailEvery ?? 2} : {}),
+      ...(options.sheet === undefined ? {} : {sheetSeconds: options.sheet})
+    }).map((item) => ({...item, path: join(folder, `${round === 1 ? item.code : `${item.code}.${round}`}-${item.kind}.png`)}));
+    for (const video of videos) {
+      const job: MediaJob = {section, video: video.real};
+      for (const item of derived.filter((candidate) => candidate.source === video.item.code)) job[item.kind === "trail" ? "trail" : "sheet"] = item;
+      jobs.push(job);
+    }
+    planned.push({...section, items: [...section.items, ...derived]});
+  }
+  const folderEntry = await lstat(folder).catch(() => undefined);
+  if (folderEntry && !folderEntry.isDirectory()) {
+    throw new StudioError("OUTPUT_TARGET_INVALID", `${folder} exists and is not a folder.`);
+  }
+  const collisions: string[] = [];
+  for (const item of planned.flatMap((section) => section.items).filter((candidate) => candidate.path !== undefined)) {
+    const entry = await lstat(item.path!).catch(() => undefined);
+    if (!entry) continue;
+    if (!entry.isFile()) throw new StudioError("OUTPUT_TARGET_INVALID", `Existing output target is not a regular file: ${item.path}`);
+    collisions.push(item.path!);
+  }
+  if (collisions.length > 0 && !options.force) {
+    throw new StudioError("OUTPUT_EXISTS", `${collisions.length} trail or sheet file${collisions.length === 1 ? "" : "s"} exist: ${collisions.map((path) => basename(path)).join(", ")}.`, "Pass --force to replace exactly these files and the page.");
+  }
+  return {sections: planned, jobs, skipped};
+}
+
+/**
+ * Writes the review page over render folders; replacing an existing page takes `force`. With `trails` or `sheet`,
+ * it first writes a trail and a timed frame sheet per video, decoded by FFmpeg, beside the page, and lists them under
+ * codes after each section's own; without them it never looks for FFmpeg.
+ */
 export async function writeReviewPage(options: {
   page: string;
   folders: readonly string[];
   title?: string;
   force?: boolean;
-}): Promise<ReviewPageResult> {
+} & ReviewMediaOptions): Promise<ReviewPageResult> {
   const page = resolve(options.page);
   if (!page.endsWith(".html")) throw new StudioError("REVIEW_PAGE_INVALID", `The review page must end in .html: ${options.page}`);
   if (options.folders.length === 0) throw new StudioError("REVIEW_FOLDER_EMPTY", "Pass at least one render folder.");
+  const media = options.trails === true || options.sheet !== undefined;
+  validateMediaOptions(options);
+  let ffmpeg: string | undefined;
+  let ffprobe: string | undefined;
+  if (media) {
+    ffmpeg = await findExecutable("ffmpeg", options.ffmpegPath);
+    ffprobe = await findExecutable("ffprobe", options.ffprobePath);
+    if (!ffmpeg || !ffprobe) {
+      throw new StudioError(
+        "FFMPEG_NOT_FOUND",
+        `--trails and --sheet decode videos with FFmpeg and ffprobe, and ${!ffmpeg ? "ffmpeg" : "ffprobe"} was not found${(!ffmpeg ? options.ffmpegPath : options.ffprobePath) ? ` at ${!ffmpeg ? options.ffmpegPath : options.ffprobePath}` : " on PATH"}.`,
+        "Install FFmpeg (it ships ffprobe), or pass --ffmpeg-path and --ffprobe-path; the Studio never downloads it."
+      );
+    }
+  }
   if (!options.force && (await exists(page))) {
     throw new StudioError("OUTPUT_EXISTS", `${options.page} exists.`, "Pass --force to replace this page.");
   }
-  const sections = await reviewSections(options.folders);
+  let sections = await reviewSections(options.folders);
   const missing: string[] = [];
   for (const section of sections) {
     for (const item of section.items) {
       const path = reviewItemPath(section, item);
       if (!(await exists(path))) missing.push(path);
     }
+  }
+  let derived: Pick<ReviewPageResult, "trails" | "sheets" | "skipped"> = {};
+  if (media) {
+    const plan = await planReviewMedia(page, sections, missing, options);
+    sections = plan.sections;
+    for (const job of plan.jobs) {
+      job.probe = await probeVideo(ffprobe!, job.video);
+      if (job.sheet) {
+        const cells = sheetFrames(job.probe.frames, job.probe.fps, options.sheet!).length;
+        if (cells > MAX_SHEET_CELLS) {
+          throw new StudioError(
+            "REVIEW_SHEET_TOO_LARGE",
+            `A sheet of ${job.sheet.source} every ${options.sheet} s has ${cells} cells; a sheet holds at most ${MAX_SHEET_CELLS}.`,
+            `Pass --sheet ${sheetStepFor(job.probe.frames / job.probe.fps)} or more.`
+          );
+        }
+      }
+    }
+    const trails: ReviewMediaResult[] = [];
+    const sheets: ReviewMediaResult[] = [];
+    for (const job of plan.jobs) {
+      const probe = job.probe!;
+      const instants = job.sheet ? sheetFrames(probe.frames, probe.fps, options.sheet!) : [];
+      const decoded = await decodeVideo({
+        ffmpeg: ffmpeg!,
+        path: job.video,
+        probe,
+        ...(job.trail ? {trailEvery: job.trail.every!} : {}),
+        ...(job.sheet ? {sheetIndexes: instants.map((instant) => instant.frame)} : {})
+      });
+      if (job.trail && decoded.trail) {
+        await atomicWriteFile(dirname(page), job.trail.path!, encodePng(probe.width, probe.height, 3, decoded.trail.data));
+        trails.push({code: job.trail.code, source: job.trail.source!, file: job.trail.path!});
+      }
+      if (job.sheet) {
+        const cells = instants
+          .filter((instant) => decoded.cells.has(instant.frame))
+          .map((instant) => ({image: decoded.cells.get(instant.frame)!, label: secondsLabel(instant.seconds, options.sheet!)}));
+        if (cells.length === 0) throw new StudioError("REVIEW_MEDIA_INVALID", `FFmpeg decoded none of the sheet's frames of ${job.video}.`);
+        const sheet = composeSheet(cells);
+        await atomicWriteFile(dirname(page), job.sheet.path!, encodePng(sheet.width, sheet.height, 3, sheet.data));
+        sheets.push({code: job.sheet.code, source: job.sheet.source!, file: job.sheet.path!, cells: cells.length});
+      }
+    }
+    derived = {
+      ...(options.trails ? {trails} : {}),
+      ...(options.sheet === undefined ? {} : {sheets}),
+      skipped: plan.skipped
+    };
   }
   await mkdir(dirname(page), {recursive: true});
   await writeFile(page, renderReviewPage(page, options.title ?? "Review", sections), options.force ? undefined : {flag: "wx"});
@@ -408,7 +620,8 @@ export async function writeReviewPage(options: {
     })),
     images: items.filter((item) => item.kind !== "video").length,
     videos: items.filter((item) => item.kind === "video").length,
-    missing
+    missing,
+    ...derived
   };
 }
 
@@ -420,7 +633,18 @@ export function reviewSummary(result: ReviewPageResult): string {
     .map((section) => `${section.tag} ${section.recipe}${section.recordedTag === undefined ? "" : ` (renamed from ${section.recordedTag})`}`)
     .join(", ");
   const line = `${result.page}: ${counts.join(" and ")} in ${result.sections.length} section${result.sections.length === 1 ? "" : "s"} (${sections}).`;
-  return result.missing.length > 0
-    ? `${line}\nMissing on disk (${result.missing.length}): ${result.missing.map((path) => basename(path)).join(", ")}`
-    : line;
+  const lines = [line];
+  if (result.missing.length > 0) lines.push(`Missing on disk (${result.missing.length}): ${result.missing.map((path) => basename(path)).join(", ")}`);
+  const derived = [...(result.trails ?? []), ...(result.sheets ?? [])];
+  if (result.trails || result.sheets) {
+    const written = [
+      ...(result.trails ? [`${result.trails.length} trail${result.trails.length === 1 ? "" : "s"}`] : []),
+      ...(result.sheets ? [`${result.sheets.length} sheet${result.sheets.length === 1 ? "" : "s"}`] : [])
+    ].join(" and ");
+    lines.push(`Wrote ${written}${derived.length > 0 ? ` (${derived.map((item) => `${item.code} of ${item.source}`).join(", ")}) in ${dirname(derived[0]!.file)}` : ""}.`);
+  }
+  if (result.skipped && result.skipped.length > 0) {
+    lines.push(`No trail or sheet for videos missing on disk (${result.skipped.length}): ${result.skipped.map((path) => basename(path)).join(", ")}`);
+  }
+  return lines.join("\n");
 }

@@ -582,9 +582,24 @@ program
   .argument("<page>", "Page to write, ending in .html")
   .argument("<folders...>", "Recipe folders (with manifest.json), output folders of studio-client.mjs run (with job.json), or folders that hold them")
   .option("--title <text>", "Page title", "Review")
-  .option("--force", "Replace an existing page")
-  .action(async (page: string, folders: string[], options: {title: string; force?: boolean}, command: Command) => {
-    const result = await writeReviewPage({page, folders, title: options.title, ...(options.force ? {force: true} : {})});
+  .option("--force", "Replace an existing page, and the exact trail and sheet files it writes")
+  .option("--trails", "Write a trail per video beside the page: the per-pixel maximum of every n-th frame (needs FFmpeg)")
+  .option("--trail-every <n>", "Frames between two frames of a trail (default 2)")
+  .option("--sheet <seconds>", "Write a timed frame sheet per video beside the page: one captioned frame every <seconds> (needs FFmpeg)")
+  .option("--ffmpeg-path <file>", "Use an explicit FFmpeg executable for --trails and --sheet")
+  .option("--ffprobe-path <file>", "Use an explicit ffprobe executable for --trails and --sheet")
+  .action(async (page: string, folders: string[], options: {title: string; force?: boolean; trails?: boolean; trailEvery?: string; sheet?: string; ffmpegPath?: string; ffprobePath?: string}, command: Command) => {
+    const result = await writeReviewPage({
+      page,
+      folders,
+      title: options.title,
+      ...(options.force ? {force: true} : {}),
+      ...(options.trails ? {trails: true} : {}),
+      ...(options.trailEvery === undefined ? {} : {trailEvery: Number(options.trailEvery)}),
+      ...(options.sheet === undefined ? {} : {sheet: Number(options.sheet)}),
+      ...(options.ffmpegPath === undefined ? {} : {ffmpegPath: options.ffmpegPath}),
+      ...(options.ffprobePath === undefined ? {} : {ffprobePath: options.ffprobePath})
+    });
     const json = globals(command).json;
     print(json ? result : reviewSummary(result), json);
   });

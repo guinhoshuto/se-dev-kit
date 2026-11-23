@@ -1,0 +1,88 @@
+{
+  "mutations": [
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "    if (value > into[index]!) into[index] = value;",
+      "to": "    into[index] = (into[index]! + value) >> 1;",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media trail: a moving square"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "Math.max(0, Math.ceil(at * fps - 1e-6))",
+      "to": "Math.max(0, Math.round(at * fps))",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media sheet: frame indexes round up"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "Math.max(0, Math.ceil(at * fps - 1e-6))",
+      "to": "Math.max(0, Math.floor(at * fps))",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media sheet: frame indexes round up"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "for (let step = 0; step * seconds < duration - 1e-9; step += 1) {",
+      "to": "for (let step = 0; step * seconds <= duration; step += 1) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media sheet: frame indexes round up"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "code: `${tag}-${String(highest + 1 + index).padStart(width, \"0\")}`",
+      "to": "code: `${tag}-${String(highest + index).padStart(width, \"0\")}`",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media end to end"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "  const highest = highestReviewNumber(tag, items);",
+      "to": "  const highest = items.length;",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media codes: trails then sheets"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "  return [\"-protocol_whitelist\", \"file\", \"-i\", `file:${path}`];",
+      "to": "  return [\"-i\", path];",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media decodes only a regular file inside"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "  if (real === undefined || !regular || !isInside(root, real)) {",
+      "to": "  if (real === undefined || !regular) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media decodes only a regular file inside"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "  if (collisions.length > 0 && !options.force) {",
+      "to": "  if (false) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media refuses an existing trail file"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "        if (cells > MAX_SHEET_CELLS) {",
+      "to": "        if (cells > Infinity) {",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media end to end"
+    },
+    {
+      "file": "src/capture/review.ts",
+      "from": "  if (media) {\n    ffmpeg = await findExecutable(\"ffmpeg\", options.ffmpegPath);",
+      "to": "  if (true) {\n    ffmpeg = await findExecutable(\"ffmpeg\", options.ffmpegPath);",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media without --trails or --sheet"
+    },
+    {
+      "file": "src/capture/review-media.ts",
+      "from": "      if (trail && index % options.trailEvery! === 0) maxInto(trail, frame);",
+      "to": "      if (trail) maxInto(trail, frame);",
+      "test": "tests/unit/review-trails.test.mjs",
+      "name": "^review media end to end"
+    }
+  ]
+}
