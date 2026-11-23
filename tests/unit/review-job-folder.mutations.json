@@ -53,8 +53,8 @@
     },
     {
       "file": "src/capture/review.ts",
-      "from": "return section.files?.get(item.file) ?? join(section.outputRoot, item.file);",
-      "to": "return join(section.outputRoot, item.file);",
+      "from": "return item.path ?? section.files?.get(item.file) ?? join(section.outputRoot, item.file);",
+      "to": "return item.path ?? join(section.outputRoot, item.file);",
       "test": "tests/unit/review.test.mjs"
     }
   ]
