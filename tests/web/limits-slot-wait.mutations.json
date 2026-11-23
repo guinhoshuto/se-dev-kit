@@ -1,0 +1,18 @@
+{
+  "mutations": [
+    {
+      "file": "tests/web/limits.test.ts",
+      "from": "  for (const deadline = Date.now() + underLoad(30_000); Date.now() < deadline && !job.ended() && !waiting.test(job.stderr());) await sleep(100);",
+      "to": "  await sleep(2500);",
+      "test": "tests/web/limits.test.ts",
+      "name": "^a local Studio job that starts late"
+    },
+    {
+      "file": "tests/web/limits.test.ts",
+      "from": "const preload = startDelayMs ? ['--import', pathToFileURL(delay).href] : [];",
+      "to": "const preload: string[] = [];",
+      "test": "tests/web/limits.test.ts",
+      "name": "^a local Studio job that starts late"
+    }
+  ]
+}

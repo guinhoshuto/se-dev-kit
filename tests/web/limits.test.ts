@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdir, readFile, stat, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
+import {setTimeout as sleep} from 'node:timers/promises';
+import {pathToFileURL} from 'node:url';
 import {hostedLimits, jobBudgetMs} from '../../lib/limits';
 import {localWorkerEnvironment, remainingJobTime} from '../../lib/jobs';
 import {createProject, dailyBudget} from '../../lib/projects';
@@ -12,6 +14,7 @@ import {parseSnapshot} from '../../lib/schema';
 import {LocalStore} from '../../lib/storage';
 import {temporaryDirectory} from './temporary';
 import {fakeMachineCheck} from './fake-machine-check';
+import {underLoad} from '../unit/load.mjs';
 
 /** Runs `task` as the hosted deployment (STUDIO_EXECUTION=vercel) or as a local Studio, and restores the environment. */
 async function as<T>(mode: 'hosted' | 'local', task: () => T | Promise<T>): Promise<T> {
@@ -74,21 +77,29 @@ test('the daily project, job and upload budgets count only on Vercel', async () 
   });
 });
 
-/** Starts the job worker on a job of an unknown kind, which fails right after the slot and the font package. */
-async function worker(root: string, environment: NodeJS.ProcessEnv) {
+/**
+ * Starts the job worker on a job of an unknown kind, which fails right after the slot and the font package.
+ * `startDelayMs` holds the worker back before its first line, as a loaded machine does (a module it imports first).
+ */
+async function worker(root: string, environment: NodeJS.ProcessEnv, {startDelayMs = 0} = {}) {
   const directory = join(root, 'job');
   await mkdir(directory, {recursive: true});
   const input = join(directory, 'input.json');
   await writeFile(input, JSON.stringify({job: {id: 'slot-test', kind: 'unknown'}, project: {outputRoot: join(directory, 'output')}, sampleMedia: {}}));
-  const child = spawn(process.execPath, [resolve('scripts/job-worker.mjs'), input, '1'], {env: {PATH: process.env.PATH, ...environment}, stdio: ['ignore', 'pipe', 'pipe']});
+  const delay = join(root, 'slow-start.mjs');
+  if (startDelayMs) await writeFile(delay, `await new Promise(done => setTimeout(done, ${startDelayMs}));\n`);
+  const preload = startDelayMs ? ['--import', pathToFileURL(delay).href] : [];
+  const startedAt = Date.now();
+  const child = spawn(process.execPath, [...preload, resolve('scripts/job-worker.mjs'), input, '1'], {env: {PATH: process.env.PATH, ...environment}, stdio: ['ignore', 'pipe', 'pipe']});
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', chunk => {stdout += String(chunk);});
   child.stderr.on('data', chunk => {stderr += String(chunk);});
-  const exited = new Promise<number | null>(done => child.once('close', done));
+  let ended = false;
+  const exited = new Promise<number | null>(done => child.once('close', code => {ended = true; done(code);}));
   const result = join(directory, 'result-1.json');
   const written = async () => {try {await stat(result); return true;} catch {return false;}};
-  return {exited, written, stdout: () => stdout, stderr: () => stderr, result: async () => JSON.parse(await readFile(result, 'utf8')) as {error?: string}};
+  return {startedAt, exited, ended: () => ended, written, stdout: () => stdout, stderr: () => stderr, result: async () => JSON.parse(await readFile(result, 'utf8')) as {error?: string}};
 }
 
 async function holdSlot(dir: string) {
@@ -96,35 +107,61 @@ async function holdSlot(dir: string) {
   await writeFile(join(dir, 'owner.json'), JSON.stringify({pid: process.pid, repo: 'limits-test', command: 'hold', startedAt: new Date().toISOString()}));
 }
 
-test('a local Studio job waits for the machine render slot and releases it', async () => {
-  const root = await temporaryDirectory('sws-limits-slot-');
+/**
+ * Waits until the worker says it waits for the render slot, or ends, polling under a deadline that the machine's
+ * load stretches: a fixed 2.5 s missed the line on 2026-11-20, when the worker had not started printing yet (#57).
+ * Returns when the line came, in ms after the spawn.
+ */
+async function untilWaitingForSlot(job: Awaited<ReturnType<typeof worker>>) {
+  const waiting = /Waiting for the render slot/;
+  for (const deadline = Date.now() + underLoad(30_000); Date.now() < deadline && !job.ended() && !waiting.test(job.stderr());) await sleep(100);
+  return Date.now() - job.startedAt;
+}
+
+/** The slot test of either start: the job waits while another render holds the slot, then runs and releases it. */
+async function waitsForSlot(prefix: string, {startDelayMs = 0} = {}) {
+  const root = await temporaryDirectory(prefix);
   const slot = join(root, 'render-slot');
   await holdSlot(slot);
-  // A missing machine check leaves the slot alone to decide (the next test covers the check).
-  const job = await worker(root, {STUDIO_EXECUTION: 'local', RENDER_SLOT_DIR: slot, MACHINE_CHECK: join(root, 'no-machine-check.py')});
-  await new Promise(done => setTimeout(done, 2500));
-  assert.equal(await job.written(), false, 'the worker must not run while another render holds the slot');
+  // A missing machine check leaves the slot alone to decide (the machine check test covers the check).
+  const job = await worker(root, {STUDIO_EXECUTION: 'local', RENDER_SLOT_DIR: slot, MACHINE_CHECK: join(root, 'no-machine-check.py')}, {startDelayMs});
+  const seenAfterMs = await untilWaitingForSlot(job);
   assert.match(job.stderr(), /Waiting for the render slot, held by .*limits-test/);
-  const {rm} = await import('node:fs/promises');
+  // A worker that took the held slot anyway would write its result within this window; on a loaded machine the
+  // window only catches less, it never fails a sound worker.
+  await sleep(1500);
+  assert.equal(await job.written(), false, 'the worker must not run while another render holds the slot');
+  assert.equal(job.ended(), false, 'the worker waits for the slot instead of ending');
   await rm(slot, {recursive: true});
   assert.equal(await job.exited, 0);
   assert.match((await job.result()).error ?? '', /Unknown job kind/);
   await assert.rejects(stat(slot), {code: 'ENOENT'}, 'the worker releases the slot when it ends');
+  return seenAfterMs;
+}
+
+test('a local Studio job waits for the machine render slot and releases it', {timeout: underLoad(90_000)}, async () => {
+  await waitsForSlot('sws-limits-slot-');
+});
+
+// #57: the worker's first line can come later than any fixed wait; this one starts 3.5 s late.
+test('a local Studio job that starts late is still seen waiting for the render slot', {timeout: underLoad(90_000)}, async () => {
+  const seenAfterMs = await waitsForSlot('sws-limits-slot-late-', {startDelayMs: 3500});
+  assert.ok(seenAfterMs >= 3500, `the worker printed its line ${seenAfterMs} ms after the spawn, inside its 3.5 s delay`);
 });
 
 // SDK-42: holding the slot, a local job also waits for the machine check, as a CLI render does since SDK-41.
-test('a local Studio job holding the slot waits while the machine check says busy, and gives the reason as its progress', {timeout: 90_000}, async () => {
+test('a local Studio job holding the slot waits while the machine check says busy, and gives the reason as its progress', {timeout: underLoad(90_000)}, async () => {
   const root = await temporaryDirectory('sws-limits-machine-');
   const check = await fakeMachineCheck(root, 'the game (Client-Mac-Shipping) is open');
   const job = await worker(root, {STUDIO_EXECUTION: 'local', RENDER_SLOT_DIR: join(root, 'render-slot'), MACHINE_CHECK: check.script});
   const progress = () => job.stdout().split('\n').filter(Boolean).map(line => (JSON.parse(line) as {progress: string}).progress);
-  for (const deadline = Date.now() + 30_000; Date.now() < deadline && !progress().length;) await new Promise(done => setTimeout(done, 100));
+  for (const deadline = Date.now() + underLoad(30_000); Date.now() < deadline && !job.ended() && !progress().length;) await sleep(100);
   assert.deepEqual(progress(), ['Waiting for the machine: the game (Client-Mac-Shipping) is open']);
   assert.match(job.stderr(), /Waiting for the machine: the game \(Client-Mac-Shipping\) is open/);
-  await new Promise(done => setTimeout(done, 1500));
+  // A negative window: a loaded machine makes it catch less, never fail a sound worker.
+  await sleep(1500);
   assert.equal(await job.written(), false, 'the worker must not run while the machine check says busy');
   // The worker asks again 20 seconds after its first answer, and then goes on.
-  const {rm} = await import('node:fs/promises');
   await rm(check.busy);
   assert.equal(await job.exited, 0);
   assert.match((await job.result()).error ?? '', /Unknown job kind/);
