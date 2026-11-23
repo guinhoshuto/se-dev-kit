@@ -711,6 +711,23 @@ test("new editor: the labels call says the Settings section is closed, and measu
   assert.deepEqual({sections: state.sections, toggles: state.toggles}, {sections: 1, toggles: 0}, "only the page's own click");
 });
 
+test("new editor: a Settings section that does not open is said, and the layer is never taken for one that is not a custom widget", {timeout: 60_000}, async (t) => {
+  const session = await editor(t, [widget("minimal")], {ui: "new"});
+  if (!session) return;
+  assert.equal((await upload(session)).ok, true);
+  await session.page.evaluate(() => { window.__fixture.stuckSections = true; });
+  const stuck = /^"minimal": its Settings section did not open: open it by its ref \(find "Settings" and click the ref\) and call again\.$/;
+  const result = await session.call("seEditor.run(['minimal'])");
+  assert.equal(result.ok, false);
+  assert.match(result.widgets[0].error, stuck);
+  const read = await session.call("seEditor.readField('Speed')");
+  assert.match(read.error, stuck);
+  for (const answer of [result, read]) assert.doesNotMatch(JSON.stringify(answer), NOT_CUSTOM);
+  assert.equal(await settingsExpanded(session), false);
+  const state = await session.state();
+  assert.deepEqual({sections: state.sections, opens: state.opens, saves: state.saves}, {sections: 2, opens: 0, saves: 0}, "one click on the closed header per call, and no Open Editor");
+});
+
 test("new editor: a layer that is not a custom widget gets its Settings opened, and says it has no Open Editor", {timeout: 60_000}, async (t) => {
   const session = await editor(t, [{name: "image", plain: true, ...OLD, fieldData: {}}], {ui: "new"});
   if (!session) return;

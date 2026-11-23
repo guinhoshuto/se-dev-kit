@@ -85,7 +85,9 @@
     dones: 0,
     writes: 0,
     mangle: null,
-    frozen: false
+    frozen: false,
+    // ?ui=new: a header click that counts in state.sections and opens nothing.
+    stuckSections: false
   };
   window.__fixture = state;
   const UI = new URLSearchParams(location.search).get('ui');
@@ -206,6 +208,7 @@
       header.append(tag('se-icon'), tag('span', {}, title), toggle);
       header.addEventListener('click', () => {
         state.sections += 1;
+        if (state.stuckSections) return;
         expanded = expanded === title ? '' : title;
         apply();
       });

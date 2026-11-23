@@ -54,7 +54,7 @@ Ask once, in one AskUserQuestion box: name the product note the link comes from,
    - `ok: true` with `left: 0` means every widget in the canvas has the new JS and CSS. A `left` above 0 is a widget still on the old commit: a layer not named, or one the editor did not open. Find it before the Save.
    - The canvas proves only JS and CSS, so read the four tabs back for the first widget written (on 2026-11-11 this proved all four, on the test overlay of se-wheel's Ashley build, before the Save): `await seEditor.open(name)`, `await seEditor.scan()` (all four tabs `NEW`), then `await seEditor.done()`. Do it before the Save.
    - When `run` cannot select or open a layer (no Open Editor button, a name that two layers share), open that layer's code editor by ref (`find`, then a click on the ref, never by coordinates), then `await seEditor.apply()` and `await seEditor.done()`. `await seEditor.scan()` reads the tabs without writing.
-   - Since the 2026-11 redesign, `run`, `open`, `readField`, and `setField` open a closed Settings section (not saved: it lives in the tab) and use its new markup; the "shows no Open Editor button" and "shows no field panel" answers of 2026-11-17 and -21 came from the old selectors (#56).
+   - Since the 2026-11 redesign, `run`, `open`, `readField`, `setField` open a closed Settings (one section shows at a time, kept in the tab, not saved: editor JS, 2026-11-22) and use its markup; 2026-11-17 and -21's "no Open Editor button" and "no field panel" were old selectors (#56).
    - With more than about eight widgets, split the names across several `run` calls, so that no call nears the tool's time limit.
 
 ## Check the labels before the Save

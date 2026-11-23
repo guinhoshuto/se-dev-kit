@@ -594,6 +594,13 @@
       "to": "const leaves =",
       "test": "tests/integration/se-editor-update.test.mjs",
       "name": "^new editor: the labels call"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/se-editor-update.js",
+      "from": "if (!(await waitFor(settingsOpen, 1500))) {",
+      "to": "if (false) {",
+      "test": "tests/integration/se-editor-update.test.mjs",
+      "name": "^new editor: a Settings section that does not open"
     }
   ]
 }
