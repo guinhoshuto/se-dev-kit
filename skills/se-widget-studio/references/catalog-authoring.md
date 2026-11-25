@@ -38,6 +38,8 @@ A shipped theme (each `.data.json`, each `.json` without one, and a root `data.j
 
 `init` writes the theme glob `themes/!(*.data).json`, which loads the first file and skips the second. A widget that ships only `themes/*.data.json` already follows this format: never rename, convert, or rewrite those files. To try one of those looks in the Studio, add `themes/<id>.json` with the partial field data that gives it, or point the config's theme glob at `themes/*.data.json` (the IDs then end in `-data`). A root `data.json`, when present, is the DATA payload of the widget's default look and ships the same way.
 
+A decorative Google font can draw old-style numerals that misread in a counter: Mountains of Christmas drew the zero of `17 / 20` as a degree sign (se-auto-inc-bar, 2026-11-24). Pick a theme's font by its numbers in a render, not by its letters.
+
 ## Sample media
 
 Never generate, download, draw, or upload images or videos just to test a widget. The Studio ships sample photos, backdrops, avatars, and a video clip, and every mode (Studio preview, Studio jobs, local CLI) resolves them from the same verified files. Reference one as the whole JSON string `sws-sample:<file>`:
