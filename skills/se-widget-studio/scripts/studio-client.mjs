@@ -37,12 +37,28 @@ const notRunning = origin => `No Studio is running at ${origin}. Start the local
 /** Whether a connection was refused or reset, as one to a Studio that is not running. */
 const refused = error => ['ECONNREFUSED', 'ECONNRESET'].includes(error?.cause?.code ?? error?.code);
 
-/** fetch, with a refused loopback connection reported as a Studio that is not running. */
+/**
+ * fetch, with a refused loopback connection reported as a Studio that is not running. That error keeps the original
+ * as its cause, so a poll of a job that already runs still tells a dropped connection from an answer.
+ */
 export async function studioFetch(url, init) {
   try {return await fetch(url, init);} catch (error) {
-    if (isLoopback(url) && refused(error)) fail(notRunning(new URL(url).origin));
+    if (isLoopback(url) && refused(error)) throw new Error(notRunning(new URL(url).origin), {cause: error});
     throw error;
   }
+}
+
+const CONNECTION_CODES = ['ECONNREFUSED', 'ECONNRESET', 'UND_ERR_SOCKET', 'EPIPE', 'ECONNABORTED'];
+/**
+ * The code of a refused or dropped connection, or `TimeoutError` for a request that ran out of time, found on the
+ * error, its cause, or the cause's cause; undefined for anything else, such as an HTTP answer or invalid JSON.
+ */
+export function connectionError(error) {
+  for (let item = error, depth = 0; item && depth < 3; item = item.cause, depth++) {
+    if (item.name === 'TimeoutError') return 'TimeoutError';
+    if (CONNECTION_CODES.includes(item.code)) return item.code;
+  }
+  return undefined;
 }
 
 /**
@@ -615,21 +631,67 @@ async function runJob(flags) {
   await waitBeforeSubmitting(access.origin);
   const created = expect(await api(access.origin, `/api/studio/projects/${access.projectId}/jobs`, {method: 'POST', token: access.token, body: {kind, selection}}), [202], 'Job submission');
   check(ID.test(created.id), 'Job submission returned an invalid ID.');
-  let job = created; let lastProgress = '';
+  const job = await pollUntilEnded(access, flags['--access'], created);
+  await saveJob(access, flags['--access'], job, {kind, selection, output});
+}
+
+const ENDED = ['completed', 'failed', 'cancelled'];
+const SELECTION = /^(?:[a-zA-Z0-9_-]{1,100}|(?:scene|video):[a-zA-Z0-9_-]{1,100})$/;
+// Failed polls in a row that `run` asks again after; the next one ends it, naming the job.
+const POLL_RETRIES = 5;
+
+/**
+ * The time between two polls of a job: 5 s, or SE_WIDGET_STUDIO_JOB_POLL_MS (a whole number from 50 to 5000) for the
+ * tests.
+ */
+function jobPollMs() {
+  const value = Number(process.env.SE_WIDGET_STUDIO_JOB_POLL_MS);
+  return Number.isSafeInteger(value) && value >= 50 && value <= 5000 ? value : 5000;
+}
+
+/**
+ * Polls a submitted job until it ends, within the job's deadline, printing each new progress. A poll that loses the
+ * connection (refused, reset, closed, or out of time) is asked again after the normal interval, up to 5 in a row, a
+ * poll that answers starting the count again; the 6th names the job and how to check and download it, since it was
+ * submitted and may still run: on 2026-11-25 one reset poll ended a run as "No Studio is running" and lost a
+ * completed 10-minute render (#59). An HTTP answer that is not the job still ends the run at once.
+ */
+async function pollUntilEnded(access, accessPath, created) {
+  let job = created; let lastProgress = ''; let lost = 0;
   const {jobMs} = originLimits(access.origin);
   const deadline = Math.min(Date.now() + jobMs, Date.parse(job.createdAt) + jobMs);
   check(Number.isFinite(deadline), 'Job creation time is invalid.');
-  while (!['completed', 'failed', 'cancelled'].includes(job.status)) {
+  const pollMs = jobPollMs();
+  while (!ENDED.includes(job.status)) {
     if (job.progress !== lastProgress) {process.stderr.write(`[se-widget-studio] ${job.status}: ${job.progress}\n`); lastProgress = job.progress;}
     check(Date.now() < deadline, 'Polling reached the job deadline. Use status before deciding whether to submit another job.');
-    await sleep(Math.min(5000, Math.max(1, deadline - Date.now())));
+    await sleep(Math.min(pollMs, Math.max(1, deadline - Date.now())));
     // The job's own route reads one record; the job list reads every job the project ever ran.
-    const polled = await api(access.origin, `/api/studio/projects/${access.projectId}/jobs/${created.id}`, {token: access.token});
+    let polled;
+    try {polled = await api(access.origin, `/api/studio/projects/${access.projectId}/jobs/${created.id}`, {token: access.token});} catch (error) {
+      const code = connectionError(error);
+      if (!code) throw error;
+      lost += 1;
+      if (lost > POLL_RETRIES) fail(`The Studio at ${access.origin} stopped answering while job ${created.id} ran (${code}, ${lost} polls in a row). The job was submitted and may still be running: check it with \`status --access ${accessPath}\`, and once it is completed download it with \`download --job ${created.id} --access ${accessPath} --output-dir <new-dir>\` instead of submitting it again.`);
+      process.stderr.write(`[se-widget-studio] The poll of job ${created.id} failed (${code}); asking again in ${pollMs / 1000} s (${lost}/${POLL_RETRIES}).\n`);
+      continue;
+    }
+    lost = 0; // the Studio answered
     check(polled.status !== 404, 'Accepted job disappeared from the project.');
     job = expect(polled, [200], 'Job poll');
     check(job?.id === created.id, 'Job poll returned a different job.');
   }
-  // A failed test still publishes its report, which names the failing check, so it is downloaded too.
+  return job;
+}
+
+/**
+ * Downloads every artifact of a job that ended into `output`, a directory that does not exist yet, checks each one's
+ * bytes and SHA-256, writes job.json, and prints the summary; `run` and `download` share it. A failed test still
+ * publishes its report, which names the failing check, so it is downloaded too and then fails with its checks. A
+ * connection lost during the downloads is not asked again: it names the job and `download --job` into a new
+ * directory, since `output` may hold part of the files.
+ */
+async function saveJob(access, accessPath, job, {kind, selection, output}) {
   const failedTest = kind === 'test' && job.status === 'failed' && job.artifacts.length > 0;
   check(job.status === 'completed' || failedTest, `Job ended with ${job.status}. ${job.error ?? ''}`);
   await mkdir(output, {recursive: false, mode: 0o700});
@@ -638,7 +700,12 @@ async function runJob(flags) {
   const failures = [];
   for (const [index, artifact] of job.artifacts.entries()) {
     const name = artifactName(artifact.name);
-    const downloaded = await downloadArtifact(access, artifact);
+    let downloaded;
+    try {downloaded = await downloadArtifact(access, artifact);} catch (error) {
+      const code = connectionError(error);
+      if (code) fail(`The Studio at ${access.origin} stopped answering while the artifacts of job ${job.id} downloaded (${code}). The job is ${job.status}: download it with \`download --job ${job.id} --access ${accessPath} --output-dir <new-dir>\` into a new directory, since ${output} may hold part of its files.`);
+      throw error;
+    }
     const safe = basename(name).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
     const file = `${String(index).padStart(3, '0')}-${safe}`;
     await writeFile(resolve(output, file), downloaded.bytes, {flag: 'wx', mode: 0o600});
@@ -655,6 +722,28 @@ async function runJob(flags) {
   if (!failedTest) return;
   for (const {id, errors} of failures) process.stderr.write(`[se-widget-studio] Failed check ${id}: ${errors.join(' | ') || 'no error recorded'}\n`);
   fail(`Job ended with failed. ${job.error ?? ''} The report was downloaded to ${output}.`);
+}
+
+/**
+ * Downloads a job that ended, by its ID, into a new directory, with the same checks, files, and job.json as `run`, its
+ * kind and selection taken from the job record: what a `run` that lost the Studio after submitting would have
+ * downloaded. One read of the job, no machine wait (it renders nothing); a job still queued or running is refused
+ * before the output directory exists.
+ */
+async function downloadJob(flags) {
+  const accessPath = required(flags, '--access');
+  const access = await readPrivate(accessPath);
+  const id = required(flags, '--job');
+  check(ID.test(id), '--job must be a job ID.');
+  const output = await ensureOutputAbsent(required(flags, '--output-dir'));
+  const read = await api(access.origin, `/api/studio/projects/${access.projectId}/jobs/${id}`, {token: access.token});
+  check(read.status !== 404, `Job ${id} is not in this project.`);
+  const job = expect(read, [200], 'Job read');
+  check(job?.id === id, 'Job read returned a different job.');
+  check(ENDED.includes(job.status), `Job ${id} is ${job.status} (${job.progress}). Nothing was downloaded: check it with \`status --access ${accessPath}\` and download it once it is completed.`);
+  check(['test', 'render'].includes(job.kind), 'The job record has an invalid kind.');
+  check(typeof job.selection === 'string' && SELECTION.test(job.selection), 'The job record has an invalid selection.');
+  await saveJob(access, accessPath, job, {kind: job.kind, selection: job.selection, output});
 }
 
 /**
@@ -692,6 +781,7 @@ Usage:
   studio-client.mjs pull --access <private-json> --draft-out <new-json>
   studio-client.mjs push --access <private-json> --draft <json>
   studio-client.mjs run --access <private-json> --kind <test|render> --selection <id|all|scene:id|video:id> --output-dir <new-dir>
+  studio-client.mjs download --job <id> --access <private-json> --output-dir <new-dir>
   studio-client.mjs active [--origin <url>]
 
 The default origin is ${DEFAULT_ORIGIN}, the local Studio that \`npm run serve\` starts in the Studio checkout.
@@ -711,6 +801,9 @@ Import and push check sws-sample: references against the selected deployment bef
 Run refuses an existing output directory, waits for the machine on a local Studio before submitting (failing at once when
 no Studio answers, before the wait or during it), polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.
 A failed test still downloads its report, prints each failed check with its errors, and exits with 1.
+Run asks again after a poll that loses the Studio, up to 5 in a row; after that it names the job instead of failing
+as a Studio that is not running. Download fetches the artifacts of a job that ended into a new directory, with the
+same checks and job.json as run, and refuses a job that has not ended.
 Active prints how many jobs of every project the Studio runs, without a capability. A local job runs inside the server
 process: stop a local Studio you started only when it prints "activeJobs":0.`);
 }
@@ -726,6 +819,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'pull') return pull(parseFlags(args, new Set(['--access', '--draft-out'])));
   if (command === 'push') return push(parseFlags(args, new Set(['--access', '--draft'])));
   if (command === 'run') return runJob(parseFlags(args, new Set(['--access', '--kind', '--selection', '--output-dir'])));
+  if (command === 'download') return downloadJob(parseFlags(args, new Set(['--job', '--access', '--output-dir'])));
   if (command === 'active') return activeJobs(parseFlags(args, new Set(['--origin'])));
   fail(`Unknown command ${command}. Run with --help.`);
 }
