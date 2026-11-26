@@ -298,7 +298,7 @@ test('run downloads the report of a failed test, prints each failed check, and e
     const render = await run('render', join(root, 'render-output'));
     assert.equal(render.code, 1);
     assert.equal(render.stderr, 'Job ended with failed. One or more browser checks failed. See the test report.\n');
-    assert.deepEqual(requests, ['POST /api/studio/projects/project-test/jobs']);
+    assert.deepEqual(requests, ['GET /api/v1/version', 'POST /api/studio/projects/project-test/jobs']);
     await assert.rejects(stat(join(root, 'render-output')), {code: 'ENOENT'});
   } finally {
     await new Promise<void>(done => server.close(() => done()));
@@ -454,7 +454,7 @@ test('projects lists the access files with each project\'s name and never their 
 test('run polls the accepted job on its own route, never the project job list', async () => {
   const {stdout, stderr, requests} = await runAgainst((respond, job, artifact) => respond(200, job('completed', [artifact])));
   assert.equal(JSON.parse(stdout).status, 'completed', stderr);
-  assert.deepEqual(requests, ['POST /api/studio/projects/project-test/jobs', 'GET /api/studio/projects/project-test/jobs/job-test', 'GET /api/studio/projects/project-test/artifacts/image']);
+  assert.deepEqual(requests, ['GET /api/v1/version', 'POST /api/studio/projects/project-test/jobs', 'GET /api/studio/projects/project-test/jobs/job-test', 'GET /api/studio/projects/project-test/artifacts/image']);
 });
 
 test('run stops when the job route answers 404 or returns another job', async () => {

@@ -27,6 +27,34 @@
       "to": "",
       "test": "tests/web/skill-client-machine.test.ts",
       "name": "^run on a local Studio waits in the render slot queue"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "    if (!(await listens(origin))) throw stopped;\n",
+      "to": "",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "^run with no Studio listening fails at once"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "    if (!(await listens(origin))) throw stopped;\n",
+      "to": "",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "^a Studio that stops while run waits"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "    if (error === stopped) throw error;\n",
+      "to": "",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "^run with no Studio listening fails at once"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "    if (refused(error)) return false;\n  }\n  return true;",
+      "to": "    return false;\n  }\n  return true;",
+      "test": "tests/web/skill-client-machine.test.ts",
+      "name": "^only a refused connection says that no Studio listens"
     }
   ]
 }

@@ -33,13 +33,31 @@ function fail(message) {throw new Error(message);}
 function check(condition, message) {if (!condition) fail(message);}
 function isLoopback(origin) {return ['127.0.0.1', '[::1]', 'localhost'].includes(new URL(origin).hostname);}
 
+const notRunning = origin => `No Studio is running at ${origin}. Start the local Studio in the Studio checkout with \`npm run serve\` (run \`npm run build\` first after a change to the checkout), keep it running in the background, and run this command again. Nothing was changed.`;
+/** Whether a connection was refused or reset, as one to a Studio that is not running. */
+const refused = error => ['ECONNREFUSED', 'ECONNRESET'].includes(error?.cause?.code ?? error?.code);
+
 /** fetch, with a refused loopback connection reported as a Studio that is not running. */
 export async function studioFetch(url, init) {
   try {return await fetch(url, init);} catch (error) {
-    const code = error?.cause?.code ?? error?.code;
-    if (isLoopback(url) && (code === 'ECONNREFUSED' || code === 'ECONNRESET')) fail(`No Studio is running at ${new URL(url).origin}. Start the local Studio in the Studio checkout with \`npm run serve\` (run \`npm run build\` first after a change to the checkout), keep it running in the background, and run this command again. Nothing was changed.`);
+    if (isLoopback(url) && refused(error)) fail(notRunning(new URL(url).origin));
     throw error;
   }
+}
+
+/**
+ * Whether a Studio listens at a loopback origin: one request without a capability, which only a refused connection
+ * fails. Any answer counts, and so does none within 10 s: a Studio slowed by a busy machine still runs, and the job
+ * submission reports what else is wrong.
+ */
+export async function studioListens(origin, {timeoutMs = 10_000} = {}) {
+  try {
+    const response = await fetch(new URL('/api/v1/version', origin), {redirect: 'manual', signal: AbortSignal.timeout(timeoutMs)});
+    await response.body?.cancel().catch(() => {});
+  } catch (error) {
+    if (refused(error)) return false;
+  }
+  return true;
 }
 
 export function normalizeOrigin(value) {
@@ -558,10 +576,13 @@ export function engineBuilds({engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL} 
  * session's. A remote Studio renders on another machine. A client without the engine build next to it (a new
  * worktree, a copied skill) asks through the live checkout's, the real path of the global skill's link; with neither,
  * or on a machine without the check, it submits at once and leaves the render slot to the job, saying so on stderr
- * when no build was found. A build older than the queue ignores it and polls. SE_WIDGET_STUDIO_MACHINE_POLL_MS
+ * when no build was found. A build older than the queue ignores it and polls. Each time the wait asks the machine
+ * check, the first time included, it first asks the Studio (`listens`), so a Studio that is not running, or stops
+ * during the wait, ends it with "No Studio is running" at once, or at the turn in the render slot queue: on
+ * 2026-11-25 a run waited 52 min for the disk and only then found no Studio (#58). SE_WIDGET_STUDIO_MACHINE_POLL_MS
  * shortens the 20 s between checks for the tests.
  */
-export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL, check} = {}) {
+export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL, check, listens = studioListens} = {}) {
   if (!isLoopback(origin)) return;
   const builds = engineBuilds({engineDist, liveSkill});
   let machine;
@@ -571,9 +592,16 @@ export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, li
   if (!machine) {process.stderr.write(`[se-widget-studio] machine check skipped: no engine build at ${builds.join(' or ')}\n`); return;}
   const pollMs = Number(process.env.SE_WIDGET_STUDIO_MACHINE_POLL_MS);
   const say = message => message.replace(/^Waiting for the machine\b/, 'Waiting for the machine before submitting').replace(/^(The machine is free.*); rendering\.$/, '$1; submitting the job.');
+  const verdict = check ?? machine.machineVerdict;
+  const stopped = new Error(notRunning(origin));
+  const asked = async () => {
+    if (!(await listens(origin))) throw stopped;
+    return verdict();
+  };
   try {
-    await machine.waitForMachine({queue: 'se-widget-studio.job', ...(check ? {check} : {}), ...(Number.isSafeInteger(pollMs) && pollMs >= 50 && pollMs <= 20_000 ? {pollMs} : {}), log: message => process.stderr.write(`[se-widget-studio] ${say(message)}\n`)});
+    await machine.waitForMachine({queue: 'se-widget-studio.job', check: asked, ...(Number.isSafeInteger(pollMs) && pollMs >= 50 && pollMs <= 20_000 ? {pollMs} : {}), log: message => process.stderr.write(`[se-widget-studio] ${say(message)}\n`)});
   } catch (error) {
+    if (error === stopped) throw error;
     fail([error instanceof Error ? error.message : String(error), error?.hint, 'No job was submitted.'].filter(Boolean).join(' '));
   }
 }
@@ -680,7 +708,8 @@ the widget source references it. --recipes keeps only those recipes and the scen
 leaves scenarios out.
 Catalog writes that flattened catalog, the JSON that import --catalog takes, without contacting any Studio.
 Import and push check sws-sample: references against the selected deployment before any change; a blocked import prints its diagnostics.
-Run refuses an existing output directory, waits for the machine on a local Studio before submitting, polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.
+Run refuses an existing output directory, waits for the machine on a local Studio before submitting (failing at once when
+no Studio answers, before the wait or during it), polls one job, verifies artifact hashes, and never forwards bearer authorization to Blob.
 A failed test still downloads its report, prints each failed check with its errors, and exits with 1.
 Active prints how many jobs of every project the Studio runs, without a capability. A local job runs inside the server
 process: stop a local Studio you started only when it prints "activeJobs":0.`);
