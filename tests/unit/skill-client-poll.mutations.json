@@ -1,0 +1,88 @@
+{
+  "mutations": [
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "const POLL_RETRIES = 5;",
+      "to": "const POLL_RETRIES = 0;",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run asks again after one poll that loses the connection \\(ECONNRESET\\)"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "lost = 0; // the Studio answered",
+      "to": "// the Studio answered",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run starts the count of lost polls again"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "'ECONNRESET', 'UND_ERR_SOCKET', ",
+      "to": "'UND_ERR_SOCKET', ",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run asks again after one poll that loses the connection \\(ECONNRESET\\)"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "'UND_ERR_SOCKET', ",
+      "to": "",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run asks again after one poll that loses the connection \\(UND_ERR_SOCKET\\)"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "throw new Error(notRunning(new URL(url).origin), {cause: error});",
+      "to": "fail(notRunning(new URL(url).origin));",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run asks again after one poll that loses the connection \\(ECONNRESET\\)"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "item && depth < 3;",
+      "to": "item && depth < 2;",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run asks again after one poll that loses the connection \\(ECONNRESET\\)"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "if (!code) throw error;\n      lost += 1;",
+      "to": "lost += 1;",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run does not ask again after a poll answered"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "if (lost > POLL_RETRIES) fail(",
+      "to": "if (lost > POLL_RETRIES) throw error; if (false) fail(",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run gives up after 6 lost polls"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "download it with \\`download --job ${created.id} --access ${accessPath}",
+      "to": "download it with \\`download --access ${accessPath}",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^run gives up after 6 lost polls"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "check(ENDED.includes(job.status), `Job ${id} is",
+      "to": "check(true, `Job ${id} is",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^download --job refuses"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "{kind: job.kind, selection: job.selection, output}",
+      "to": "{kind: 'render', selection: 'all', output}",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^download --job writes the same files"
+    },
+    {
+      "file": "skills/se-widget-studio/scripts/studio-client.mjs",
+      "from": "if (code) fail(`The Studio at ${access.origin} stopped answering while the artifacts",
+      "to": "if (false) fail(`The Studio at ${access.origin} stopped answering while the artifacts",
+      "test": "tests/web/skill-client-poll.test.ts",
+      "name": "^a connection lost while an artifact downloads"
+    }
+  ]
+}

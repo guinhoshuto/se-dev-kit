@@ -650,7 +650,7 @@ test('open-editor opens a verify-hosted access file through the system opener wi
 
 test('hosted skill client exposes complete English command help', async () => {
   const {stdout} = await exec(process.execPath, [script, '--help']);
-  for (const command of ['import', 'projects', 'status', 'open-editor', 'pull', 'push', 'run']) assert.match(stdout, new RegExp(`\\b${command}\\b`));
+  for (const command of ['import', 'projects', 'status', 'open-editor', 'pull', 'push', 'run', 'download']) assert.match(stdout, new RegExp(`\\b${command}\\b`));
   assert.match(stdout, /Capabilities are never printed/);
 });
 
