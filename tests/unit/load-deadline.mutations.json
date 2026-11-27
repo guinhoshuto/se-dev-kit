@@ -20,6 +20,62 @@
       "to": "const orphaned = await until(() => orphanOf(root), 2500);",
       "test": "tests/unit/mutate.test.mjs",
       "name": "^the watchdog tests grow the hung run's limit"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "timeout: underLoad(30_000, at)",
+      "to": "timeout: 30_000",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the stray-child and SIGKILL tests' deadlines grow with the load"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "ends: underLoad(15_000, at)",
+      "to": "ends: 15_000",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the stray-child and SIGKILL tests' deadlines grow with the load"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "watchdog: underLoad(20_000, at)",
+      "to": "watchdog: 20_000",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the stray-child and SIGKILL tests' deadlines grow with the load"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "watchdog: underLoad(20_000, at), gone: underLoad(5000, at)",
+      "to": "watchdog: underLoad(20_000, at), gone: 5000",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the stray-child and SIGKILL tests' deadlines grow with the load"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "timeout: underLoad(60_000, at), hangs",
+      "to": "timeout: 60_000, hangs",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the stray-child and SIGKILL tests' deadlines grow with the load"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "hangs: underLoad(20_000, at)",
+      "to": "hangs: 20_000",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the stray-child and SIGKILL tests' deadlines grow with the load"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "testTimeout: underLoad(60_000, at)",
+      "to": "testTimeout: 60_000",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the stray-child and SIGKILL tests' deadlines grow with the load"
+    },
+    {
+      "file": "tests/unit/mutate.test.mjs",
+      "from": "testTimeout: underLoad(60_000, at), gone: underLoad(5000, at)",
+      "to": "testTimeout: underLoad(60_000, at), gone: 5000",
+      "test": "tests/unit/mutate.test.mjs",
+      "name": "^the stray-child and SIGKILL tests' deadlines grow with the load"
     }
   ]
 }

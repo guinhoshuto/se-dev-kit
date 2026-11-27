@@ -427,23 +427,46 @@ test("the watchdog tests grow the hung run's limit when its orphan starts later 
   assert.ok(attempts >= 2, `took ${attempts} attempt(s)`);
 });
 
-test("a run that exits leaving a child on its output pipe ends, and the child is gone", {timeout: 30_000}, async t => {
+// Issue #63: the next two tests kept fixed deadlines after #50, and the first gate of #59 stopped on the stray run's
+// 15 s at load 12 on 8 cores. Their deadlines come from here, each stretched by the load per core (`at` simulates one,
+// as tests/unit/load.test.mjs does): a test reads its waits when it runs, its node:test timeout when this file loads.
+const strayDeadlines = at => ({timeout: underLoad(30_000, at), ends: underLoad(15_000, at), watchdog: underLoad(20_000, at), gone: underLoad(5000, at)});
+const killDeadlines = at => ({timeout: underLoad(60_000, at), hangs: underLoad(20_000, at), testTimeout: underLoad(60_000, at), gone: underLoad(5000, at)});
+
+test("the stray-child and SIGKILL tests' deadlines grow with the load and keep their order: 3x at 24 on 8 cores, 25x at 200", () => {
+  const idle = {stray: strayDeadlines({load: 0, cores: 8}), kill: killDeadlines({load: 0, cores: 8})};
+  for (const [load, times] of [[24, 3], [200, 25]]) {
+    const at = {load, cores: 8};
+    const stray = strayDeadlines(at);
+    const kill = killDeadlines(at);
+    for (const [name, ms] of Object.entries(idle.stray)) assert.equal(stray[name], ms * times, `stray ${name} at load ${load}`);
+    for (const [name, ms] of Object.entries(idle.kill)) assert.equal(kill[name], ms * times, `SIGKILL ${name} at load ${load}`);
+    assert.ok(stray.ends < stray.watchdog, "the run has to end before its watchdog fires, so a run that hangs reads as one");
+    assert.ok(stray.ends + stray.gone < stray.timeout, "the stray test's timeout covers its waits");
+    assert.ok(kill.hangs < kill.testTimeout, "mutate's per-test timeout leaves the mutant hanging past the wait for it");
+    assert.ok(kill.hangs + kill.gone < kill.timeout, "the SIGKILL test's timeout covers its waits");
+  }
+});
+
+test("a run that exits leaving a child on its output pipe ends, and the child is gone", {timeout: strayDeadlines().timeout}, async t => {
+  const {ends, watchdog, gone} = strayDeadlines();
   const root = await folder(t, "sws-mutate-stray-");
   reapAfter(t, () => processesOf(root));
   const run = await Promise.race([
-    spawnBounded(process.execPath, ["-e", `${GRANDCHILD(root)} setTimeout(() => process.exit(0), 1500);`, root], {cwd: root, limitMs: 20_000}),
-    pause(15_000).then(() => "hung")
+    spawnBounded(process.execPath, ["-e", `${GRANDCHILD(root)} setTimeout(() => process.exit(0), 1500);`, root], {cwd: root, limitMs: watchdog}),
+    pause(ends).then(() => "hung")
   ]);
-  assert.notEqual(run, "hung", "the run ended although its child held the output pipe");
+  assert.notEqual(run, "hung", `the run ended although its child held the output pipe (waited ${ends} ms)`);
   assert.equal(run.exitCode, 0);
   assert.equal(run.timedOut, false);
-  assert.ok(await until(() => !processesOf(root).length, 5000), `still running: ${processesOf(root)}`);
+  assert.ok(await until(() => !processesOf(root).length, gone), `still running after ${gone} ms: ${processesOf(root)}`);
 });
 
-test("mutate killed with SIGKILL mid-hang takes its test run, the detached grandchild and an orphan in its group with it", {timeout: 60_000}, async t => {
+test("mutate killed with SIGKILL mid-hang takes its test run, the detached grandchild and an orphan in its group with it", {timeout: killDeadlines().timeout}, async t => {
+  const {hangs, testTimeout, gone} = killDeadlines();
   const {root} = await checkout(t);
   const hang = {file: "lib/wait.mjs", from: "Promise.resolve(true)", to: `(import('node:child_process').then(c => {c.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ${JSON.stringify(root)}], {detached: true, stdio: 'ignore'}); ${ORPHAN(root, "c")}}), new Promise(() => {}))`, test: "tests/wait.test.mjs"};
-  const script = `import {mutate} from ${JSON.stringify(new URL("../../scripts/mutate.mjs", import.meta.url).href)}; await mutate([${JSON.stringify(hang)}], {root: ${JSON.stringify(root)}, timeoutMs: 60000, log: () => {}});`;
+  const script = `import {mutate} from ${JSON.stringify(new URL("../../scripts/mutate.mjs", import.meta.url).href)}; await mutate([${JSON.stringify(hang)}], {root: ${JSON.stringify(root)}, timeoutMs: ${testTimeout}, log: () => {}});`;
   const driver = spawn(process.execPath, ["--input-type=module", "-e", script], {stdio: "ignore"});
   let tree = [];
   reapAfter(t, () => [driver.pid, ...tree, ...processesOf(root)]);
@@ -452,9 +475,9 @@ test("mutate killed with SIGKILL mid-hang takes its test run, the detached grand
     const rows = table();
     return rows.some(row => tree.includes(row.pid) && row.command.includes("setInterval") && row.command.includes(root))
       && rows.some(row => row.ppid === 1 && row.command.includes(root) && row.command.endsWith(" orphan"));
-  }, 20_000);
-  assert.ok(hanging, `the mutant's grandchild and orphan never started: ${JSON.stringify(tree)}`);
+  }, hangs);
+  assert.ok(hanging, `the mutant's grandchild and orphan never started within ${hangs} ms: ${JSON.stringify(tree)}`);
   assert.ok(tree.length >= 4, `the leash, the runner, the test file and the grandchild: ${JSON.stringify(tree)}`);
   driver.kill("SIGKILL");
-  assert.ok(await until(() => !living(tree).length && !processesOf(root).length, 5000), `still running: ${living(tree)} ${processesOf(root)}`);
+  assert.ok(await until(() => !living(tree).length && !processesOf(root).length, gone), `still running after ${gone} ms: ${living(tree)} ${processesOf(root)}`);
 });
