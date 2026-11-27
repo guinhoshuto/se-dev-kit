@@ -174,8 +174,9 @@ function waitForTurn({label, since, maxMinutes, answer, signal: abort}: TurnRequ
  * --ceder), which lets only a ticket in the queue go first. At the turn, the ticket still first, the check is asked
  * again without the queue behind it: free, the wait ends, and the render that follows has the slot for 30 s;
  * otherwise the turn goes back, and after `pollMs` the loop asks again, from the same place in the queue. A check
- * without kinds, or a ticket that cannot be taken, leaves the wait polling. The limit counts from `startedAt`. The
- * abort of `signal` ends the wait, in the queue or between two checks, and rejects with its reason.
+ * that throws at the turn sends the turn back too and rejects at once with its error, with no wait after it (#61).
+ * A check without kinds, or a ticket that cannot be taken, leaves the wait polling. The limit counts from
+ * `startedAt`. The abort of `signal` ends the wait, in the queue or between two checks, and rejects with its reason.
  */
 export async function waitForMachine(options: MachineWaitOptions = {}): Promise<{turn: boolean}> {
   const {signal} = options;
@@ -209,12 +210,20 @@ export async function waitForMachine(options: MachineWaitOptions = {}): Promise<
       if (`queue ${reasons}` !== said) log(`Waiting for the machine, in the render slot queue as "vez: ${queue}": ${reasons}`);
       said = `queue ${reasons}`;
       let left: string[] = [];
+      // A check that throws at the turn: the turn goes back, which leaves no baton, and the wait ends with its error.
+      let failed: {error: unknown} | undefined;
       // Its place and its limit both count from when the wait began, on the clock the vez reads.
       const result = await turn({label: queue, since: Date.now() - (now() - started), maxMinutes: Math.min(TURN_MAX_MINUTES, waitLimitMs / 60_000), answer: async () => {
-        left = atTheTurn(await check());
+        try {
+          left = atTheTurn(await check());
+        } catch (error) {
+          failed = {error};
+          return "back";
+        }
         return left.length ? "back" : "go";
       }, ...(signal ? {signal} : {})});
       ended();
+      if (failed) throw failed.error;
       if (result.answer === "go") {
         log("The machine is free at its turn in the render slot queue; rendering.");
         return {turn: true};
