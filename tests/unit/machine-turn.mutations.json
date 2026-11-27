@@ -58,8 +58,8 @@
     },
     {
       "file": "src/shared/machine-check.ts",
-      "from": "      ended();\n      if (result.answer === \"go\") {",
-      "to": "      if (result.answer === \"go\") {",
+      "from": "      ended();\n      if (failed) throw failed.error;\n",
+      "to": "      if (failed) throw failed.error;\n",
       "test": "tests/unit/machine-check.test.mjs",
       "name": "^waitForMachine ends when its signal aborts"
     },
@@ -76,6 +76,27 @@
       "to": "});",
       "test": "tests/unit/machine-check.test.mjs",
       "name": "^waitForMachine ends when its signal aborts"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "      if (failed) throw failed.error;\n",
+      "to": "",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine with a queue rejects at once with the error of a check that throws at its turn"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "        try {\n          left = atTheTurn(await check());\n        } catch (error) {\n          failed = {error};\n          return \"back\";\n        }\n",
+      "to": "        left = atTheTurn(await check());\n",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine with a queue rejects at once with the error of a check that throws at its turn"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "          failed = {error};\n          return \"back\";",
+      "to": "          failed = {error};\n          return \"go\";",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine with a queue rejects at once with the error of a check that throws at its turn"
     }
   ]
 }

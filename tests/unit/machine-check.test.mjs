@@ -159,6 +159,28 @@ test("waitForMachine with a queue waits out the slot and its queue as a ticket, 
   await assert.rejects(run([slot], [{code: 75, said: "Gave up after 30 minutes waiting for the render slot"}]), (error) => error.code === "MACHINE_BUSY_TIMEOUT" && /in the render slot queue: Gave up after 30 minutes/.test(error.message));
 });
 
+test("waitForMachine with a queue rejects at once with the error of a check that throws at its turn, the turn sent back", async () => {
+  const slot = {free: false, reasons: ["the render slot is held"], kinds: ["trava"]};
+  const stopped = new Error("No Studio is running");
+  const log = [];
+  const given = [];
+  let checks = 0;
+  await assert.rejects(waitForMachine({
+    queue: "se-widget-studio.job", pollMs: 20_000, log: (message) => log.push(message),
+    sleep: async () => assert.fail("slept after the check threw"),
+    check: async () => { checks++; if (checks > 1) throw stopped; return slot; },
+    // The turn comes at once and answers as waitForTurn does: an answer that rejects goes back.
+    turn: async (request) => {
+      const answer = await request.answer().catch(() => "back");
+      given.push(answer);
+      return {code: 0, answer, said: ""};
+    }
+  }), (error) => error === stopped);
+  assert.deepEqual(given, ["back"], "the vez hears back, which leaves no baton");
+  assert.equal(checks, 2, "nothing asked after the check threw");
+  assert.deepEqual(log, ['Waiting for the machine, in the render slot queue as "vez: se-widget-studio.job": the render slot is held']);
+});
+
 test("waitForMachine ends when its signal aborts, in the render slot queue or between two checks, and rejects with its reason", async () => {
   const slot = {free: false, reasons: ["the render slot is held by pid 7"], kinds: ["trava"]};
   const reason = new Error("the Studio stopped");
