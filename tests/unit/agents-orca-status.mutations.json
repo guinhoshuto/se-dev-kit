@@ -1,0 +1,34 @@
+{
+  "mutations": [
+    {
+      "file": "AGENTS.md",
+      "from": ", then read the status back with `orca worktree current --json | jq -r .result.worktree.workspaceStatus`, which prints",
+      "to": ". `orca worktree current --json` prints",
+      "test": "tests/unit/agents-orca-status.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "jq -r .result.worktree.workspaceStatus`",
+      "to": "jq -r .result.workspaceStatus`",
+      "test": "tests/unit/agents-orca-status.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "--workspace-status completed` (an Orca session",
+      "to": "--workspace-status in-review` (an Orca session",
+      "test": "tests/unit/agents-orca-status.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "The last answer names the status it read back; when",
+      "to": "The last answer says the workspace is completed; when",
+      "test": "tests/unit/agents-orca-status.test.mjs"
+    },
+    {
+      "file": "AGENTS.md",
+      "from": "when the command fails or prints anything but `completed`, it says the workspace could not be confirmed completed",
+      "to": "when the command fails, it runs it again",
+      "test": "tests/unit/agents-orca-status.test.mjs"
+    }
+  ]
+}
