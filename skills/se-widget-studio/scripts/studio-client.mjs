@@ -593,10 +593,12 @@ export function engineBuilds({engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL} 
  * worktree, a copied skill) asks through the live checkout's, the real path of the global skill's link; with neither,
  * or on a machine without the check, it submits at once and leaves the render slot to the job, saying so on stderr
  * when no build was found. A build older than the queue ignores it and polls. Each time the wait asks the machine
- * check, the first time included, it first asks the Studio (`listens`), so a Studio that is not running, or stops
- * during the wait, ends it with "No Studio is running" at once, or at the turn in the render slot queue: on
- * 2026-11-25 a run waited 52 min for the disk and only then found no Studio (#58). SE_WIDGET_STUDIO_MACHINE_POLL_MS
- * shortens the 20 s between checks for the tests.
+ * check, the first time included, it first asks the Studio (`listens`), so a Studio that is not running ends it at
+ * once with "No Studio is running": on 2026-11-25 a run waited 52 min for the disk and only then found no Studio
+ * (#58). While the wait runs, it also asks the Studio every 20 s (SE_WIDGET_STUDIO_MACHINE_POLL_MS for the tests, the
+ * time between two checks too), and a refused connection ends the wait with the same error: in the render slot queue
+ * the check, and so the Studio, is asked only at the turn, which on 2026-11-26 came an hour later (#60). The ticket
+ * leaves the queue with the wait.
  */
 export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, liveSkill = LIVE_SKILL, check, listens = studioListens} = {}) {
   if (!isLoopback(origin)) return;
@@ -606,7 +608,8 @@ export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, li
     try {machine = await import(pathToFileURL(resolve(build, 'shared/machine-check.js')).href); break;} catch {/* the next build */}
   }
   if (!machine) {process.stderr.write(`[se-widget-studio] machine check skipped: no engine build at ${builds.join(' or ')}\n`); return;}
-  const pollMs = Number(process.env.SE_WIDGET_STUDIO_MACHINE_POLL_MS);
+  const given = Number(process.env.SE_WIDGET_STUDIO_MACHINE_POLL_MS);
+  const pollMs = Number.isSafeInteger(given) && given >= 50 && given <= 20_000 ? given : 20_000;
   const say = message => message.replace(/^Waiting for the machine\b/, 'Waiting for the machine before submitting').replace(/^(The machine is free.*); rendering\.$/, '$1; submitting the job.');
   const verdict = check ?? machine.machineVerdict;
   const stopped = new Error(notRunning(origin));
@@ -614,11 +617,22 @@ export async function waitBeforeSubmitting(origin, {engineDist = ENGINE_DIST, li
     if (!(await listens(origin))) throw stopped;
     return verdict();
   };
+  // Only a refused connection counts as a stopped Studio, as in `asked`. A build older than #60 ignores the signal.
+  const watcher = new AbortController();
+  let watching = true; let timer;
+  const watch = () => {timer = setTimeout(async () => {
+    const listening = await listens(origin);
+    if (!watching) return;
+    if (listening) watch(); else watcher.abort(stopped);
+  }, pollMs);};
+  watch();
   try {
-    await machine.waitForMachine({queue: 'se-widget-studio.job', check: asked, ...(Number.isSafeInteger(pollMs) && pollMs >= 50 && pollMs <= 20_000 ? {pollMs} : {}), log: message => process.stderr.write(`[se-widget-studio] ${say(message)}\n`)});
+    await machine.waitForMachine({queue: 'se-widget-studio.job', check: asked, pollMs, signal: watcher.signal, log: message => process.stderr.write(`[se-widget-studio] ${say(message)}\n`)});
   } catch (error) {
     if (error === stopped) throw error;
     fail([error instanceof Error ? error.message : String(error), error?.hint, 'No job was submitted.'].filter(Boolean).join(' '));
+  } finally {
+    watching = false; clearTimeout(timer);
   }
 }
 
