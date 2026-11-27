@@ -11,7 +11,8 @@ import {cedingChain, productStep, RENDER_SLOT, slotCheck, steps} from '../unit/c
 
 // `run` on a local Studio waits for the machine before it submits the job, so a long wait happens before the
 // job exists and never eats the job's two hours (SDK-46). It never asks the check of a remote Studio. Before each
-// question to the check it asks the Studio, so a run without one never waits for the machine (#58).
+// question to the check it asks the Studio, so a run without one never waits for the machine (#58), and while it waits
+// it asks the Studio every poll interval, also in the render slot queue, where it asks the check only at its turn (#60).
 
 const script = resolve('skills/se-widget-studio/scripts/studio-client.mjs');
 const PROBE = 'GET /api/v1/version';
@@ -64,7 +65,8 @@ test('run on a local Studio submits the job only once the machine check says fre
     assert.equal(await until(() => ended, 20_000), true);
     assert.equal(await exited, 0, stderr);
     assert.deepEqual(submitted(requests), ['POST /api/studio/projects/project-test/jobs']);
-    assert.equal(requests.filter(request => request === PROBE).length, (await calls()).length, 'one question to the Studio before each question to the machine check');
+    // One before each question to the machine check, and others meanwhile, every poll interval (#60).
+    assert.ok(requests.filter(request => request === PROBE).length >= (await calls()).length, 'a question to the Studio before each question to the machine check');
     for (const line of await calls()) assert.match(line, new RegExp(`^--json --familia ${child.pid} slot=`));
     assert.equal(stderr.split('[se-widget-studio] Waiting for the machine before submitting: a render of another session runs\n').length, 2, stderr);
     assert.match(stderr, /\[se-widget-studio\] The machine is free; submitting the job\.\n/);
@@ -243,6 +245,66 @@ test('a Studio that stops while run waits for the machine ends the run at its ne
   assert.match(stderr, notRunning(address.port));
   assert.doesNotMatch(stderr, /No job was submitted/);
   assert.deepEqual(submitted(requests), [], 'no job was submitted');
+});
+
+test('a Studio that stops while run waits in the render slot queue ends the run within its poll interval, its ticket out of the queue, with no job', {timeout: 90_000}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sws-skill-run-queue-stops-'));
+  const {RENDER_SLOT_HELD: _held, ...rest} = process.env;
+  const env = {...rest, RENDER_SLOT_DIR: join(root, 'slot'), RENDER_SLOT_CHECK: 'off', MACHINE_CHECK: await slotCheck(root), SE_WIDGET_STUDIO_MACHINE_POLL_MS: '100'};
+  const status = () => JSON.parse(execFileSync(process.execPath, [RENDER_SLOT, 'status', '--json'], {env, encoding: 'utf8'}));
+  const ticket = () => status().queue.find((waiting: {command: string}) => waiting.command === 'vez: se-widget-studio.job');
+  const requests: string[] = [];
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* drain */ }
+    requests.push(`${request.method} ${request.url}`);
+    response.setHeader('Content-Type', 'application/json');
+    response.statusCode = request.url === '/api/v1/version' ? 200 : 500;
+    response.end('{}');
+  });
+  let open = true;
+  const stop = () => new Promise<void>(done => { if (!open) return done(); open = false; server.close(() => done()); server.closeAllConnections(); });
+  // Another session's hold, which keeps the slot for the whole test: the client's turn never comes.
+  const hold = spawn(process.execPath, [RENDER_SLOT, 'hold', '--rotulo', 'other-session', '--max', '5'], {env, stdio: ['ignore', 'pipe', 'ignore']});
+  const holdExited = new Promise(done => hold.once('close', done));
+  let child: ReturnType<typeof spawn> | undefined;
+  let ended = false;
+  try {
+    let holding = '';
+    hold.stdout!.on('data', chunk => { holding += String(chunk); });
+    assert.ok(await until(() => holding.includes('Holding the render slot'), 20_000), 'the other session holds the slot');
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const access = await accessFile(root, `http://127.0.0.1:${address.port}`);
+    child = spawn(process.execPath, [script, 'run', '--access', access, '--kind', 'render', '--selection', 'stills', '--output-dir', join(root, 'output')], {env, stdio: ['ignore', 'pipe', 'pipe']});
+    let stderr = '';
+    child.stderr!.on('data', chunk => { stderr += String(chunk); });
+    const exited = new Promise<number | null>(done => child!.once('close', code => { ended = true; done(code); }));
+    assert.ok(await until(() => ended || ticket() !== undefined, 20_000), `render-slot status lists the client's ticket: ${stderr}`);
+    // In the queue it asks the machine check only at its turn: on 2026-11-26 the turn came an hour later (#60).
+    const probes = () => requests.filter(request => request === PROBE).length;
+    const before = probes();
+    assert.ok(await until(() => ended || probes() >= before + 2, 20_000), 'the Studio is asked while the client waits in the queue');
+    assert.equal(ended, false, `run ended while the Studio ran and the slot was held: ${stderr}`);
+    await stop();
+    const stopped = Date.now();
+    assert.equal(await until(() => ended, 15_000), true, `run still waits in the queue after its Studio stopped: ${stderr}`);
+    assert.ok(Date.now() - stopped < 15_000);
+    assert.equal(await exited, 1, stderr);
+    assert.match(stderr, /^\[se-widget-studio\] Waiting for the machine before submitting, in the render slot queue as "vez: se-widget-studio\.job": the render slot is held\n/);
+    assert.match(stderr, notRunning(address.port));
+    assert.doesNotMatch(stderr, /No job was submitted|without a place in the render slot queue/);
+    assert.deepEqual(submitted(requests), [], 'no job was submitted');
+    assert.equal(ticket(), undefined, 'render-slot status lists no ticket of the client');
+    assert.equal((await readFile(join(root, 'calls.log'), 'utf8')).split('\n').filter(Boolean).length, 1, 'the machine check was asked once, before the queue');
+    assert.equal(status().holder?.command, 'hold: other-session', 'the other session still holds the slot');
+  } finally {
+    // SIGTERM, which takes its ticket out of the queue with it.
+    if (child && !ended) { child.kill('SIGTERM'); await new Promise(done => child!.once('close', done)); }
+    hold.kill('SIGTERM');
+    await holdExited;
+    await stop();
+    await rm(root, {recursive: true, force: true});
+  }
 });
 
 test('a client without dist/ next to it asks the machine check through the live checkout\'s build, and with no build anywhere says it skipped the check', async t => {

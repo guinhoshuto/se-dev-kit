@@ -159,6 +159,39 @@ test("waitForMachine with a queue waits out the slot and its queue as a ticket, 
   await assert.rejects(run([slot], [{code: 75, said: "Gave up after 30 minutes waiting for the render slot"}]), (error) => error.code === "MACHINE_BUSY_TIMEOUT" && /in the render slot queue: Gave up after 30 minutes/.test(error.message));
 });
 
+test("waitForMachine ends when its signal aborts, in the render slot queue or between two checks, and rejects with its reason", async () => {
+  const slot = {free: false, reasons: ["the render slot is held by pid 7"], kinds: ["trava"]};
+  const reason = new Error("the Studio stopped");
+  // In the queue the turn's wait gets the signal; ended by the abort, it ends the wait, whatever it answered (#60).
+  const queued = new AbortController();
+  const log = [];
+  let checks = 0;
+  const inQueue = waitForMachine({
+    queue: "wait-free", signal: queued.signal, pollMs: 7, log: (message) => log.push(message), sleep: async () => {},
+    check: async () => { checks++; return slot; },
+    turn: async (request) => {
+      assert.equal(request.signal, queued.signal);
+      await once(request.signal, "abort");
+      return {code: 0, answer: "go", said: ""};
+    }
+  });
+  setTimeout(() => queued.abort(reason), 20);
+  await assert.rejects(inQueue, (error) => error === reason);
+  assert.equal(checks, 1, "nothing asked after the abort");
+  assert.deepEqual(log, ['Waiting for the machine, in the render slot queue as "vez: wait-free": the render slot is held by pid 7']);
+  // Polling, the abort ends the sleep between two checks, long as it is.
+  const polled = new AbortController();
+  let asked = 0;
+  const started = Date.now();
+  const polling = waitForMachine({signal: polled.signal, pollMs: 60_000, log: () => {}, check: async () => { asked++; return {free: false, reasons: ["the game is open"], kinds: ["jogo"]}; }});
+  setTimeout(() => polled.abort(reason), 20);
+  await assert.rejects(polling, (error) => error === reason);
+  assert.ok(Date.now() - started < 10_000, `the 60 s sleep ended ${Date.now() - started} ms after the wait began`);
+  assert.equal(asked, 1);
+  // Aborted before it began, it asks nothing.
+  await assert.rejects(waitForMachine({signal: AbortSignal.abort(reason), log: () => {}, check: async () => assert.fail("the check was asked")}), (error) => error === reason);
+});
+
 test("parseVerdict keeps the check's kind of each reason only when it names one per reason", () => {
   assert.deepEqual(parseVerdict('{"livre": false, "reasons": ["the slot", "memory"], "tipos": ["trava", "memoria"]}'), {free: false, reasons: ["the slot", "memory"], kinds: ["trava", "memoria"]});
   assert.deepEqual(parseVerdict('{"livre": false, "reasons": ["the slot", "memory"], "tipos": ["trava"]}'), {free: false, reasons: ["the slot", "memory"]});

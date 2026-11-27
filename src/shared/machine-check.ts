@@ -8,6 +8,7 @@ import {execFile, spawn} from "node:child_process";
 import {existsSync} from "node:fs";
 import {constants, homedir} from "node:os";
 import {join} from "node:path";
+import {setTimeout as delay} from "node:timers/promises";
 import {fileURLToPath} from "node:url";
 import {promisify} from "node:util";
 import {StudioError} from "./errors.js";
@@ -67,8 +68,11 @@ export async function machineVerdict(script = machineCheckScript()): Promise<Mac
   return parseVerdict(stdout);
 }
 
-/** A wait for the turn in the render slot queue: its ticket's label, its place (ms) and limit (minutes from it), and the answer at the turn. */
-export type TurnRequest = {label: string; since: number; maxMinutes: number; answer: () => Promise<"go" | "back">};
+/**
+ * A wait for the turn in the render slot queue: its ticket's label, its place (ms) and limit (minutes from it), the
+ * answer at the turn, and the signal whose abort ends the wait before the turn, its ticket out of the queue.
+ */
+export type TurnRequest = {label: string; since: number; maxMinutes: number; answer: () => Promise<"go" | "back">; signal?: AbortSignal};
 /** How that wait ended: its exit status, the answer it gave at its turn (none when the turn never came), and its last line. */
 export type TurnResult = {code: number | null; answer?: "go" | "back"; said: string};
 
@@ -91,6 +95,11 @@ export type MachineWaitOptions = {
   queue?: string;
   /** Waits for the turn (the tests); by default `render-slot vez --conferir`, the build next to this module. */
   turn?: (request: TurnRequest) => Promise<TurnResult>;
+  /**
+   * Ends the wait from outside (the skill client, once its Studio stops, #60): the vez gets SIGTERM, which takes its
+   * ticket out of the queue, the sleep between two checks ends, and waitForMachine rejects with the signal's reason.
+   */
+  signal?: AbortSignal;
 };
 
 /** Whether the check's reasons are ones the render slot queue waits out: the slot or its queue, with at most memory besides. */
@@ -106,10 +115,11 @@ const atTheTurn = (verdict: MachineVerdict | null) =>
  * chain that cedes (hold --ceder, HAR-301) lets go first between two of its steps. At its turn, its ticket still
  * first, it asks `answer` and writes it on the vez's stdin: "go" leaves the baton, which keeps those that cede off
  * the free slot for 30 s, for the render that follows; "back" leaves none. What the vez says while it waits stays
- * out of the log, which names the wait once; its last line comes back in `said`. A signal or the end of this process
- * ends the vez too, so its ticket never outlives the wait.
+ * out of the log, which names the wait once; its last line comes back in `said`. A signal, the end of this process,
+ * or the abort of `signal` ends the vez too, so its ticket never outlives the wait; an abort resolves once the vez
+ * has ended, its ticket gone.
  */
-function waitForTurn({label, since, maxMinutes, answer}: TurnRequest): Promise<TurnResult> {
+function waitForTurn({label, since, maxMinutes, answer, signal: abort}: TurnRequest): Promise<TurnResult> {
   const script = fileURLToPath(new URL("./render-slot.js", import.meta.url));
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script, "vez", "--rotulo", label, "--since", String(Math.floor(since)), "--max", String(maxMinutes), "--conferir"], {stdio: ["pipe", "pipe", "pipe"]});
@@ -124,9 +134,11 @@ function waitForTurn({label, since, maxMinutes, answer}: TurnRequest): Promise<T
     };
     process.once("exit", stop);
     for (const signal of SIGNALS) process.once(signal, onSignal);
+    abort?.addEventListener("abort", stop, {once: true});
     const settle = (result: TurnResult) => {
       process.off("exit", stop);
       for (const signal of SIGNALS) process.off(signal, onSignal);
+      abort?.removeEventListener("abort", stop);
       resolve(result);
     };
     // The vez may be gone before the answer is written (killed, or at its limit).
@@ -162,21 +174,27 @@ function waitForTurn({label, since, maxMinutes, answer}: TurnRequest): Promise<T
  * --ceder), which lets only a ticket in the queue go first. At the turn, the ticket still first, the check is asked
  * again without the queue behind it: free, the wait ends, and the render that follows has the slot for 30 s;
  * otherwise the turn goes back, and after `pollMs` the loop asks again, from the same place in the queue. A check
- * without kinds, or a ticket that cannot be taken, leaves the wait polling. The limit counts from `startedAt`.
+ * without kinds, or a ticket that cannot be taken, leaves the wait polling. The limit counts from `startedAt`. The
+ * abort of `signal` ends the wait, in the queue or between two checks, and rejects with its reason.
  */
 export async function waitForMachine(options: MachineWaitOptions = {}): Promise<{turn: boolean}> {
+  const {signal} = options;
   const check = options.check ?? (() => machineVerdict());
   const pollMs = options.pollMs ?? POLL_MS;
   const waitLimitMs = options.waitLimitMs ?? WAIT_LIMIT_MS;
   const log = options.log ?? ((message: string) => process.stderr.write(`${message}\n`));
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  // An abort clears its timer, which would keep this process up to `pollMs` after the wait ended.
+  const sleep = options.sleep ?? ((ms: number) => delay(ms, undefined, signal ? {signal} : {}).catch(() => {}));
   const now = options.now ?? Date.now;
   const turn = options.turn ?? waitForTurn;
   const started = options.startedAt ?? now();
+  const ended = () => { if (signal?.aborted) throw signal.reason; };
   let {queue} = options;
   let said = "";
   for (;;) {
+    ended();
     const verdict = await check();
+    ended();
     if (!verdict || verdict.free) {
       if (said) log("The machine is free; rendering.");
       return {turn: false};
@@ -195,7 +213,8 @@ export async function waitForMachine(options: MachineWaitOptions = {}): Promise<
       const result = await turn({label: queue, since: Date.now() - (now() - started), maxMinutes: Math.min(TURN_MAX_MINUTES, waitLimitMs / 60_000), answer: async () => {
         left = atTheTurn(await check());
         return left.length ? "back" : "go";
-      }});
+      }, ...(signal ? {signal} : {})});
+      ended();
       if (result.answer === "go") {
         log("The machine is free at its turn in the render slot queue; rendering.");
         return {turn: true};

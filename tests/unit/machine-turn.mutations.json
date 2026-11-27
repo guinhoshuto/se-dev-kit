@@ -48,6 +48,34 @@
       "to": "      if (asked || !line.startsWith(TURN_LINE + \"!\")) return;",
       "test": "tests/unit/machine.test.mjs",
       "name": "^wait-free waits in the render slot queue with a ticket"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "    ended();\n    const verdict = await check();",
+      "to": "    const verdict = await check();",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine ends when its signal aborts"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "      ended();\n      if (result.answer === \"go\") {",
+      "to": "      if (result.answer === \"go\") {",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine ends when its signal aborts"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": "delay(ms, undefined, signal ? {signal} : {})",
+      "to": "delay(ms, undefined, {})",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine ends when its signal aborts"
+    },
+    {
+      "file": "src/shared/machine-check.ts",
+      "from": ", ...(signal ? {signal} : {})});",
+      "to": "});",
+      "test": "tests/unit/machine-check.test.mjs",
+      "name": "^waitForMachine ends when its signal aborts"
     }
   ]
 }
